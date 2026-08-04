@@ -20,6 +20,14 @@ const router = express.Router();
 
 const GANGBUK_HUB_ID = process.env.GANGBUK_HUB_ID || 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const GANGBUK_PROJECT_ID = process.env.GANGBUK_PROJECT_ID || 'b.d005cd39-4a35-4843-b350-81da491266ef';
+const FORMA_ISSUES_CACHE_TTL_MS = Number(process.env.FORMA_ISSUES_CACHE_TTL_MS || 2 * 60 * 1000);
+const FORMA_DETAIL_CACHE_TTL_MS = Number(process.env.FORMA_DETAIL_CACHE_TTL_MS || 5 * 60 * 1000);
+const PLACEMENT_LOOKUP_CACHE_TTL_MS = Number(process.env.PLACEMENT_LOOKUP_CACHE_TTL_MS || 10 * 60 * 1000);
+const ISSUE_SNAPSHOT_CACHE_TTL_MS = Number(process.env.ISSUE_SNAPSHOT_CACHE_TTL_MS || 10 * 60 * 1000);
+const formaIssuesCache = new Map();
+const formaIssueDetailCache = new Map();
+const placementLookupCache = new Map();
+const issueSnapshotCache = new Map();
 
 function stripBPrefix(id) {
     return String(id || '').replace(/^b\./, '');
@@ -214,7 +222,218 @@ function normalizeLocation(issue) {
 }
 
 function normalizePlacement(issue) {
-    const value = pick(issue, [
+    const info = normalizePlacementInfo(issue);
+    return formatPlacementInfo(info);
+}
+
+function normalizePlacementVersion(value) {
+    if (value == null || value === '') return '';
+    const text = String(value).trim();
+    if (!text || text === '-') return '';
+    const match = text.match(/^v?\s*(\d+)$/i);
+    return match ? `v${match[1]}` : text;
+}
+
+function normalizePlacementUrn(value) {
+    if (!value || typeof value !== 'object') return '';
+    const direct = textFromValueSafe(pick(value, [
+        'placements.0.tipVersionUrn',
+        'placements.0.versionUrn',
+        'placements.0.lineageUrn',
+        'placements.0.viewable.seedURN',
+        'placements.0.originContext.entityId',
+        'tipVersionUrn',
+        'includedVersion.urn',
+        'results.0.tipVersionUrn',
+        'results.0.includedVersion.urn',
+        'details.viewable.urn',
+        'details.viewable.versionId',
+        'details.viewable.viewableUrn',
+        'details.viewable.viewerUrn',
+        'details.document.urn',
+        'details.document.versionId',
+        'details.file.urn',
+        'details.file.versionId',
+        'linkedDocument.details.viewable.urn',
+        'linkedDocument.details.viewable.versionId'
+    ], ''))
+        || textFromValueSafe(value.urn)
+        || textFromValueSafe(value.modelUrn)
+        || textFromValueSafe(value.fileUrn)
+        || textFromValueSafe(value.targetUrn)
+        || textFromValueSafe(value.seedURN)
+        || textFromValueSafe(value.viewableUrn)
+        || textFromValueSafe(value.viewerUrn)
+        || textFromValueSafe(value.versionUrn)
+        || textFromValueSafe(value.documentUrn)
+        || textFromValueSafe(value.documentVersionUrn)
+        || textFromValueSafe(value.itemUrn)
+        || textFromValueSafe(value.lineageUrn)
+        || textFromValueSafe(value.documentLineageUrn)
+        || textFromValueSafe(value.versionId)
+        || textFromValueSafe(value.itemId);
+    if (direct) return direct;
+    for (const [key, val] of Object.entries(value)) {
+        if (/urn|versionid|itemid|lineage/i.test(key) && val != null && typeof val !== 'object') {
+            const text = textFromValueSafe(val);
+            if (text) return text;
+        }
+    }
+    return '';
+}
+
+function placementNameFromValue(value) {
+    if (value == null || value === '') return '';
+    if (typeof value !== 'object') return textFromValueSafe(value);
+    const direct = textFromValueSafe(pick(value, [
+        'placements.0.name',
+        'placements.0.fileName',
+        'placements.0.displayName',
+        'results.0.name',
+        'results.0.includedVersion.name',
+        'results.0.includedVersion.uploadFileName',
+        'details.viewable.name',
+        'details.viewable.displayName',
+        'details.viewable.fileName',
+        'details.viewable.filename',
+        'details.viewable.attributes.name',
+        'details.viewable.attributes.displayName',
+        'details.document.name',
+        'details.document.displayName',
+        'details.document.fileName',
+        'details.file.name',
+        'details.file.displayName',
+        'details.file.fileName',
+        'details.name',
+        'details.displayName',
+        'details.fileName',
+        'linkedDocument.details.viewable.name',
+        'linkedDocument.details.viewable.displayName',
+        'linkedDocument.details.viewable.fileName'
+    ], ''))
+        || textFromValueSafe(value.name)
+        || textFromValueSafe(value.displayName)
+        || textFromValueSafe(value.title)
+        || textFromValueSafe(value.fileName)
+        || textFromValueSafe(value.filename)
+        || textFromValueSafe(value.file_name)
+        || textFromValueSafe(value.itemName)
+        || textFromValueSafe(value.documentName)
+        || textFromValueSafe(value.documentTitle)
+        || textFromValueSafe(value.objectName)
+        || textFromValueSafe(pick(value, ['attributes.name', 'attributes.displayName', 'attributes.fileName', 'attributes.file_name', 'attributes.documentName', 'attributes.documentTitle'], ''))
+        || textFromValueSafe(pick(value, ['linkedDocument.name', 'linkedDocument.displayName'], ''))
+        || textFromValueSafe(pick(value, ['document.name', 'document.displayName'], ''))
+        || textFromValueSafe(pick(value, ['item.name', 'item.displayName'], ''))
+        || textFromValueSafe(pick(value, ['version.name', 'version.displayName', 'version.attributes.name'], ''));
+    if (direct) return direct;
+    for (const val of Object.values(value)) {
+        if (val != null && typeof val !== 'object') {
+            const text = textFromValueSafe(val);
+            if (isModelDocumentName(text)) return text;
+        }
+    }
+    return '';
+}
+
+function placementVersionFromValue(value) {
+    if (!value || typeof value !== 'object') return '';
+    const versionFromTip = String(pick(value, ['tipVersionUrn', 'results.0.tipVersionUrn'], '') || '').match(/[?&]version=(\d+)/i);
+    const placementVersionFromTip = String(pick(value, ['placements.0.tipVersionUrn', 'placements.0.versionUrn'], '') || '').match(/[?&]version=(\d+)/i);
+    return normalizePlacementVersion(value.version)
+        || normalizePlacementVersion(placementVersionFromTip && placementVersionFromTip[1])
+        || normalizePlacementVersion(versionFromTip && versionFromTip[1])
+        || normalizePlacementVersion(value.versionNumber)
+        || normalizePlacementVersion(value.versionLabel)
+        || normalizePlacementVersion(value.versionName)
+        || normalizePlacementVersion(value.versionIndex)
+        || normalizePlacementVersion(pick(value, [
+            'includedVersion.versionNumber',
+            'results.0.includedVersion.versionNumber',
+            'results.0.versionNumber',
+            'details.version',
+            'details.versionNumber',
+            'details.versionLabel',
+            'details.viewable.version',
+            'details.viewable.versionNumber',
+            'details.viewable.versionLabel',
+            'details.viewable.attributes.version',
+            'details.viewable.attributes.versionNumber',
+            'attributes.version',
+            'attributes.versionNumber',
+            'attributes.versionLabel',
+            'attributes.versionIndex',
+            'linkedDocument.version',
+            'linkedDocument.versionNumber',
+            'document.version',
+            'document.versionNumber',
+            'version.versionNumber',
+            'version.attributes.versionNumber'
+        ], ''));
+}
+
+function isModelDocumentName(name) {
+    return /\.(rvt|ifc|dwg|nwd|nwc)$/i.test(String(name || '').trim());
+}
+
+function isGenericPlacementName(name) {
+    const key = String(name || '').normalize('NFKC').trim().toLowerCase();
+    return !key
+        || key === '-'
+        || key === 'docs'
+        || key === 'autodesk docs'
+        || key === 'documents'
+        || key === 'files'
+        || key === 'document management'
+        || key === 'bim 360 docs';
+}
+
+function findModelDocumentText(value) {
+    const seen = new Set();
+    function walk(current) {
+        if (current == null) return '';
+        if (typeof current !== 'object') {
+            const text = textFromValueSafe(current);
+            return isModelDocumentName(text) ? text : '';
+        }
+        if (seen.has(current)) return '';
+        seen.add(current);
+        if (Array.isArray(current)) {
+            for (const item of current) {
+                const found = walk(item);
+                if (found) return found;
+            }
+            return '';
+        }
+        for (const [key, val] of Object.entries(current)) {
+            if (/href|url|link|self|related/i.test(key)) continue;
+            const found = walk(val);
+            if (found) return found;
+        }
+        return '';
+    }
+    return walk(value);
+}
+
+function formatPlacementInfo(info) {
+    const name = textFromValueSafe(info && info.name);
+    if (isGenericPlacementName(name)) return '';
+    const version = normalizePlacementVersion(info && info.version);
+    return version ? `${name} (${version})` : name;
+}
+
+function normalizePlacementInfo(issue) {
+    const overrideName = textFromValueSafe(issue && issue.placementName);
+    const overrideUrn = textFromValueSafe(issue && issue.placementUrn);
+    const overrideVersion = textFromValueSafe(issue && issue.placementVersion);
+    if (overrideName || overrideUrn) {
+        return {
+            name: isGenericPlacementName(overrideName) ? '' : overrideName,
+            version: overrideVersion,
+            urn: overrideUrn
+        };
+    }
+    const direct = pick(issue, [
         'placement',
         'placementName',
         'file',
@@ -225,8 +444,179 @@ function normalizePlacement(issue) {
         'attributes.fileName',
         'linkedDocument.name'
     ], '') || getCustomValue(issue, ['배치', 'Placement', '파일', '모델', '도면']);
-    if (typeof value === 'object') return value.name || value.displayName || value.title || '';
-    return String(value || '').trim();
+    const directInfo = {
+        name: findModelDocumentText(direct) || placementNameFromValue(direct),
+        version: placementVersionFromValue(direct),
+        urn: normalizePlacementUrn(direct) || textFromValueSafe(pick(issue, [
+            'placementUrn',
+            'linkedDocumentUrn',
+            'documentUrn',
+            'modelUrn',
+            'fileUrn',
+            'targetUrn',
+            'versionId',
+            'viewableUrn',
+            'details.viewable.urn',
+            'details.viewable.versionId'
+        ], ''))
+    };
+    if (isGenericPlacementName(directInfo.name)) {
+        directInfo.name = '';
+    }
+    const found = findPlacementInfoDeep(issue);
+    if (found.name && (!directInfo.name || isModelDocumentName(found.name) || !isModelDocumentName(directInfo.name))) {
+        return found;
+    }
+    return directInfo.name ? directInfo : found;
+}
+
+function findPlacementInfoDeep(issue) {
+    const seen = new Set();
+    let first = { name: '', version: '', urn: '' };
+    let best = { name: '', version: '', urn: '' };
+    const likelyContainers = new Set([
+        'linkeddocument',
+        'linkeddocuments',
+        'linked_document',
+        'linked_documents',
+        'placement',
+        'placements',
+        'reference',
+        'references',
+        'document',
+        'documents',
+        'associateddocument',
+        'associateddocuments',
+        'attachment',
+        'attachments',
+        'snapshot',
+        'snapshots',
+        'viewable',
+        'viewables',
+        'file',
+        'files',
+        'item',
+        'items'
+    ]);
+
+    function readInfo(value) {
+        return {
+            name: findModelDocumentText(value) || placementNameFromValue(value),
+            version: placementVersionFromValue(value),
+            urn: normalizePlacementUrn(value)
+        };
+    }
+
+    function remember(info, key) {
+        const loweredKey = String(key || '').toLowerCase();
+        const isLikelyKey = likelyContainers.has(loweredKey) || /document|reference|attachment|snapshot|viewable|file|item|placement/i.test(key || '');
+        if (!info.name && info.urn && isLikelyKey) {
+            if (!first.urn) first = info;
+            if (!best.urn) best = info;
+            return;
+        }
+        if (!info.name) return;
+        if (isGenericPlacementName(info.name)) {
+            if (info.urn && isLikelyKey && !best.urn) best = { name: '', version: info.version, urn: info.urn };
+            return;
+        }
+        if (isModelDocumentName(info.name)) {
+            if (!first.name) first = info;
+            best = info;
+            return;
+        }
+        if (!isLikelyKey) return;
+        if (!first.name) first = info;
+        if (!best.name) best = info;
+    }
+
+    function walk(value, key = '') {
+        if (!value || typeof value !== 'object' || seen.has(value) || best.name && isModelDocumentName(best.name)) return;
+        seen.add(value);
+        if (Array.isArray(value)) {
+            for (const item of value) walk(item, key);
+            return;
+        }
+
+        remember(readInfo(value), key);
+        for (const [childKey, childValue] of Object.entries(value)) {
+            const lowered = String(childKey).toLowerCase();
+            if (likelyContainers.has(lowered) || /document|reference|attachment|snapshot|viewable|file|item/i.test(childKey)) {
+                walk(childValue, childKey);
+            }
+        }
+        for (const [childKey, childValue] of Object.entries(value)) {
+            walk(childValue, childKey);
+        }
+    }
+
+    walk(issue);
+    return (best.name || best.urn) ? best : first;
+}
+
+function compactDebugValue(value) {
+    if (value == null) return value;
+    if (typeof value === 'string') return value.length > 220 ? `${value.slice(0, 220)}...` : value;
+    if (typeof value === 'number' || typeof value === 'boolean') return value;
+    return textFromValueSafe(value);
+}
+
+function collectPlacementDebugPaths(issue) {
+    const seen = new Set();
+    const matches = [];
+    const interestingKey = /placement|linked|document|docs|reference|viewable|file|filename|name|urn|version|details|pushpin|position|viewer/i;
+    const interestingValue = /\.(rvt|ifc|dwg|nwd|nwc)\b|urn:adsk|adsk\.|docs/i;
+
+    function remember(pathKey, value) {
+        if (matches.length >= 120) return;
+        matches.push({ path: pathKey, value: compactDebugValue(value) });
+    }
+
+    function walk(value, pathKey = '$') {
+        if (matches.length >= 120 || value == null) return;
+        if (typeof value !== 'object') {
+            const text = String(value);
+            if (interestingValue.test(text)) remember(pathKey, value);
+            return;
+        }
+        if (seen.has(value)) return;
+        seen.add(value);
+        if (Array.isArray(value)) {
+            value.forEach((item, index) => walk(item, `${pathKey}[${index}]`));
+            return;
+        }
+        for (const [key, child] of Object.entries(value)) {
+            const childPath = `${pathKey}.${key}`;
+            if (interestingKey.test(key)) {
+                if (child == null || typeof child !== 'object') remember(childPath, child);
+                else {
+                    const text = textFromValueSafe(child);
+                    if (text && text.length < 220) remember(childPath, text);
+                }
+            }
+            walk(child, childPath);
+        }
+    }
+
+    walk(issue);
+    return matches;
+}
+
+function buildPlacementDebug(issue, normalized) {
+    const raw = issue && (issue.rawDetailIssue || issue.rawFormaIssue || issue);
+    const detail = issue && (issue.rawDetailIssue?.data || issue.rawDetailIssue?.issue || issue.rawDetailIssue?.result || issue.rawDetailIssue);
+    return {
+        id: normalized.displayId || normalized.id,
+        title: normalized.title,
+        normalizedPlacement: normalized.placement,
+        placementName: normalized.placementName,
+        placementVersion: normalized.placementVersion,
+        placementUrn: normalized.placementUrn,
+        topLevelKeys: Object.keys(raw || {}).slice(0, 80),
+        linkedDocumentsType: Array.isArray(pick(raw, ['linkedDocuments', 'data.linkedDocuments', 'attributes.linkedDocuments'], null)) ? 'array' : typeof pick(raw, ['linkedDocuments', 'data.linkedDocuments', 'attributes.linkedDocuments'], null),
+        rawPaths: collectPlacementDebugPaths(raw || {}),
+        detailPaths: detail && detail !== raw ? collectPlacementDebugPaths(detail) : []
+    };
 }
 
 function normalizeLocationForForma(issue, locationMap = new Map()) {
@@ -285,6 +675,85 @@ async function fetchJson(url, token, extraHeaders = {}) {
     return json;
 }
 
+async function fetchJsonWithBody(url, token, body, extraHeaders = {}) {
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...extraHeaders
+        },
+        body: JSON.stringify(body || {})
+    });
+    const text = await resp.text();
+    let json = {};
+    try { json = text ? JSON.parse(text) : {}; } catch (_) { json = { raw: text }; }
+    if (!resp.ok) {
+        const detail = json.detail || json.message || json.error_description || json.error || text || resp.statusText;
+        throw new Error(`HTTP ${resp.status}: ${detail}`);
+    }
+    return json;
+}
+
+function normalizeSnapshotUrn(issue) {
+    return textFromValueSafe(pick(issue, [
+        'snapshotUrn',
+        'snapshotURN',
+        'snapshot.urn',
+        'attributes.snapshotUrn',
+        'attributes.snapshotURN',
+        'thumbnailUrn',
+        'thumbnail.urn'
+    ], ''));
+}
+
+function ossUrlFromSnapshotUrn(urn) {
+    const text = String(urn || '').trim();
+    const match = text.match(/^urn:adsk\.objects:os\.object:([^/]+)\/(.+)$/i);
+    if (!match) return '';
+    return {
+        bucketKey: match[1],
+        objectKey: match[2],
+        objectUrl: `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(match[1])}/objects/${encodeURIComponent(match[2])}`,
+        signedDownloadUrl: `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(match[1])}/objects/${encodeURIComponent(match[2])}/signeds3download?minutesExpiration=10`
+    };
+}
+
+async function fetchSnapshotImage(urn, token) {
+    const oss = ossUrlFromSnapshotUrn(urn);
+    if (!oss) throw new Error('Unsupported snapshot URN');
+    const cached = issueSnapshotCache.get(urn);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const signedResp = await fetch(oss.signedDownloadUrl, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json'
+        }
+    });
+    if (!signedResp.ok) {
+        const text = await signedResp.text().catch(() => '');
+        throw new Error(`signeds3download HTTP ${signedResp.status}: ${text || signedResp.statusText}`);
+    }
+    const signedJson = await signedResp.json();
+    const signedUrl = signedJson.url || signedJson.signedUrl || signedJson.signedURL || signedJson.urls?.[0];
+    if (!signedUrl) throw new Error('signeds3download response did not include a URL');
+
+    const resp = await fetch(signedUrl, {
+        headers: { Accept: 'image/*,*/*' }
+    });
+    if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`S3 HTTP ${resp.status}: ${text || resp.statusText}`);
+    }
+    const contentType = resp.headers.get('content-type') || 'image/jpeg';
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const value = { buffer, contentType };
+    issueSnapshotCache.set(urn, { value, expiresAt: Date.now() + ISSUE_SNAPSHOT_CACHE_TTL_MS });
+    return value;
+}
+
 async function fetchProjectMembers(projectId, token) {
     const cleanProjectId = stripBPrefix(projectId);
     const urls = [
@@ -321,9 +790,10 @@ function projectIdCandidates(projectId) {
 
 async function fetchIssueTypeMap(projectId, containerId, token) {
     const projectIds = projectIdCandidates(projectId);
+    const cleanContainerId = stripBPrefix(containerId);
     const regions = ['', 'US', 'EMEA'];
     const urls = [
-        ...(containerId ? [{ url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(containerId)}/issue-types` }] : []),
+        ...(cleanContainerId ? [{ url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(cleanContainerId)}/issue-types` }] : []),
         ...projectIds.flatMap(id => regions.map(region => ({
             url: `https://developer.api.autodesk.com/construction/issues/v1/projects/${encodeURIComponent(id)}/issue-types?include=subtypes&limit=100`,
             region
@@ -406,11 +876,15 @@ async function fetchLocationMap(hubId, projectId, token) {
 
 async function fetchFormaIssues(projectId, containerId, token, limit) {
     const projectIds = projectIdCandidates(projectId);
+    const cleanContainerId = stripBPrefix(containerId);
     const totalLimit = Math.min(Math.max(parseInt(limit, 10) || 300, 1), 1000);
     const pageLimit = Math.min(totalLimit, 100);
     const regions = ['', 'US', 'EMEA'];
     const candidates = [
-        ...(containerId ? [{ url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(containerId)}/issues?limit=${pageLimit}` }] : []),
+        ...(cleanContainerId ? [
+            { url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(cleanContainerId)}/issues?limit=${pageLimit}` },
+            { url: `https://developer.api.autodesk.com/issues/v2/containers/${encodeURIComponent(cleanContainerId)}/issues?limit=${pageLimit}` }
+        ] : []),
         ...projectIds.flatMap(id => regions.map(region => ({
             url: `https://developer.api.autodesk.com/construction/issues/v1/projects/${encodeURIComponent(id)}/issues?limit=${pageLimit}`,
             region
@@ -435,9 +909,240 @@ async function fetchFormaIssues(projectId, containerId, token, limit) {
     throw lastError || new Error('Unable to fetch Forma issues.');
 }
 
+function mergeIssueDetail(listIssue, detailIssue) {
+    if (!detailIssue || typeof detailIssue !== 'object') return listIssue;
+    const detail = detailIssue.data || detailIssue.issue || detailIssue.result || detailIssue;
+    if (!detail || typeof detail !== 'object') return listIssue;
+    const keepListValue = (...paths) => {
+        for (const pathKey of paths) {
+            const value = pick(listIssue, [pathKey], '');
+            if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+        }
+        return undefined;
+    };
+    const listTypeId = keepListValue('issueTypeId', 'attributes.issueTypeId', 'typeId', 'attributes.typeId');
+    const listSubtypeId = keepListValue('issueSubtypeId', 'attributes.issueSubtypeId', 'subtypeId', 'attributes.subtypeId');
+    const listTypePath = keepListValue('typePath', 'issueTypePath', 'categoryPath', 'attributes.typePath', 'attributes.issueTypePath', 'attributes.categoryPath');
+    return {
+        ...listIssue,
+        ...detail,
+        ...(listTypeId ? { issueTypeId: listTypeId } : {}),
+        ...(listSubtypeId ? { issueSubtypeId: listSubtypeId } : {}),
+        ...(listTypePath ? { typePath: listTypePath } : {}),
+        attributes: {
+            ...(listIssue.attributes || {}),
+            ...(detail.attributes || {}),
+            ...(listTypeId ? { issueTypeId: listTypeId } : {}),
+            ...(listSubtypeId ? { issueSubtypeId: listSubtypeId } : {}),
+            ...(listTypePath ? { typePath: listTypePath } : {})
+        },
+        rawListIssue: listIssue,
+        rawDetailIssue: detailIssue
+    };
+}
+
+async function fetchFormaIssueDetail(issue, projectId, containerId, token) {
+    const id = issue.id || issue.issueId || issue.attributes?.id;
+    if (!id) return null;
+    const cacheKey = `${projectId}|${containerId || ''}|${id}`;
+    const cached = formaIssueDetailCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const projectIds = projectIdCandidates(projectId);
+    const regions = ['', 'US', 'EMEA'];
+    const candidates = [
+        ...projectIds.flatMap(projectCandidate => regions.flatMap(region => [
+            {
+                url: `https://developer.api.autodesk.com/construction/issues/v1/projects/${encodeURIComponent(projectCandidate)}/issues/${encodeURIComponent(id)}`,
+                region
+            },
+            {
+                url: `https://developer.api.autodesk.com/construction/issues/v1/projects/${encodeURIComponent(projectCandidate)}/issues/${encodeURIComponent(id)}?include=linkedDocuments,references,attachments`,
+                region
+            },
+            {
+                url: `https://developer.api.autodesk.com/construction/issues/v2/projects/${encodeURIComponent(projectCandidate)}/issues/${encodeURIComponent(id)}`,
+                region
+            },
+            {
+                url: `https://developer.api.autodesk.com/construction/issues/v2/projects/${encodeURIComponent(projectCandidate)}/issues/${encodeURIComponent(id)}?include=linkedDocuments,references,attachments`,
+                region
+            }
+        ])),
+        ...(containerId ? [
+            { url: `https://developer.api.autodesk.com/issues/v2/containers/${encodeURIComponent(containerId)}/issues/${encodeURIComponent(id)}?include=linkedDocuments,references,attachments` },
+            { url: `https://developer.api.autodesk.com/issues/v2/containers/${encodeURIComponent(containerId)}/issues/${encodeURIComponent(id)}` },
+            { url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(containerId)}/issues/${encodeURIComponent(id)}?include=linkedDocuments,references,attachments` },
+            { url: `https://developer.api.autodesk.com/issues/v1/containers/${encodeURIComponent(containerId)}/issues/${encodeURIComponent(id)}` }
+        ] : [])
+    ];
+
+    for (const candidate of candidates) {
+        try {
+            const headers = candidate.region ? { 'x-ads-region': candidate.region } : {};
+            const json = await fetchJson(candidate.url, token, headers);
+            formaIssueDetailCache.set(cacheKey, { value: json, expiresAt: Date.now() + FORMA_DETAIL_CACHE_TTL_MS });
+            return json;
+        } catch (_) {
+            // Try the next supported issues detail endpoint.
+        }
+    }
+    return null;
+}
+
+function projectIdForDataManagement(projectId) {
+    const id = String(projectId || '').trim();
+    if (!id) return id;
+    return id.startsWith('b.') ? id : `b.${id}`;
+}
+
+function isAutodeskDataUrn(value) {
+    const text = String(value || '').trim();
+    return /^urn:adsk\./i.test(text) || /^adsk\./i.test(text);
+}
+
+function dataManagementResourceType(urn) {
+    const text = String(urn || '');
+    if (/fs\.file|versions/i.test(text) || /[?&]version=/i.test(text)) return 'versions';
+    if (/dm\.lineage|items/i.test(text)) return 'items';
+    return /version/i.test(text) ? 'versions' : 'items';
+}
+
+function dataManagementNameFromJson(json) {
+    const data = json && (Array.isArray(json.results) ? json.results[0] : (json.data || json));
+    return textFromValueSafe(pick(data, [
+        'name',
+        'uploadFileName',
+        'includedVersion.name',
+        'includedVersion.uploadFileName',
+        'attributes.displayName',
+        'attributes.name',
+        'attributes.extension.data.name',
+        'attributes.extension.data.fileName',
+        'displayName'
+    ], ''));
+}
+
+function dataManagementVersionFromJson(json) {
+    const data = json && (Array.isArray(json.results) ? json.results[0] : (json.data || json));
+    const versionFromTip = String(pick(data, ['tipVersionUrn'], '') || '').match(/[?&]version=(\d+)/i);
+    return normalizePlacementVersion(versionFromTip && versionFromTip[1])
+        || normalizePlacementVersion(pick(data, [
+        'attributes.versionNumber',
+        'attributes.version',
+        'includedVersion.versionNumber',
+        'versionNumber',
+        'version'
+    ], ''));
+}
+
+function dataManagementUrnFromJson(json, fallbackUrn) {
+    const data = json && (Array.isArray(json.results) ? json.results[0] : (json.data || json));
+    return textFromValueSafe(pick(data, [
+        'tipVersionUrn',
+        'includedVersion.urn',
+        'attributes.extension.data.versionUrn',
+        'id',
+        'urn'
+    ], '')) || fallbackUrn;
+}
+
+async function resolvePlacementNameFromDataManagement(urn, projectId, token) {
+    if (!isAutodeskDataUrn(urn)) return null;
+    const project = projectIdForDataManagement(projectId);
+    const rawUrn = String(urn).startsWith('urn:') ? String(urn) : `urn:${urn}`;
+    const cacheKey = `${project}|${rawUrn}`;
+    const cached = placementLookupCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const encoded = encodeURIComponent(rawUrn);
+    const type = dataManagementResourceType(rawUrn);
+    const lineageQuery = encodeURIComponent(rawUrn);
+    const candidates = [
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(stripBPrefix(project))}/items:batch-get`,
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(project)}/items:batch-get`,
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(stripBPrefix(project))}/items?filter[urn]=${lineageQuery}`,
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(project)}/items?filter[urn]=${lineageQuery}`,
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(stripBPrefix(project))}/items?lineageUrn=${lineageQuery}`,
+        `https://developer.api.autodesk.com/construction/files/v1/projects/${encodeURIComponent(project)}/items?lineageUrn=${lineageQuery}`,
+        `https://developer.api.autodesk.com/data/v1/projects/${encodeURIComponent(project)}/${type}/${encoded}`,
+        type === 'versions'
+            ? `https://developer.api.autodesk.com/data/v1/projects/${encodeURIComponent(project)}/versions/${encoded}/item`
+            : `https://developer.api.autodesk.com/data/v1/projects/${encodeURIComponent(project)}/items/${encoded}/tip`
+    ];
+
+    for (const url of candidates) {
+        try {
+            const isBatch = url.includes('items:batch-get');
+            const json = isBatch
+                ? await fetchJsonWithBody(url, token, { urns: [rawUrn] })
+                : await fetchJson(url, token, { Accept: 'application/vnd.api+json, application/json' });
+            const name = dataManagementNameFromJson(json);
+            if (name && !isGenericPlacementName(name)) {
+                const result = {
+                    name,
+                    version: dataManagementVersionFromJson(json),
+                    urn: dataManagementUrnFromJson(json, rawUrn)
+                };
+                placementLookupCache.set(cacheKey, { value: result, expiresAt: Date.now() + PLACEMENT_LOOKUP_CACHE_TTL_MS });
+                return result;
+            }
+        } catch (err) {
+            console.warn('[Forma Issues] placement DM lookup skipped:', err.message);
+        }
+    }
+    placementLookupCache.set(cacheKey, { value: null, expiresAt: Date.now() + Math.min(60_000, PLACEMENT_LOOKUP_CACHE_TTL_MS) });
+    return null;
+}
+
+async function enrichFormaIssuesWithDetails(issues, projectId, containerId, token) {
+    const rows = Array.isArray(issues) ? issues : [];
+    const enriched = new Array(rows.length);
+    let cursor = 0;
+    const workerCount = Math.min(6, Math.max(1, rows.length));
+
+    async function worker() {
+        while (cursor < rows.length) {
+            const index = cursor++;
+            const issue = rows[index];
+            const detail = await fetchFormaIssueDetail(issue, projectId, containerId, token);
+            const merged = detail ? mergeIssueDetail(issue, detail) : issue;
+            const placementInfo = normalizePlacementInfo(merged);
+            if (process.env.FORMA_PLACEMENT_DEBUG === '1') {
+                const issueId = merged.displayId || merged.id || merged.issueId || issue.displayId || issue.id;
+                console.log('[Forma Issues] placement candidate:', {
+                    issueId,
+                    name: placementInfo.name || '',
+                    urn: placementInfo.urn || '',
+                    version: placementInfo.version || '',
+                    hasPlacements: Array.isArray(merged.placements),
+                    placementsCount: Array.isArray(merged.placements) ? merged.placements.length : 0,
+                    hasLinkedDocuments: Array.isArray(merged.linkedDocuments),
+                    linkedDocumentsCount: Array.isArray(merged.linkedDocuments) ? merged.linkedDocuments.length : 0
+                });
+            }
+            if (!formatPlacementInfo(placementInfo) && placementInfo.urn) {
+                const dmInfo = await resolvePlacementNameFromDataManagement(placementInfo.urn, projectId, token);
+                enriched[index] = dmInfo
+                    ? { ...merged, placementName: dmInfo.name, placementVersion: dmInfo.version, placementUrn: dmInfo.urn }
+                    : merged;
+            } else if (placementInfo.urn && !isModelDocumentName(placementInfo.name)) {
+                const dmInfo = await resolvePlacementNameFromDataManagement(placementInfo.urn, projectId, token);
+                enriched[index] = dmInfo
+                    ? { ...merged, placementName: dmInfo.name, placementVersion: dmInfo.version || placementInfo.version, placementUrn: dmInfo.urn }
+                    : merged;
+            } else {
+                enriched[index] = merged;
+            }
+        }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return enriched.map((issue, index) => issue || rows[index]);
+}
+
 function normalizeFormaIssue(issue, typeMap, userMap) {
     const attrs = issue.attributes || {};
     const typePath = normalizeTypeForForma(issue, typeMap);
+    const placementInfo = normalizePlacementInfo(issue);
     const assigneeRaw = pick(issue, ['assignedTo', 'assignee', 'assignedToUser', 'attributes.assignedTo', 'attributes.assignee', 'attributes.assignedToUser'], '');
     const creatorRaw = pick(issue, ['createdBy', 'createdByUser', 'creator', 'attributes.createdBy', 'attributes.createdByUser', 'attributes.creator'], '');
     const reviewerRaw = pick(issue, ['reviewer', 'reviewedBy', 'attributes.reviewer', 'attributes.reviewedBy'], '') || getCustomValue(issue, ['확인자', '검토자', 'Reviewer']);
@@ -466,7 +1171,11 @@ function normalizeFormaIssue(issue, typeMap, userMap) {
         createdAt: pick(issue, ['createdAt', 'attributes.createdAt', 'createdDate', 'attributes.createdDate'], ''),
         dueDate: pick(issue, ['dueDate', 'attributes.dueDate', 'endDate', 'attributes.dueDate'], ''),
         startDate: pick(issue, ['startDate', 'attributes.startDate'], ''),
-        placement: normalizePlacement(issue),
+        placement: formatPlacementInfo(placementInfo),
+        placementName: placementInfo.name,
+        placementVersion: placementInfo.version,
+        placementUrn: placementInfo.urn,
+        snapshotUrn: normalizeSnapshotUrn(issue),
         attachments: Array.isArray(attachments) ? attachments.length : (attachments ? String(attachments) : ''),
         references: Array.isArray(refs) ? refs.length : (refs ? String(refs) : ''),
         comments: Array.isArray(comments) ? comments.length : (comments ? String(comments) : ''),
@@ -478,6 +1187,7 @@ function normalizeFormaIssue(issue, typeMap, userMap) {
 function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new Map()) {
     const attrs = issue.attributes || {};
     const typePath = normalizeTypeForForma(issue, typeMap);
+    const placementInfo = normalizePlacementInfo(issue);
     const assigneeRaw = pick(issue, ['assignedTo', 'assignee', 'assignedToUser', 'attributes.assignedTo', 'attributes.assignee', 'attributes.assignedToUser'], '');
     const creatorRaw = pick(issue, ['createdBy', 'createdByUser', 'creator', 'attributes.createdBy', 'attributes.createdByUser', 'attributes.creator'], '');
     const reviewerRaw = pick(issue, ['reviewer', 'reviewedBy', 'attributes.reviewer', 'attributes.reviewedBy'], '') || getCustomValue(issue, ['확인자', '검토자', 'Reviewer']);
@@ -506,7 +1216,11 @@ function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new 
         createdAt: pick(issue, ['createdAt', 'attributes.createdAt', 'createdDate', 'attributes.createdDate'], ''),
         dueDate: pick(issue, ['dueDate', 'attributes.dueDate', 'endDate'], ''),
         startDate: pick(issue, ['startDate', 'attributes.startDate'], ''),
-        placement: normalizePlacement(issue),
+        placement: formatPlacementInfo(placementInfo),
+        placementName: placementInfo.name,
+        placementVersion: placementInfo.version,
+        placementUrn: placementInfo.urn,
+        snapshotUrn: normalizeSnapshotUrn(issue),
         attachments: Array.isArray(attachments) ? attachments.length : (attachments ? String(attachments) : ''),
         references: Array.isArray(refs) ? refs.length : (refs ? String(refs) : ''),
         comments: Array.isArray(comments) ? comments.length : (comments ? String(comments) : ''),
@@ -538,8 +1252,22 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
     const hubId = req.query.hubId || req.query.hub_id || GANGBUK_HUB_ID;
     const projectId = req.query.projectId || req.query.project_id || GANGBUK_PROJECT_ID;
     const limit = req.query.limit || 300;
+    const debugPlacement = req.query.debugPlacement === '1' || req.query.debug_placement === '1';
+    const forceRefresh = req.query.refresh === '1' || req.query.force === '1' || debugPlacement;
+    const cacheKey = `${hubId}|${projectId}|${limit}`;
 
     try {
+        const cached = formaIssuesCache.get(cacheKey);
+        if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+            return res.json({
+                ...cached.value,
+                meta: {
+                    ...(cached.value.meta || {}),
+                    cache: true,
+                    cacheExpiresAt: new Date(cached.expiresAt).toISOString()
+                }
+            });
+        }
         const containerId = await getIssueContainerInfo(hubId, projectId, token).catch(err => {
             console.warn('[Forma Issues] issue container lookup failed:', err.message);
             return null;
@@ -550,13 +1278,20 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             fetchLocationMap(hubId, projectId, token),
             fetchFormaIssues(projectId, containerId, token, limit)
         ]);
-        const normalized = rawIssues
+        const enrichedIssues = await enrichFormaIssuesWithDetails(rawIssues, projectId, containerId, token);
+        const normalized = enrichedIssues
             .map(issue => normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap))
             .filter(issue => !String(issue.typePath || issue.type || '').includes('\uAC74\uD654'))
             .filter(issue => !String(issue.typePath || issue.type || '').includes('건화'))
             .filter(issue => !String(issue.typePath || issue.type || '').includes('건화'));
+        const placementDebug = debugPlacement
+            ? enrichedIssues
+                .map((issue, index) => buildPlacementDebug(issue, normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap)))
+                .filter(item => item.normalizedPlacement === '-' || !item.normalizedPlacement || item.normalizedPlacement === 'Docs' || item.rawPaths.length || item.detailPaths.length)
+                .slice(0, 25)
+            : undefined;
 
-        res.json({
+        const payload = {
             data: normalized,
             meta: {
                 hubId,
@@ -564,15 +1299,89 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
                 containerId,
                 count: normalized.length,
                 rawCount: rawIssues.length,
+                enrichedCount: enrichedIssues.filter(issue => issue && issue.rawDetailIssue).length,
+                cache: false,
+                fetchedAt: new Date().toISOString(),
+                ...(debugPlacement ? { placementDebug } : {}),
                 excludedCategory: '건화'
             }
-        });
+        };
+        if (!debugPlacement) {
+            formaIssuesCache.set(cacheKey, { value: payload, expiresAt: Date.now() + FORMA_ISSUES_CACHE_TTL_MS });
+        }
+        res.json(payload);
     } catch (err) {
         console.error('[Forma Issues] fetch failed:', err.message);
         res.status(502).json({
             error: 'Failed to fetch Forma issues',
             message: err.message,
             data: []
+        });
+    }
+});
+
+router.get('/api/issues/forma-gangbuk/:issueId/placement-debug', authRefreshMiddleware, async (req, res) => {
+    const token = req.internalOAuthToken && req.internalOAuthToken.access_token;
+    const hubId = req.query.hubId || req.query.hub_id || GANGBUK_HUB_ID;
+    const projectId = req.query.projectId || req.query.project_id || GANGBUK_PROJECT_ID;
+    const issueId = req.params.issueId;
+
+    try {
+        const containerId = await getIssueContainerInfo(hubId, projectId, token).catch(() => null);
+        const detail = await fetchFormaIssueDetail({ id: issueId }, projectId, containerId, token);
+        const issue = detail && (detail.data || detail.issue || detail.result || detail);
+        const placementInfo = normalizePlacementInfo(issue || {});
+        let dmInfo = null;
+        if (placementInfo.urn) {
+            dmInfo = await resolvePlacementNameFromDataManagement(placementInfo.urn, projectId, token).catch(err => ({
+                error: err.message
+            }));
+        }
+        const merged = dmInfo && !dmInfo.error
+            ? { ...(issue || {}), placementName: dmInfo.name, placementVersion: dmInfo.version, placementUrn: dmInfo.urn }
+            : (issue || {});
+        const normalized = normalizeFormaIssueForTable(merged, new Map(), new Map(), new Map());
+        res.json({
+            issueId,
+            projectId,
+            containerId,
+            placementInfo,
+            dmInfo,
+            normalized: {
+                placement: normalized.placement,
+                placementName: normalized.placementName,
+                placementVersion: normalized.placementVersion,
+                placementUrn: normalized.placementUrn,
+                type: normalized.type,
+                typePath: normalized.typePath
+            },
+            placements: issue && issue.placements,
+            linkedDocuments: issue && issue.linkedDocuments,
+            rawPaths: collectPlacementDebugPaths(issue || {})
+        });
+    } catch (err) {
+        res.status(502).json({
+            error: 'Failed to debug Forma placement',
+            message: err.message
+        });
+    }
+});
+
+router.get('/api/issues/snapshot', authRefreshMiddleware, async (req, res) => {
+    const token = req.internalOAuthToken && req.internalOAuthToken.access_token;
+    const urn = String(req.query.urn || '').trim();
+    if (!urn) return res.status(400).json({ error: 'snapshot urn is required' });
+
+    try {
+        const image = await fetchSnapshotImage(urn, token);
+        res.setHeader('Content-Type', image.contentType);
+        res.setHeader('Cache-Control', 'private, max-age=600');
+        res.send(image.buffer);
+    } catch (err) {
+        console.warn('[Forma Issues] snapshot fetch failed:', err.message);
+        res.status(404).json({
+            error: 'SnapshotNotFound',
+            message: err.message
         });
     }
 });

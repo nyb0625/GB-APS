@@ -23,6 +23,7 @@ const STATUS_GROUPS = {
 
 const GROUP_ORDER = ['created', 'review', 'delayed', 'closed'];
 let clashStructureChart = null;
+const dashboardIssueRegistry = new Map();
 const CONSTRUCTION_PROGRESS_ITEMS = [
     { id: 'new-01', zone: 'new', name: '신설 수처리동', progress: 68, status: '진행중', startDate: '2026-07-20', endDate: '2026-08-08', color: '#ef4444' },
     { id: 'new-02', zone: 'new', name: '신설 제수밸브실', progress: 46, status: '진행중', startDate: '2026-07-24', endDate: '2026-08-14', color: '#ef4444' },
@@ -167,6 +168,22 @@ function getIssueStatus(issue) {
     return normalizeText(issue.status || issue.statusValue || issue.status_value || issue.state);
 }
 
+function getIssueDisplayId(issue) {
+    return displayValue(issue.displayId || issue.issueNumber || issue.dbId || issue.id || '-');
+}
+
+function getIssueTitle(issue) {
+    return displayValue(issue.title || issue.name || issue.subject || issue.summary || issue.description || issue.desc || '제목 없음');
+}
+
+function getIssueAssignee(issue) {
+    return displayValue(issue.assignee || issue.assignedTo || issue.assigned_to || issue.owner || issue.responsible || '미지정') || '미지정';
+}
+
+function getIssueDescription(issue) {
+    return displayValue(issue.description || issue.desc || issue.reviewContent || issue.changeContent || '');
+}
+
 function getStatusGroup(issue) {
     const raw = getIssueStatus(issue);
     const compact = raw.toLowerCase().replace(/[\s_-]+/g, '');
@@ -258,6 +275,7 @@ function mergeIssues(lists) {
         const key = getIssueKey(issue);
         if (!key || seen.has(key)) return;
         seen.add(key);
+        dashboardIssueRegistry.set(key, issue);
         merged.push(issue);
     });
     return merged;
@@ -320,6 +338,7 @@ function renderGantt(issues) {
     const wrap = document.getElementById('bim-issue-gantt-wrap');
     const total = document.getElementById('bim-dashboard-issue-total');
     if (total) total.textContent = `이슈 ${issues.length}건`;
+    window._constructionIssueCache = issues;
     if (!wrap) return;
 
     if (!issues.length) {
@@ -335,7 +354,7 @@ function renderGantt(issues) {
     const yAxis = rows.map(row => {
         const progress = row.total ? Math.round((row.closed / row.total) * 100) : 0;
         return `
-            <div class="bim-chart-yitem">
+            <div class="bim-chart-yitem bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
                 <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
                 <div class="bim-structure-summary">${row.total}건 · 종료 ${row.closed} · ${progress}%</div>
             </div>
@@ -343,7 +362,7 @@ function renderGantt(issues) {
     }).join('');
 
     const plot = rows.map(row => {
-        const cells = months.map(month => renderChartCell(row.months.get(month))).join('');
+        const cells = months.map(month => renderChartCell(row.months.get(month), row.location, month)).join('');
         return `<div class="bim-chart-row">${cells}</div>`;
     }).join('');
 
@@ -374,7 +393,7 @@ function renderStatusLegend() {
     return `<div class="bim-chart-legend" aria-label="이슈 상태 색상 범례">${items}</div>`;
 }
 
-function renderChartCell(bucket) {
+function renderChartCell(bucket, location = '', month = '') {
     if (!bucket || !bucket.total) {
         return '<div class="bim-chart-cell"><div class="bim-chart-empty"></div></div>';
     }
@@ -396,10 +415,110 @@ function renderChartCell(bucket) {
     }).join('');
 
     return `
-        <div class="bim-chart-cell" title="${escapeHtml(label)}">
+        <div class="bim-chart-cell bim-chart-clickable" data-location="${escapeHtml(location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} · ${location} · ${label}`)}">
             <div class="bim-chart-bar">${segments}</div>
         </div>
     `;
+}
+
+function getIssuesForStructure(location, month = '') {
+    const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+    return issues.filter(issue => {
+        if (getIssueLocation(issue) !== location) return false;
+        return month ? issueOverlapsMonth(issue, month) : true;
+    });
+}
+
+function renderStructureIssueList(issues, emptyMessage) {
+    const sorted = issues.slice().sort((a, b) => {
+        return getIssueStart(b).getTime() - getIssueStart(a).getTime() ||
+            getIssueTitle(a).localeCompare(getIssueTitle(b), 'ko');
+    });
+    if (!sorted.length) {
+        return `<div class="bim-db-placeholder">${escapeHtml(emptyMessage || '표시할 이슈가 없습니다.')}</div>`;
+    }
+
+    const rows = sorted.map(issue => {
+        const issueKey = getIssueKey(issue);
+        const groupKey = getStatusGroup(issue);
+        const group = STATUS_GROUPS[groupKey] || STATUS_GROUPS.created;
+        const desc = getIssueDescription(issue);
+        return `
+            <tr class="bim-structure-issue-row" data-issue-key="${escapeHtml(issueKey)}" title="이슈 상세 정보 보기">
+                <td>${escapeHtml(getIssueDisplayId(issue))}</td>
+                <td class="bim-structure-issue-title" title="${escapeHtml(desc || getIssueTitle(issue))}">${escapeHtml(getIssueTitle(issue))}</td>
+                <td><span class="bim-status-pill" style="color:${group.color};">${escapeHtml(getIssueStatus(issue) || group.label)}</span></td>
+                <td>${escapeHtml(getIssueTypeText(issue) || '이슈')}</td>
+                <td>${escapeHtml(formatShortDate(getIssueStart(issue)))}</td>
+                <td>${escapeHtml(formatShortDate(getIssueEnd(issue, getIssueStart(issue))))}</td>
+                <td>${escapeHtml(getIssueAssignee(issue))}</td>
+            </tr>
+        `;
+    }).join('');
+
+    return `
+        <table class="bim-structure-issue-table">
+            <thead>
+                <tr>
+                    <th style="width:96px;">ID</th>
+                    <th>제목</th>
+                    <th style="width:92px;">상태</th>
+                    <th style="width:150px;">유형</th>
+                    <th style="width:92px;">시작일</th>
+                    <th style="width:92px;">마감일</th>
+                    <th style="width:110px;">담당자</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function bindStructureIssueListEvents(container, issues) {
+    if (!container) return;
+    const localMap = new Map();
+    issues.forEach(issue => {
+        const key = getIssueKey(issue);
+        if (key) {
+            localMap.set(key, issue);
+            dashboardIssueRegistry.set(key, issue);
+        }
+    });
+    container.querySelectorAll('.bim-structure-issue-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const key = row.getAttribute('data-issue-key') || '';
+            const issue = localMap.get(key) || dashboardIssueRegistry.get(key);
+            if (!issue) return;
+            if (typeof window.openFormaIssueDetail === 'function') {
+                window.openFormaIssueDetail(issue);
+            } else {
+                console.warn('[Construction BIM Dashboard] openFormaIssueDetail is not available.');
+                alert('이슈 상세 정보 모듈을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
+            }
+        });
+    });
+}
+
+function openStructureIssueModal(location, month = '') {
+    if (!location) return;
+    const modal = document.getElementById('bim-timeline-modal');
+    const body = document.getElementById('bim-timeline-modal-body');
+    if (!modal || !body) return;
+    const issues = getIssuesForStructure(location, month);
+    const monthLabel = month ? `${getMonthLabel(month)} · ` : '';
+    const titleText = `${monthLabel}${location} 이슈 목록`;
+    const title = modal.querySelector('.bim-task-dialog-head span');
+    if (title) title.textContent = titleText;
+    body.innerHTML = `
+        <div class="bim-structure-issue-summary">
+            <strong>${escapeHtml(titleText)}</strong>
+            <span>${issues.length}건</span>
+        </div>
+        ${renderStructureIssueList(issues, `${titleText}이 없습니다.`)}
+    `;
+    bindStructureIssueListEvents(body, issues);
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
 }
 
 function getIssueTypeText(issue) {
@@ -744,15 +863,15 @@ function renderProgressDonuts(activeZone = '') {
     const fresh = getAverageProgress(getProgressItems('new'));
     const extension = getAverageProgress(getProgressItems('extension'));
     const cards = [
-        { label: '전체 공사', value: all, color: '#22c55e' },
-        { label: '신설 공사', value: fresh, color: '#ef4444' },
-        { label: '증설 공사', value: extension, color: '#06b6d4' }
+        { label: '전체 공사', value: all, color: '#22c55e', zone: '' },
+        { label: '신설 공사', value: fresh, color: '#ef4444', zone: 'new' },
+        { label: '증설 공사', value: extension, color: '#06b6d4', zone: 'extension' }
     ];
     wrap.innerHTML = cards.map(card => `
-        <div class="bim-progress-donut-card${activeZone && card.label.indexOf(CONSTRUCTION_ZONES[activeZone]?.label || '') > -1 ? ' active' : ''}">
+        <button type="button" class="bim-progress-donut-card${activeZone && card.zone === activeZone ? ' active' : ''}${card.zone ? ' is-clickable' : ''}" data-zone="${escapeHtml(card.zone)}" ${card.zone ? `title="${escapeHtml(card.label)} 폴더 모델 한 번에 보기"` : ''}>
             <div class="bim-progress-donut-title">${escapeHtml(card.label)}</div>
             <div class="bim-progress-donut" style="--value:${card.value}; --donut-color:${card.color};"><span>${card.value}%</span></div>
-        </div>
+        </button>
     `).join('');
 }
 
@@ -778,7 +897,12 @@ function collectNodeFiles(node, output = [], path = []) {
                     name: file.name,
                     id: file.id || '',
                     versionId: file.versionId || '',
-                    folderPath: nextPath.join(' / ')
+                    itemId: file.itemId || '',
+                    rawUrn: file.rawUrn || '',
+                    versionNumber: file.versionNumber || '',
+                    lastModifiedTime: file.lastModifiedTime || '',
+                    lastModifiedUserName: file.lastModifiedUserName || '',
+                    folderPath: file.folderPath || nextPath.join(' / ')
                 });
             }
         });
@@ -804,6 +928,17 @@ function findZoneFolderNodes(node, zone, output = []) {
     return output;
 }
 
+function findZoneModelsFromTree(node, zone) {
+    const zoneNodes = findZoneFolderNodes(node, zone);
+    let models = zoneNodes.flatMap(folderNode => collectNodeFiles(folderNode, []));
+    if (!models.length) {
+        models = collectNodeFiles(node, []).filter(model => modelBelongsToZone(model, zone));
+    } else {
+        models = models.filter(model => modelBelongsToZone(model, zone));
+    }
+    return dedupeModels(models);
+}
+
 function dedupeModels(models) {
     const seen = new Set();
     return models.filter(model => {
@@ -827,9 +962,7 @@ function modelBelongsToZone(model, zone) {
 
 async function fetchConstructionRvtTree() {
     if (window._constructionRvtTreeCache) return window._constructionRvtTreeCache;
-    const hubId = window.currentHubId || CONSTRUCTION_TARGET_HUB_ID;
-    const projectId = window.currentProjectId || CONSTRUCTION_TARGET_PROJECT_ID;
-    const url = `/api/hubs/${encodeURIComponent(hubId)}/projects/${encodeURIComponent(projectId)}/rvt-files?strict=1`;
+    const url = '/api/models/tree';
     const resp = await fetch(url, { credentials: 'same-origin' });
     if (!resp.ok) throw new Error(`RVT tree fetch failed: HTTP ${resp.status}`);
     const tree = await resp.json();
@@ -841,8 +974,8 @@ async function getConstructionZoneModels(zone) {
     const cacheKey = `_constructionZoneModels_${zone}`;
     if (Array.isArray(window[cacheKey])) return window[cacheKey];
     const tree = await fetchConstructionRvtTree();
-    const zoneNodes = findZoneFolderNodes(tree, zone);
-    const models = dedupeModels(zoneNodes.flatMap(node => collectNodeFiles(node, [])).filter(model => modelBelongsToZone(model, zone)));
+    const models = findZoneModelsFromTree(tree, zone);
+    console.log('[Construction Progress] zone models:', zone, models.map(model => model.name));
     window[cacheKey] = models;
     return models;
 }
@@ -1017,6 +1150,15 @@ function initConstructionProgressPanel() {
         });
     }
     const map = document.getElementById('bim-progress-map');
+    const donuts = document.getElementById('bim-progress-donuts');
+    if (donuts && !donuts.dataset.bound) {
+        donuts.dataset.bound = 'true';
+        donuts.addEventListener('click', event => {
+            const zoneBtn = event.target.closest('.bim-progress-donut-card[data-zone]');
+            const zone = zoneBtn ? zoneBtn.dataset.zone : '';
+            if (zone) focusConstructionZone(zone);
+        });
+    }
     if (!map || map.dataset.bound) return;
     map.dataset.bound = 'true';
     const backBtn = document.getElementById('bim-progress-viewer-back');
@@ -1077,6 +1219,15 @@ const KOREAN_HOLIDAYS = {
     '2026-12-25': '성탄절'
 };
 let currentWorkView = 'week';
+const MODEL_UPDATE_PROJECT_NAME = '강북정수장 증설공사 BIM 용역';
+let modelUpdateState = {
+    loading: false,
+    loaded: false,
+    error: '',
+    models: [],
+    projectName: MODEL_UPDATE_PROJECT_NAME,
+    fetchedAt: ''
+};
 let timelineRangeState = {
     scale: 'month',
     month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
@@ -1493,21 +1644,306 @@ function renderTimelineAxis(range, expanded) {
     `;
 }
 
+function parseModelDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatModelDate(value) {
+    const date = parseModelDate(value);
+    if (!date) return '-';
+    return date.toLocaleString('ko-KR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function getModelSortTime(model) {
+    const date = parseModelDate(model.lastModifiedTime);
+    return date ? date.getTime() : 0;
+}
+
+function getSortedModelUpdates() {
+    return modelUpdateState.models
+        .slice()
+        .sort((a, b) => getModelSortTime(b) - getModelSortTime(a) || String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+}
+
+function getMonthlyModelUpdateCutoff() {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 1);
+    return cutoff;
+}
+
+function getMonthlyModelUpdates() {
+    const cutoffTime = getMonthlyModelUpdateCutoff().getTime();
+    return getSortedModelUpdates().filter(model => getModelSortTime(model) >= cutoffTime);
+}
+
+function getModelUpdatePeriodLabel() {
+    return `최근 1개월 (${formatModelDate(getMonthlyModelUpdateCutoff())} 이후)`;
+}
+
+async function loadModelUpdateStats(force = false) {
+    if (modelUpdateState.loading) return modelUpdateState;
+    if (!force && modelUpdateState.loaded) return modelUpdateState;
+
+    modelUpdateState = { ...modelUpdateState, loading: true, error: '' };
+    try {
+        const url = `/api/models/tree${force ? '?force=1' : ''}`;
+        const resp = await fetch(url, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const tree = await resp.json();
+        modelUpdateState = {
+            loading: false,
+            loaded: true,
+            error: '',
+            models: dedupeModels(collectNodeFiles(tree, [])),
+            projectName: tree.projectName || MODEL_UPDATE_PROJECT_NAME,
+            fetchedAt: tree.fetchedAt || new Date().toISOString()
+        };
+    } catch (err) {
+        console.warn('[Construction BIM Dashboard] Model update stats failed:', err);
+        modelUpdateState = {
+            ...modelUpdateState,
+            loading: false,
+            loaded: true,
+            error: '모델 업데이트 정보를 불러오지 못했습니다.'
+        };
+    }
+
+    if (currentWorkView === 'stats') renderWeeklyTaskBoard();
+    return modelUpdateState;
+}
+
+function ensureModelUpdateStats() {
+    if (!modelUpdateState.loaded && !modelUpdateState.loading) {
+        loadModelUpdateStats(false);
+    }
+}
+
+function renderModelUpdateStatCard() {
+    ensureModelUpdateStats();
+    const monthlyModels = getMonthlyModelUpdates();
+    const countText = modelUpdateState.loading ? '...' : `${monthlyModels.length}건`;
+    const latest = monthlyModels[0];
+    const subText = modelUpdateState.error || (latest
+        ? `최근: ${latest.name || '-'}`
+        : modelUpdateState.loading ? 'Autodesk Docs 조회 중' : '최근 1개월 업데이트 없음');
+    const fetched = modelUpdateState.fetchedAt ? getModelUpdatePeriodLabel() : MODEL_UPDATE_PROJECT_NAME;
+    return `
+        <button type="button" class="bim-stat-card bim-model-update-card" title="최근 1개월 업데이트 모델 목록 보기">
+            <div class="bim-stat-label">모델 업데이트 건수</div>
+            <div class="bim-stat-value">${escapeHtml(countText)}</div>
+            <div class="bim-stat-sub" title="${escapeHtml(subText)}">${escapeHtml(subText)}</div>
+            <div class="bim-stat-sub muted" title="${escapeHtml(fetched)}">${escapeHtml(fetched)}</div>
+        </button>
+    `;
+}
+
+function renderModelUpdateSummary(count) {
+    return `
+        <div class="bim-model-update-summary">
+            <strong>${escapeHtml(modelUpdateState.projectName || MODEL_UPDATE_PROJECT_NAME)}</strong>
+            <span>최근 1개월 업데이트 ${count}건</span>
+            <button id="bim-model-update-refresh" type="button" class="bim-icon-btn" title="새로고침"><i class="fas fa-sync-alt"></i></button>
+        </div>
+    `;
+}
+
+function renderModelUpdateList() {
+    const models = getMonthlyModelUpdates();
+    const summary = renderModelUpdateSummary(models.length);
+    if (modelUpdateState.loading) {
+        return `${summary}<div class="bim-db-placeholder">모델 업데이트 목록을 불러오는 중입니다.</div>`;
+    }
+    if (modelUpdateState.error) {
+        return `${summary}<div class="bim-db-placeholder">${escapeHtml(modelUpdateState.error)}</div>`;
+    }
+    if (!models.length) {
+        return `${summary}<div class="bim-db-placeholder">최근 1개월 사이 업데이트된 모델이 없습니다.</div>`;
+    }
+
+    const rows = models.map(model => `
+        <tr class="bim-model-update-row" data-model-urn="${escapeHtml(model.urn || '')}" data-model-name="${escapeHtml(model.name || '-')}">
+            <td class="bim-model-name-cell" title="${escapeHtml(model.name || '-')}">
+                <button type="button" class="bim-model-open-btn" title="3D 뷰어에서 열기">${escapeHtml(model.name || '-')}</button>
+            </td>
+            <td>${escapeHtml(model.versionNumber ? `v${model.versionNumber}` : '-')}</td>
+            <td title="${escapeHtml(model.folderPath || '-')}">${escapeHtml(model.folderPath || '-')}</td>
+            <td>${escapeHtml(formatModelDate(model.lastModifiedTime))}</td>
+            <td>${escapeHtml(model.lastModifiedUserName || '-')}</td>
+        </tr>
+    `).join('');
+
+    return `
+        ${summary}
+        <table class="bim-model-update-table">
+            <thead>
+                <tr>
+                    <th>모델명</th>
+                    <th>버전</th>
+                    <th>폴더</th>
+                    <th>업데이트 일시</th>
+                    <th>수정자</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function openModelUpdateInViewer(urn, name) {
+    if (!urn) return;
+    const modelName = name || 'BIM Model';
+    if (typeof window.updateUrnCache === 'function') {
+        window.updateUrnCache(modelName, urn);
+    }
+    window.currentModelName = modelName;
+    window.currentUrnName = modelName;
+    window.currentUrn = urn;
+    closeTimelineModal();
+
+    if (typeof window.switchTab === 'function') {
+        window.switchTab('project');
+    }
+
+    setTimeout(() => {
+        if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+            window.explorer.loadIntoViewer(urn, modelName);
+            return;
+        }
+        if (typeof window.focusIssueOnViewer === 'function') {
+            window.focusIssueOnViewer('', urn);
+            return;
+        }
+        import('./viewer.js?v=20260804-main-rotate-fix1')
+            .then(async mod => {
+                const container = document.getElementById('preview');
+                if (!container || !mod.initViewer || !mod.loadModel) return;
+                const viewer = window.viewer || await mod.initViewer(container, false);
+                if (!viewer) return;
+                window.viewer = viewer;
+                await mod.loadModel(viewer, urn);
+            })
+            .catch(err => console.error('[Construction BIM Dashboard] Model update viewer open failed:', err));
+    }, 120);
+}
+
+async function openModelUpdateModal(force = false) {
+    const modal = document.getElementById('bim-timeline-modal');
+    const body = document.getElementById('bim-timeline-modal-body');
+    if (!modal || !body) return;
+    const title = modal.querySelector('.bim-task-dialog-head span');
+    if (title) title.textContent = '모델 업데이트 목록';
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+    const shouldLoad = force || !modelUpdateState.loaded;
+    const pending = shouldLoad ? loadModelUpdateStats(force) : Promise.resolve(modelUpdateState);
+    body.innerHTML = renderModelUpdateList();
+    await pending;
+    if (modal.style.display === 'flex') body.innerHTML = renderModelUpdateList();
+}
+
+function getTasksForStatsType(type) {
+    const tasks = getAllWeeklyTasks();
+    if (type === 'active') return tasks.filter(task => task.status === '진행중');
+    if (type === 'completed') return tasks.filter(task => task.status === '완료');
+    return tasks;
+}
+
+function getTaskStatsTitle(type) {
+    if (type === 'active') return '진행중 업무 목록';
+    if (type === 'completed') return '완료 업무 목록';
+    return '전체 업무 목록';
+}
+
+function renderTaskStatCard(type, label, count) {
+    return `
+        <button type="button" class="bim-stat-card bim-task-stat-card" data-task-stat="${escapeHtml(type)}" title="${escapeHtml(label)} 목록 보기">
+            <div class="bim-stat-label">${escapeHtml(label)}</div>
+            <div class="bim-stat-value">${count}건</div>
+        </button>
+    `;
+}
+
+function renderTaskStatsList(tasks, emptyMessage) {
+    const sortedTasks = sortTasks(tasks);
+    if (!sortedTasks.length) {
+        return `<div class="bim-db-placeholder">${escapeHtml(emptyMessage || '표시할 업무가 없습니다.')}</div>`;
+    }
+
+    const rows = sortedTasks.map(task => {
+        const category = task.category || '기타';
+        const status = task.status || '계획';
+        const categoryColor = getTaskCategoryColor(category);
+        const statusColor = (TASK_STATUSES[status] || TASK_STATUSES['계획']).color;
+        return `
+            <tr>
+                <td><span class="bim-work-badge" style="background:${categoryColor};">${escapeHtml(category)}</span></td>
+                <td><span class="bim-status-pill" style="color:${statusColor};">${escapeHtml(status)}</span></td>
+                <td>${escapeHtml(task.startDate || '-')}</td>
+                <td>${escapeHtml(task.dueDate || '-')}</td>
+                <td class="bim-week-content-cell">${escapeHtml(task.content || '-')}</td>
+                <td>${escapeHtml(task.people || '-')}</td>
+            </tr>
+        `;
+    }).join('');
+
+    return `
+        <table class="bim-week-table bim-task-stats-table">
+            <thead>
+                <tr>
+                    <th style="width:76px;">구분</th>
+                    <th style="width:82px;">진행 상태</th>
+                    <th style="width:88px;">시작일</th>
+                    <th style="width:88px;">마감일</th>
+                    <th>주요내용</th>
+                    <th style="width:96px;">수행인원</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function openTaskStatsModal(type) {
+    const modal = document.getElementById('bim-timeline-modal');
+    const body = document.getElementById('bim-timeline-modal-body');
+    if (!modal || !body) return;
+    const tasks = getTasksForStatsType(type);
+    const titleText = getTaskStatsTitle(type);
+    const title = modal.querySelector('.bim-task-dialog-head span');
+    if (title) title.textContent = titleText;
+    body.innerHTML = `
+        <div class="bim-task-stats-summary">
+            <strong>${escapeHtml(titleText)}</strong>
+            <span>${tasks.length}건</span>
+        </div>
+        ${renderTaskStatsList(tasks, `${titleText}이 없습니다.`)}
+    `;
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+}
+
 function renderStatsView() {
     const tasks = getAllWeeklyTasks();
     const completed = tasks.filter(task => task.status === '완료').length;
     const active = tasks.filter(task => task.status === '진행중').length;
-    const peopleCounts = countBy(tasks, task => task.people || '미지정');
     const longest = tasks.slice().sort((a, b) => getTaskDurationDays(b) - getTaskDurationDays(a))[0];
     const categoryCounts = countBy(tasks, task => task.category || '기타');
     const statusCounts = countBy(tasks, task => task.status || '계획');
 
     return `
         <div class="bim-stats-grid">
-            <div class="bim-stat-card"><div class="bim-stat-label">전체 업무</div><div class="bim-stat-value">${tasks.length}건</div></div>
-            <div class="bim-stat-card"><div class="bim-stat-label">진행중</div><div class="bim-stat-value">${active}건</div></div>
-            <div class="bim-stat-card"><div class="bim-stat-label">완료</div><div class="bim-stat-value">${completed}건</div></div>
-            <div class="bim-stat-card"><div class="bim-stat-label">최다 수행인원</div><div class="bim-stat-value" title="${escapeHtml(peopleCounts[0]?.[0] || '-')}">${escapeHtml(peopleCounts[0]?.[0] || '-')}</div></div>
+            ${renderTaskStatCard('all', '전체 업무', tasks.length)}
+            ${renderTaskStatCard('active', '진행중', active)}
+            ${renderTaskStatCard('completed', '완료', completed)}
+            ${renderModelUpdateStatCard()}
         </div>
         <div class="bim-stats-grid" style="grid-template-columns:1fr 1fr; padding-top:0;">
             <div class="bim-stat-card"><div class="bim-stat-label">구분별 업무</div><div class="bim-mini-bars">${renderMiniBars(categoryCounts, getTaskCategoryColor) || '<div class="bim-week-empty">업무가 없습니다.</div>'}</div></div>
@@ -1791,6 +2227,15 @@ function initWeeklyTaskBoard() {
     if (board && !board.dataset.bound) {
         board.dataset.bound = 'true';
         board.addEventListener('click', event => {
+            const taskStatCard = event.target.closest('.bim-task-stat-card[data-task-stat]');
+            if (taskStatCard) {
+                openTaskStatsModal(taskStatCard.dataset.taskStat || 'all');
+                return;
+            }
+            if (event.target.closest('.bim-model-update-card')) {
+                openModelUpdateModal(false);
+                return;
+            }
             if (event.target.closest('#bim-timeline-expand-btn')) {
                 openTimelineModal();
                 return;
@@ -1822,6 +2267,15 @@ function initWeeklyTaskBoard() {
     if (timelineModalBody && !timelineModalBody.dataset.bound) {
         timelineModalBody.dataset.bound = 'true';
         timelineModalBody.addEventListener('click', event => {
+            const modelRow = event.target.closest('.bim-model-update-row[data-model-urn]');
+            if (modelRow) {
+                openModelUpdateInViewer(modelRow.dataset.modelUrn, modelRow.dataset.modelName);
+                return;
+            }
+            if (event.target.closest('#bim-model-update-refresh')) {
+                openModelUpdateModal(true);
+                return;
+            }
             const timelineBar = event.target.closest('.bim-timeline-bar[data-task-id]');
             if (timelineBar) openTaskModal(timelineBar.dataset.taskId);
         });
@@ -1845,8 +2299,23 @@ function initWeeklyTaskBoard() {
     }
 }
 
+function initStructureIssueBoard() {
+    const wrap = document.getElementById('bim-issue-gantt-wrap');
+    if (!wrap || wrap.dataset.issueListBound) return;
+    wrap.dataset.issueListBound = 'true';
+    wrap.addEventListener('click', event => {
+        const target = event.target.closest('.bim-chart-clickable[data-location]');
+        if (!target) return;
+        openStructureIssueModal(target.dataset.location, target.dataset.month || '');
+    });
+}
+
 async function refreshConstructionBimDashboard() {
     populateWeekSelect();
+    if (currentWorkView === 'stats') {
+        modelUpdateState = { ...modelUpdateState, loaded: false, error: '' };
+        loadModelUpdateStats(true);
+    }
     renderWeeklyTaskBoard();
     const wrap = document.getElementById('bim-issue-gantt-wrap');
     if (wrap) wrap.innerHTML = '<div class="bim-db-placeholder">이슈 데이터를 불러오는 중입니다.</div>';
@@ -1862,6 +2331,7 @@ export function initConstructionBimDashboard() {
         refreshBtn.addEventListener('click', refreshConstructionBimDashboard);
     }
     initWeeklyTaskBoard();
+    initStructureIssueBoard();
     initConstructionProgressPanel();
     refreshConstructionBimDashboard();
 }

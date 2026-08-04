@@ -157,6 +157,19 @@
     padding: 0 12px;
 }
 
+.bim-chart-clickable {
+    cursor: pointer;
+}
+
+.bim-chart-yitem.bim-chart-clickable:hover,
+.bim-chart-cell.bim-chart-clickable:hover {
+    background: rgba(56, 189, 248, 0.1);
+}
+
+.bim-chart-cell.bim-chart-clickable:hover .bim-chart-bar {
+    box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.55);
+}
+
 .bim-structure-name {
     max-width: 300px;
     white-space: normal;
@@ -358,6 +371,22 @@
     background: rgba(15, 23, 42, 0.72);
 }
 
+.bim-stat-card.bim-model-update-card,
+.bim-stat-card.bim-task-stat-card {
+    width: 100%;
+    display: block;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.bim-stat-card.bim-model-update-card:hover,
+.bim-stat-card.bim-task-stat-card:hover {
+    border-color: rgba(56, 189, 248, 0.5);
+    background: rgba(14, 116, 144, 0.24);
+}
+
 .bim-stat-label {
     color: #94a3b8;
     font-size: 11px;
@@ -372,6 +401,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.bim-stat-sub {
+    margin-top: 5px;
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bim-stat-sub.muted {
+    color: #64748b;
+    font-weight: 600;
 }
 
 .bim-mini-bar-row {
@@ -782,6 +826,7 @@
 }
 
 .bim-progress-donut-card {
+    width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -790,6 +835,18 @@
     border: 1px solid rgba(148, 163, 184, 0.16);
     border-radius: 6px;
     background: rgba(15, 23, 42, 0.72);
+    color: inherit;
+    font: inherit;
+}
+
+.bim-progress-donut-card.is-clickable {
+    cursor: pointer;
+}
+
+.bim-progress-donut-card.is-clickable:hover,
+.bim-progress-donut-card.active {
+    border-color: rgba(56, 189, 248, 0.5);
+    background: rgba(14, 116, 144, 0.22);
 }
 
 .bim-progress-donut-title {
@@ -932,6 +989,212 @@
     overflow: auto;
     background: #111827;
     color: #e5eefb;
+}
+
+.bim-structure-issue-summary {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.bim-structure-issue-summary strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+
+.bim-structure-issue-summary span {
+    margin-left: auto;
+    color: #7dd3fc;
+    font-size: 12px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.bim-structure-issue-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.bim-structure-issue-table th,
+.bim-structure-issue-table td {
+    padding: 9px 10px;
+    border-right: 1px solid rgba(148, 163, 184, 0.16);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bim-structure-issue-table th {
+    position: sticky;
+    top: 44px;
+    z-index: 1;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.94);
+    font-weight: 900;
+    text-align: left;
+}
+
+.bim-structure-issue-table .bim-structure-issue-title {
+    color: #f8fafc;
+    font-weight: 800;
+}
+
+.bim-structure-issue-row {
+    cursor: pointer;
+    transition: background 0.16s ease;
+}
+
+.bim-structure-issue-row:hover {
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.bim-task-stats-summary {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.bim-task-stats-summary strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+
+.bim-task-stats-summary span {
+    margin-left: auto;
+    color: #7dd3fc;
+    font-size: 12px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.bim-task-stats-table th {
+    position: sticky;
+    top: 44px;
+    z-index: 1;
+}
+
+.bim-task-stats-table td.bim-week-content-cell {
+    white-space: normal;
+    line-height: 1.45;
+}
+
+.bim-model-update-summary {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.bim-model-update-summary strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+
+.bim-model-update-summary span {
+    margin-left: auto;
+    color: #7dd3fc;
+    font-size: 12px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.bim-model-update-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.bim-model-update-table th,
+.bim-model-update-table td {
+    padding: 9px 10px;
+    border-right: 1px solid rgba(148, 163, 184, 0.16);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bim-model-update-table th {
+    position: sticky;
+    top: 44px;
+    z-index: 1;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.94);
+    font-weight: 900;
+    text-align: left;
+}
+
+.bim-model-update-table th:nth-child(1) { width: 30%; }
+.bim-model-update-table th:nth-child(2) { width: 72px; }
+.bim-model-update-table th:nth-child(3) { width: 30%; }
+.bim-model-update-table th:nth-child(4) { width: 156px; }
+.bim-model-update-table th:nth-child(5) { width: 120px; }
+
+.bim-model-update-row {
+    cursor: pointer;
+}
+
+.bim-model-update-row:hover td {
+    background: rgba(56, 189, 248, 0.12);
+}
+
+.bim-model-name-cell {
+    color: #f8fafc;
+    font-weight: 800;
+}
+
+.bim-model-open-btn {
+    max-width: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #7dd3fc;
+    font: inherit;
+    font-weight: 900;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.bim-model-open-btn:hover {
+    color: #e0f2fe;
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 

@@ -4450,6 +4450,22 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
     var numericId    = parseInt(dbId, 10);
     var hasNumericId = !isNaN(numericId) && numericId > 0;
     var normalizeUrn = function(u) { return String(u || '').replace(/^urn:/i, '').trim(); };
+    var toViewerUrn = function(u) {
+        var str = String(u || '').trim();
+        if (!str || str === '-') return '';
+        if (str.indexOf('dm.lineage') > -1) return '';
+        var body = str.replace(/^urn:/i, '');
+        if (body.indexOf('dm.lineage') > -1) return '';
+        if (str.indexOf('urn:adsk.') === 0 || body.indexOf('adsk.') === 0) {
+            var raw = str.indexOf('urn:') === 0 ? str : 'urn:' + str;
+            return btoa(raw).replace(/=/g, '');
+        }
+        if (/^[A-Za-z0-9+/=_-]+$/.test(body) && body.length > 20) {
+            return body;
+        }
+        return '';
+    };
+    targetUrn = toViewerUrn(targetUrn);
 
     console.log('[focusIssueOnViewer] 호출 — dbId:', dbId, '| targetUrn:', targetUrn);
 
@@ -6262,7 +6278,13 @@ window.bindIssueItemClickEvents = function() {
         else if (key === 'assignee') value = issue.assignee;
         else if (key === 'dueDate') value = fmtDate(issue.dueDate || issue.endDate || issue.duedate);
         else if (key === 'startDate') value = fmtDate(issue.startDate || issue.startdate);
-        else if (key === 'placement') value = issue.placement;
+        else if (key === 'placement') {
+            value = issue.placement;
+            var placementKey = String(value || '').trim().toLowerCase();
+            if (placementKey === 'docs' || placementKey === 'autodesk docs' || placementKey === 'documents' || placementKey === 'files' || placementKey === 'document management' || placementKey === 'bim 360 docs') {
+                value = issue.placementName || '';
+            }
+        }
         else if (key === 'desc') value = issue.description || issue.desc;
         else if (key === 'reviewer') value = issue.reviewer || issue.verifier;
         else if (key === 'location') value = issue.location || issue.locationName;
@@ -6270,6 +6292,12 @@ window.bindIssueItemClickEvents = function() {
         else if (key === 'references') value = issue.references;
         else if (key === 'comments') value = issue.comments;
         else value = issue[key];
+        if (key === 'placement') {
+            var finalPlacementKey = String(value || '').trim().toLowerCase();
+            if (finalPlacementKey === 'docs' || finalPlacementKey === 'autodesk docs' || finalPlacementKey === 'documents' || finalPlacementKey === 'files' || finalPlacementKey === 'document management' || finalPlacementKey === 'bim 360 docs') {
+                value = '';
+            }
+        }
         return value == null || value === '' ? '-' : value;
     }
     window.getIssueFieldValue = field;
@@ -6381,24 +6409,295 @@ window.bindIssueItemClickEvents = function() {
         head.innerHTML = html + '</tr>';
     }
 
+    function closeFormaIssueDetail() {
+        var modal = document.getElementById('forma-issue-detail-modal');
+        if (modal) modal.remove();
+    }
+
+    function ensureFormaDetailStyles() {
+        if (document.getElementById('forma-detail-style')) return;
+        var css = `
+            .forma-detail-overlay{position:fixed!important;inset:0!important;z-index:30000!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:24px!important;background:rgba(2,6,23,.72)!important;backdrop-filter:blur(6px)}
+            .forma-detail-dialog{width:min(860px,94vw);max-height:min(88vh,860px);display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(148,163,184,.24);border-radius:10px;background:#0f172a;color:#e5eefb;box-shadow:0 28px 70px rgba(0,0,0,.5);font-family:inherit}
+            .forma-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px 18px;border-bottom:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.96)}
+            .forma-detail-title-wrap{min-width:0}.forma-detail-kicker{margin-bottom:8px;color:#7dd3fc;font-size:12px;font-weight:900}.forma-detail-head h2{margin:0;color:#f8fafc;font-size:20px;line-height:1.32;font-weight:900}
+            .forma-detail-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.forma-detail-chip{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border-radius:999px;background:rgba(56,189,248,.16);color:#bae6fd;font-size:11px;font-weight:900}.forma-detail-chip.muted{background:rgba(148,163,184,.14);color:#cbd5e1}.forma-detail-chip.status{background:rgba(16,185,129,.16);color:#a7f3d0}
+            .forma-detail-x{width:32px;height:32px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(148,163,184,.22);border-radius:6px;background:rgba(15,23,42,.72);color:#cbd5e1;cursor:pointer}
+            .forma-detail-body{min-height:0;overflow:auto;padding:18px 22px 20px}.forma-detail-section+.forma-detail-section{margin-top:18px}.forma-detail-section-title{margin-bottom:10px;color:#94a3b8;font-size:12px;font-weight:900}
+            .forma-detail-snapshot{overflow:hidden;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#020617}.forma-detail-snapshot img{display:block;width:100%;height:auto;max-height:min(46vh,420px);object-fit:contain;background:#020617}.forma-detail-snapshot-note{padding:10px 12px;color:#94a3b8;font-size:11px;font-weight:800}
+            .forma-detail-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.forma-detail-meta-item{min-width:0;padding:11px 12px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(30,41,59,.58)}.forma-detail-meta-item span{display:block;margin-bottom:5px;color:#94a3b8;font-size:11px;font-weight:800}.forma-detail-meta-item strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f8fafc;font-size:13px;line-height:1.35}
+            .forma-detail-description{padding:14px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(15,23,42,.78);color:#e5eefb;font-size:13px;line-height:1.65}.forma-detail-desc-lead{font-weight:900}.forma-detail-desc-list{margin:9px 0 0;padding-left:18px}.forma-detail-desc-list li+li{margin-top:3px}.forma-detail-desc-list code{padding:1px 5px;border-radius:4px;background:rgba(56,189,248,.14);color:#bae6fd;font-family:inherit;font-weight:900}.forma-detail-empty{color:#94a3b8}
+            .forma-detail-actions{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px;border-top:1px solid rgba(148,163,184,.2);background:rgba(2,6,23,.32)}.forma-detail-action{min-height:36px;display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid rgba(148,163,184,.26);border-radius:6px;padding:0 13px;background:rgba(30,41,59,.86);color:#e5eefb;font-weight:900;cursor:pointer}.forma-detail-action.primary{border-color:rgba(56,189,248,.46);background:#0e7490;color:#ecfeff}.forma-detail-action.ghost{background:transparent;color:#cbd5e1}.forma-detail-action:hover,.forma-detail-x:hover{border-color:rgba(125,211,252,.7);color:#fff}
+            @media(max-width:720px){.forma-detail-overlay{padding:12px!important}.forma-detail-meta-grid{grid-template-columns:1fr}.forma-detail-actions{flex-direction:column}}
+        `;
+        var style = document.createElement('style');
+        style.id = 'forma-detail-style';
+        style.textContent = css;
+        document.head.appendChild(style);
+    }
+
+    function renderDetailMeta(label, value) {
+        return '<div class="forma-detail-meta-item"><span>' + esc(label) + '</span><strong>' + esc(value || '-') + '</strong></div>';
+    }
+
+    function issueSnapshotUrn(issue) {
+        return issue && (issue.snapshotUrn || issue.snapshotURN || issue.thumbnailUrn ||
+            findIssueValueDeep(issue.rawFormaIssue || issue, ['snapshotUrn', 'snapshotURN', 'thumbnailUrn']));
+    }
+
+    function renderIssueSnapshot(issue) {
+        var urn = issueSnapshotUrn(issue);
+        if (!urn || urn === '-') return '';
+        var src = '/api/issues/snapshot?urn=' + encodeURIComponent(urn);
+        return '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">이슈 썸네일</div>'
+            + '<div class="forma-detail-snapshot">'
+            + '<img src="' + esc(src) + '" alt="이슈 썸네일" loading="lazy" decoding="async" onerror="this.parentElement.style.display=\'none\';">'
+            + '<div class="forma-detail-snapshot-note">Forma 이슈 캡처 이미지</div>'
+            + '</div>'
+            + '</section>';
+    }
+
+    function renderDetailDescription(value) {
+        var text = String(value || '-').trim();
+        if (!text || text === '-') return '<div class="forma-detail-empty">등록된 설명이 없습니다.</div>';
+        var lines = text.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+        if (!lines.length) return '<div class="forma-detail-empty">등록된 설명이 없습니다.</div>';
+        var first = lines[0];
+        var rest = lines.slice(1);
+        var html = '<div class="forma-detail-desc-lead">' + esc(first) + '</div>';
+        if (rest.length) {
+            html += '<ul class="forma-detail-desc-list">' + rest.map(function(line) {
+                var formatted = esc(line).replace(/(\d+(?:\.\d+)?\s*→\s*\d+(?:\.\d+)?)/g, '<code>$1</code>');
+                return '<li>' + formatted + '</li>';
+            }).join('') + '</ul>';
+        }
+        return html;
+    }
+
+    async function exportFormaIssueToPdf(issue) {
+        var BLANK_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+        if (typeof window.buildAndOpenBatchPdf !== 'function') {
+            try {
+                await import('./comparison.js?v=pdf-hide-change-row-20260703-4');
+            } catch (err) {
+                console.error('[Forma Detail PDF] comparison.js 로드 실패:', err);
+            }
+        }
+        if (typeof window.buildAndOpenBatchPdf === 'function') {
+            window.buildAndOpenBatchPdf([issue], BLANK_1PX, BLANK_1PX);
+        } else {
+            alert('PDF 생성 모듈을 불러올 수 없습니다.');
+        }
+    }
+
+    function normalizeModelNameForDetail(value) {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/^urn:/, '')
+            .replace(/\s*\(?v\d+\)?\s*$/i, '')
+            .replace(/\s*\(v\d+\)\s*/gi, '')
+            .replace(/\.(rvt|nwc|dwg|ifc)\b/gi, '')
+            .replace(/[\s_\-()[\]{}<>.,]/g, '')
+            .trim();
+    }
+
+    function normalizeViewerUrnForDetail(value) {
+        var str = String(value || '').trim();
+        if (!str || str === '-') return '';
+        if (str.indexOf('dm.lineage') > -1) return '';
+        var body = str.replace(/^urn:/i, '');
+        if (body.indexOf('dm.lineage') > -1) return '';
+        if (str.indexOf('urn:adsk.') === 0 || body.indexOf('adsk.') === 0) {
+            var raw = str.indexOf('urn:') === 0 ? str : 'urn:' + str;
+            return btoa(raw).replace(/=/g, '');
+        }
+        if (/^[A-Za-z0-9+/=_-]+$/.test(body) && body.length > 20) return body;
+        return '';
+    }
+
+    function findIssueValueDeep(source, keys) {
+        var wanted = {};
+        keys.forEach(function(key) { wanted[String(key).toLowerCase()] = true; });
+        var seen = [];
+        function walk(value) {
+            if (!value || typeof value !== 'object') return '';
+            if (seen.indexOf(value) > -1) return '';
+            seen.push(value);
+            if (Array.isArray(value)) {
+                for (var i = 0; i < value.length; i++) {
+                    var arrFound = walk(value[i]);
+                    if (arrFound) return arrFound;
+                }
+                return '';
+            }
+            for (var key in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+                var val = value[key];
+                if (wanted[String(key).toLowerCase()] && val != null && String(val).trim() !== '') {
+                    if (typeof val === 'object') {
+                        return val.urn || val.modelUrn || val.versionId || val.name || val.displayName || val.title || '';
+                    }
+                    return val;
+                }
+            }
+            for (var key2 in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key2)) continue;
+                var found = walk(value[key2]);
+                if (found) return found;
+            }
+            return '';
+        }
+        return walk(source);
+    }
+
+    function collectModelFilesFromTree(node, out) {
+        out = out || [];
+        if (!node || typeof node !== 'object') return out;
+        if (Array.isArray(node.files)) {
+            node.files.forEach(function(file) {
+                if (file && (file.urn || file.versionId) && file.name) out.push(file);
+            });
+        }
+        if (Array.isArray(node.children)) {
+            node.children.forEach(function(child) { collectModelFilesFromTree(child, out); });
+        }
+        return out;
+    }
+
+    async function resolveUrnFromGangbukModelTree(name) {
+        if (!name) return '';
+        var target = normalizeModelNameForDetail(name);
+        if (!target || target === '-') return '';
+        try {
+            var resp = await fetch('/api/models/tree', { credentials: 'same-origin' });
+            if (!resp.ok) return '';
+            var tree = await resp.json();
+            var files = collectModelFilesFromTree(tree, []);
+            console.log('[Forma Detail] placement model search:', name, 'target:', target, 'files:', files.length);
+            for (var i = 0; i < files.length; i++) {
+                var file = files[i];
+                var fileKey = normalizeModelNameForDetail(file.name);
+                if (fileKey === target || fileKey.indexOf(target) > -1 || target.indexOf(fileKey) > -1) {
+                    if (typeof window.updateUrnCache === 'function') window.updateUrnCache(file.name, file.urn || file.versionId);
+                    console.log('[Forma Detail] placement model matched:', file.name, file.urn || file.versionId);
+                    return file.urn || file.versionId || '';
+                }
+            }
+        } catch (err) {
+            console.warn('[Forma Detail] Gangbuk model tree URN resolve failed:', err);
+        }
+        return '';
+    }
+
+    async function resolveFormaIssueViewerUrn(issue) {
+        var direct = issue.placementUrn || issue.linkedDocumentUrn || issue.documentUrn ||
+            issue.urn || issue.modelUrn || issue.fileUrn || issue.targetUrn || issue.seedURN ||
+            findIssueValueDeep(issue.rawFormaIssue || issue, ['placementUrn', 'linkedDocumentUrn', 'documentUrn', 'urn', 'modelUrn', 'fileUrn', 'targetUrn', 'seedURN', 'versionId', 'viewableUrn']);
+        if (direct && String(direct).trim() && String(direct).trim() !== '-') {
+            var directViewerUrn = normalizeViewerUrnForDetail(direct);
+            if (directViewerUrn) return directViewerUrn;
+        }
+
+        var placementName = issue.placementName || field(issue, 'placement') || issue.file || issue.fileName ||
+            findIssueValueDeep(issue.rawFormaIssue || issue, ['placement', 'placementName', 'fileName', 'snapshotFileName', 'uploadFileName', 'name', 'displayName']);
+        if (placementName && placementName !== '-' && typeof window.resolveModelUrn === 'function') {
+            var resolved = await window.resolveModelUrn(placementName);
+            var resolvedViewerUrn = normalizeViewerUrnForDetail(resolved);
+            if (resolvedViewerUrn) return resolvedViewerUrn;
+        }
+
+        return normalizeViewerUrnForDetail(await resolveUrnFromGangbukModelTree(placementName));
+    }
+
     function openDetail(issue) {
         var old = document.getElementById('forma-issue-detail-modal');
         if (old) old.remove();
-        var pairs = [
-            ['ID', field(issue, 'displayId')], ['제목', field(issue, 'title')], ['상태', field(issue, 'status')],
-            ['유형', field(issue, 'type')], ['담당자', field(issue, 'assignee')], ['확인자', field(issue, 'reviewer')],
-            ['위치', field(issue, 'location')], ['배치', field(issue, 'placement')], ['시작 날짜', field(issue, 'startDate')],
-            ['마감일', field(issue, 'dueDate')], ['설명', field(issue, 'desc')]
-        ];
+        ensureFormaDetailStyles();
+
+        var displayId = field(issue, 'displayId');
+        var title = field(issue, 'title');
+        var status = field(issue, 'status');
+        var type = field(issue, 'type');
+        var assignee = field(issue, 'assignee');
+        var reviewer = field(issue, 'reviewer');
+        var location = field(issue, 'location');
+        var placement = field(issue, 'placement');
+        var startDate = field(issue, 'startDate');
+        var dueDate = field(issue, 'dueDate');
+        var desc = field(issue, 'desc');
+        var typeLabel = issueTypeLabel(issue);
+        var statusText = status || '-';
+
         document.body.insertAdjacentHTML('beforeend',
-            '<div id="forma-issue-detail-modal" style="position:fixed;inset:0;background:rgba(2,6,23,.68);z-index:30000;display:flex;align-items:center;justify-content:center;">'
-            + '<div style="width:min(760px,92vw);max-height:86vh;overflow:auto;background:#0f172a;border:1px solid #334155;border-radius:10px;color:#e5eefb;box-shadow:0 24px 60px rgba(0,0,0,.45);">'
-            + '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #334155;"><strong>Forma 이슈 상세 정보</strong><button id="forma-issue-detail-close" style="background:transparent;border:0;color:#cbd5e1;font-size:22px;cursor:pointer;">×</button></div>'
-            + '<div style="padding:18px 20px;display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px 14px;">'
-            + pairs.map(function(pair) { return '<div style="color:#94a3b8;font-weight:700;">' + esc(pair[0]) + '</div><div style="white-space:pre-wrap;">' + esc(pair[1]) + '</div>'; }).join('')
-            + '</div></div></div>');
-        document.getElementById('forma-issue-detail-close').onclick = function() {
-            document.getElementById('forma-issue-detail-modal').remove();
+            '<div id="forma-issue-detail-modal" class="forma-detail-overlay">'
+            + '<div class="forma-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="forma-detail-title">'
+            + '<div class="forma-detail-head">'
+            + '<div class="forma-detail-title-wrap">'
+            + '<div class="forma-detail-kicker">Forma 이슈 상세 정보</div>'
+            + '<h2 id="forma-detail-title">' + esc(title || '제목 없음') + '</h2>'
+            + '<div class="forma-detail-chips">'
+            + '<span class="forma-detail-chip muted">#' + esc(displayId || '-') + '</span>'
+            + '<span class="forma-detail-chip">' + esc(type || '-') + '</span>'
+            + '<span class="forma-detail-chip status">' + esc(statusText) + '</span>'
+            + '</div>'
+            + '</div>'
+            + '<button id="forma-issue-detail-x" class="forma-detail-x" type="button" title="닫기"><i class="fas fa-times"></i></button>'
+            + '</div>'
+            + '<div class="forma-detail-body">'
+            + renderIssueSnapshot(issue)
+            + '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">핵심 정보</div>'
+            + '<div class="forma-detail-meta-grid">'
+            + renderDetailMeta('담당자', assignee)
+            + renderDetailMeta('확인자', reviewer)
+            + renderDetailMeta('위치', location)
+            + renderDetailMeta('배치', placement)
+            + renderDetailMeta('시작 날짜', startDate)
+            + renderDetailMeta('마감일', dueDate)
+            + renderDetailMeta('구분', typeLabel)
+            + renderDetailMeta('ID', displayId)
+            + '</div>'
+            + '</section>'
+            + '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">설명 및 변경사항</div>'
+            + '<div class="forma-detail-description">' + renderDetailDescription(desc) + '</div>'
+            + '</section>'
+            + '</div>'
+            + '<div class="forma-detail-actions">'
+            + '<button id="forma-detail-viewer-btn" type="button" class="forma-detail-action primary"><i class="fas fa-cube"></i><span>3D 뷰어에서 위치보기</span></button>'
+            + '<button id="forma-detail-pdf-btn" type="button" class="forma-detail-action"><i class="fas fa-file-pdf"></i><span>PDF 내보내기</span></button>'
+            + '<button id="forma-issue-detail-close" type="button" class="forma-detail-action ghost"><i class="fas fa-times"></i><span>닫기</span></button>'
+            + '</div>'
+            + '</div></div>');
+
+        document.getElementById('forma-issue-detail-x').onclick = closeFormaIssueDetail;
+        document.getElementById('forma-issue-detail-close').onclick = closeFormaIssueDetail;
+        document.getElementById('forma-detail-viewer-btn').onclick = async function() {
+            var btn = this;
+            btn.disabled = true;
+            var oldText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>모델 찾는 중...</span>';
+            var dbId = issue.dbId || issue.displayId || issue.id || '';
+            var urn = await resolveFormaIssueViewerUrn(issue);
+            if (!urn) {
+                btn.disabled = false;
+                btn.innerHTML = oldText;
+                alert('이 이슈와 연결된 3D 모델을 찾을 수 없습니다. 배치/모델 파일명이 등록되어 있는지 확인해 주세요.');
+                return;
+            }
+            closeFormaIssueDetail();
+            if (typeof window.focusIssueOnViewer === 'function') {
+                window.focusIssueOnViewer(dbId, urn);
+                return;
+            }
+            if (typeof window.switchTab === 'function') window.switchTab('project');
+            if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                window.explorer.loadIntoViewer(urn, field(issue, 'placement') || field(issue, 'title') || 'BIM Model');
+            }
+        };
+        document.getElementById('forma-detail-pdf-btn').onclick = function() {
+            exportFormaIssueToPdf(issue);
         };
     }
     window.openFormaIssueDetail = openDetail;

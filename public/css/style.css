@@ -4419,6 +4419,245 @@ input:checked+.slider:before {
     color: #64748b;
 }
 
+/* Forma issue detail */
+.forma-detail-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(6px);
+}
+
+.forma-detail-dialog {
+    width: min(860px, 94vw);
+    max-height: min(88vh, 860px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 10px;
+    background: #0f172a;
+    color: #e5eefb;
+    box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+}
+
+.forma-detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px 18px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.forma-detail-title-wrap {
+    min-width: 0;
+}
+
+.forma-detail-kicker {
+    margin-bottom: 8px;
+    color: #7dd3fc;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.forma-detail-head h2 {
+    margin: 0;
+    color: #f8fafc;
+    font-size: 20px;
+    line-height: 1.32;
+    font-weight: 900;
+}
+
+.forma-detail-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.forma-detail-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.16);
+    color: #bae6fd;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.forma-detail-chip.muted {
+    background: rgba(148, 163, 184, 0.14);
+    color: #cbd5e1;
+}
+
+.forma-detail-chip.status {
+    background: rgba(16, 185, 129, 0.16);
+    color: #a7f3d0;
+}
+
+.forma-detail-x {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.72);
+    color: #cbd5e1;
+    cursor: pointer;
+}
+
+.forma-detail-body {
+    min-height: 0;
+    overflow: auto;
+    padding: 18px 22px 20px;
+}
+
+.forma-detail-section + .forma-detail-section {
+    margin-top: 18px;
+}
+
+.forma-detail-section-title {
+    margin-bottom: 10px;
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.forma-detail-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.forma-detail-meta-item {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.58);
+}
+
+.forma-detail-meta-item span {
+    display: block;
+    margin-bottom: 5px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.forma-detail-meta-item strong {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #f8fafc;
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.forma-detail-description {
+    padding: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.78);
+    color: #e5eefb;
+    font-size: 13px;
+    line-height: 1.65;
+}
+
+.forma-detail-desc-lead {
+    font-weight: 900;
+}
+
+.forma-detail-desc-list {
+    margin: 9px 0 0;
+    padding-left: 18px;
+}
+
+.forma-detail-desc-list li + li {
+    margin-top: 3px;
+}
+
+.forma-detail-desc-list code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(56, 189, 248, 0.14);
+    color: #bae6fd;
+    font-family: inherit;
+    font-weight: 900;
+}
+
+.forma-detail-empty {
+    color: #94a3b8;
+}
+
+.forma-detail-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 14px 22px;
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(2, 6, 23, 0.32);
+}
+
+.forma-detail-action {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 6px;
+    padding: 0 13px;
+    background: rgba(30, 41, 59, 0.86);
+    color: #e5eefb;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.forma-detail-action.primary {
+    border-color: rgba(56, 189, 248, 0.46);
+    background: #0e7490;
+    color: #ecfeff;
+}
+
+.forma-detail-action.ghost {
+    background: transparent;
+    color: #cbd5e1;
+}
+
+.forma-detail-action:hover,
+.forma-detail-x:hover {
+    border-color: rgba(125, 211, 252, 0.7);
+    color: #fff;
+}
+
+@media (max-width: 720px) {
+    .forma-detail-overlay {
+        padding: 12px;
+    }
+
+    .forma-detail-meta-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .forma-detail-actions {
+        flex-direction: column;
+    }
+}
+
 /* Modal Overlay */
 .modal-overlay {
     position: fixed;
