@@ -1,0 +1,2272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>강북정수장 APS AI 플랫폼</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Autodesk Viewer CSS -->
+    <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css" type="text/css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- Dashboard CSS -->
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260803-clash-area4-1">
+    <!-- Custom CCTV CSS -->
+    <link rel="stylesheet" href="/css/cctv.css">
+    
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --header-bg: rgba(11, 15, 25, 0.85);
+            --card-bg: rgba(20, 30, 48, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-glow: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+            --accent-color: #00f2fe;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --chat-user-bg: rgba(0, 242, 254, 0.15);
+            --chat-agent-bg: rgba(255, 255, 255, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100%;
+            max-width: 100vw;
+            box-sizing: border-box;
+            font-family: 'Outfit', 'Noto Sans KR', sans-serif;
+            background: radial-gradient(circle at 50% 50%, #111827, #0b0f19);
+            color: var(--text-main);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: var(--header-bg);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 100;
+            height: 70px;
+            width: 100%;
+            max-width: 100vw;
+            box-sizing: border-box;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            user-select: none;
+        }
+
+        .logo-section:hover {
+            opacity: 0.9;
+            transform: scale(1.02);
+        }
+
+        .logo-section:active {
+            transform: scale(0.98);
+        }
+
+        .logo-badge {
+            background: var(--primary-glow);
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: #0b0f19;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .logo-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            background: var(--primary-glow);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 0.5px;
+        }
+
+        .controls-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        select {
+            background: rgba(17, 24, 39, 0.8);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            outline: none;
+            font-size: 0.9rem;
+            min-width: 250px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        select:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 8px rgba(0, 242, 254, 0.3);
+        }
+
+        .upload-button {
+            background: var(--primary-glow);
+            color: #0b0f19;
+            border: none;
+            padding: 0.5rem 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0, 242, 254, 0.2);
+        }
+
+        .upload-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .upload-button:disabled {
+            background: var(--text-muted);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Dashboard Workspace Layout */
+        .dashboard-body {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 70px);
+            width: 100%;
+            max-width: 100vw;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        /* 3D Model Area — full width now that chat is floating */
+        .viewer-pane {
+            flex: 1;
+            position: relative;
+            background-color: #f0f0f0;
+            border-right: none;
+        }
+
+        #preview {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ── Floating AI Chat ─────────────────────────────────── */
+        /* FAB toggle button */
+        #chat-fab {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 1100;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: var(--primary-glow);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            box-shadow: 0 6px 20px rgba(0, 242, 254, 0.45);
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+            color: #0b0f19;
+            outline: none;
+        }
+        #chat-fab:hover {
+            transform: scale(1.08);
+            box-shadow: 0 8px 28px rgba(0, 242, 254, 0.65);
+        }
+        #chat-fab.active {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            box-shadow: 0 6px 20px rgba(238, 90, 36, 0.5);
+        }
+        /* FAB icon — swap between robot and X */
+        #chat-fab .icon-open  { display: block; }
+        #chat-fab .icon-close { display: none; }
+        #chat-fab.active .icon-open  { display: none; }
+        #chat-fab.active .icon-close { display: block; }
+
+        /* Floating chat panel */
+        #ai-chat-panel {
+            position: fixed;
+            bottom: 92px;   /* sits just above the FAB */
+            right: 24px;
+            z-index: 1090;
+            width: 380px;
+            height: 520px;
+            min-width: 280px;
+            min-height: 320px;
+            max-width: 90vw;
+            max-height: 85vh;
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+            /* Animation */
+            opacity: 0;
+            transform: translateY(12px) scale(0.97);
+            pointer-events: none;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+        #ai-chat-panel.open {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: all;
+        }
+        #ai-chat-panel.is-dragging,
+        #ai-chat-panel.is-resizing {
+            transition: none !important;
+            user-select: none;
+        }
+
+        /* Resize handles */
+        .chat-resize-handle {
+            position: absolute;
+            z-index: 10;
+        }
+        /* Top edge */
+        .chat-resize-handle.top {
+            top: -4px;
+            left: 12px;
+            right: 12px;
+            height: 8px;
+            cursor: n-resize;
+        }
+        /* Left edge */
+        .chat-resize-handle.left {
+            left: -4px;
+            top: 12px;
+            bottom: 12px;
+            width: 8px;
+            cursor: w-resize;
+        }
+        /* Top-left corner */
+        .chat-resize-handle.top-left {
+            top: -4px;
+            left: -4px;
+            width: 20px;
+            height: 20px;
+            cursor: nw-resize;
+            border-radius: 16px 0 0 0;
+        }
+        /* Top-right corner */
+        .chat-resize-handle.top-right {
+            top: -4px;
+            right: -4px;
+            width: 20px;
+            height: 20px;
+            cursor: ne-resize;
+            border-radius: 0 16px 0 0;
+        }
+        /* Right edge */
+        .chat-resize-handle.right {
+            right: -4px;
+            top: 12px;
+            bottom: 12px;
+            width: 8px;
+            cursor: e-resize;
+        }
+        /* Visual resize grip indicator (bottom-right) */
+        #chat-resize-grip {
+            position: absolute;
+            bottom: 6px;
+            right: 6px;
+            width: 14px;
+            height: 14px;
+            cursor: se-resize;
+            opacity: 0.35;
+            transition: opacity 0.2s ease;
+            z-index: 10;
+        }
+        #chat-resize-grip:hover { opacity: 0.75; }
+        #chat-resize-grip svg { display: block; }
+
+        /* Draggable header cursor */
+        .chat-header {
+            cursor: grab;
+        }
+        .chat-header:active {
+            cursor: grabbing;
+        }
+
+        /* Prevent text selection while resizing/dragging globally */
+        body.chat-no-select * {
+            user-select: none !important;
+            -webkit-user-select: none !important;
+        }
+
+        .chat-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            font-size: 0.95rem;
+            background: rgba(11, 15, 25, 0.6);
+            border-radius: 16px 16px 0 0;
+            flex-shrink: 0;
+        }
+
+        .chat-header-icon {
+            color: var(--accent-color);
+        }
+
+        .chat-history {
+            flex: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        /* Chat Scrollbar */
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-history::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-history::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+
+        .chat-history::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .chat-bubble {
+            padding: 1rem;
+            border-radius: 12px;
+            max-width: 85%;
+            font-size: 0.92rem;
+            line-height: 1.5;
+            position: relative;
+            animation: bubbleAppear 0.3s ease-out;
+        }
+
+        @keyframes bubbleAppear {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-bubble.user {
+            background: var(--chat-user-bg);
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
+            border: 1px solid rgba(0, 242, 254, 0.2);
+        }
+
+        .chat-bubble.assistant {
+            background: var(--chat-agent-bg);
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+            border: 1px solid var(--border-color);
+        }
+
+        .chat-bubble.system {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+            align-self: center;
+            text-align: center;
+            max-width: 95%;
+            font-size: 0.85rem;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+        }
+
+        .chat-bubble .sender {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--accent-color);
+            margin-bottom: 0.35rem;
+        }
+
+        .chat-bubble.user .sender {
+            color: #fff;
+        }
+
+        .chat-bubble.loading .loading-dots span {
+            animation: blink 1.4s infinite both;
+            font-size: 1.5rem;
+            line-height: 0.5;
+            display: inline-block;
+        }
+
+        .chat-bubble.loading .loading-dots span:nth-child(2) {
+            animation-delay: .2s;
+        }
+
+        .chat-bubble.loading .loading-dots span:nth-child(3) {
+            animation-delay: .4s;
+        }
+
+        @keyframes blink {
+            0% { opacity: .2; }
+            20% { opacity: 1; }
+            100% { opacity: .2; }
+        }
+
+        .chat-footer {
+            padding: 1.25rem 1.5rem;
+            border-top: 1px solid var(--border-color);
+            background: rgba(11, 15, 25, 0.5);
+        }
+
+        .chat-form {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: rgba(17, 24, 39, 0.8);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 0.75rem 1rem;
+            outline: none;
+            font-size: 0.9rem;
+            font-family: inherit;
+            resize: none;
+            height: 44px;
+            transition: all 0.3s ease;
+        }
+
+        .chat-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 8px rgba(0, 242, 254, 0.2);
+        }
+
+        .chat-send-btn {
+            background: var(--primary-glow);
+            border: none;
+            color: #0b0f19;
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 10px rgba(0, 242, 254, 0.2);
+        }
+
+        .chat-send-btn:hover {
+            transform: scale(1.03);
+            box-shadow: 0 6px 14px rgba(0, 242, 254, 0.4);
+        }
+
+        /* Overlay notifications style */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(11, 15, 25, 0.7);
+            z-index: 50;
+            display: none;          /* hidden by default — JS controls visibility */
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;   /* NEVER block viewer mouse events when invisible */
+        }
+        #overlay.visible {
+            display: flex;
+            pointer-events: all;    /* Only capture events when actually visible */
+        }
+
+        .notification {
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid var(--border-color);
+            padding: 1.5rem 2.5rem;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            max-width: 400px;
+            font-size: 1rem;
+            color: var(--text-main);
+            backdrop-filter: blur(10px);
+        }
+
+        /* Hubs Explorer styling */
+        .explorer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.75rem;
+        }
+        .explorer-table-wrapper {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .explorer-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+        .explorer-table th {
+            padding: 0.75rem;
+            border-bottom: 2px solid var(--border-color);
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .explorer-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+        .explorer-table tbody tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+            cursor: pointer;
+        }
+        .explorer-icon {
+            margin-right: 0.5rem;
+            font-size: 1rem;
+            display: inline-block;
+            width: 20px;
+            text-align: center;
+        }
+        .explorer-icon.icon-folder {
+            color: #f59e0b;
+        }
+        .explorer-icon.icon-file {
+            color: #3b82f6;
+        }
+        .explorer-icon.icon-project {
+            color: #10b981;
+        }
+        .breadcrumb-item {
+            color: var(--text-muted);
+            transition: color 0.2s ease;
+            cursor: pointer;
+        }
+        .breadcrumb-item:hover {
+            color: var(--accent-color);
+        }
+        .breadcrumb-item.active {
+            color: var(--accent-color);
+            font-weight: 600;
+        }
+        .breadcrumb-separator {
+            color: var(--text-muted);
+            margin: 0 0.25rem;
+        }
+        .badge-version {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .badge-version:hover {
+            background: rgba(0, 242, 254, 0.1);
+            color: var(--accent-color);
+            border-color: var(--accent-color);
+            box-shadow: 0 0 6px rgba(0, 242, 254, 0.25);
+        }
+        .tool-btn {
+            background: var(--primary-glow);
+            color: #0b0f19;
+            border: none;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-view-v {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 0.25rem 0.6rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-view-v:hover {
+            background: rgba(0, 242, 254, 0.1);
+            color: var(--accent-color);
+            border-color: var(--accent-color);
+            box-shadow: 0 0 6px rgba(0, 242, 254, 0.2);
+        }
+        .version-history-table th,
+        .version-history-table td {
+            white-space: nowrap;
+        }
+        .version-history-table td.text-cell {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 0;
+        }
+        .version-history-table th {
+            position: relative;
+            padding: 12px 16px !important;
+            user-select: none;
+            overflow: visible;
+        }
+        .version-history-table td {
+            padding: 12px 16px !important;
+        }
+        .version-history-table th .resizer {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: col-resize;
+            user-select: none;
+            z-index: 10;
+            transition: background 0.15s;
+        }
+        .version-history-table th .resizer:hover,
+        .version-history-table th .resizer.resizing {
+            background: rgba(0, 242, 254, 0.4);
+        }
+        .btn-save-memo {
+            color: var(--text-muted);
+            transition: color 0.2s ease, transform 0.1s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-save-memo:hover {
+            color: #0696D7 !important;
+            transform: scale(1.1);
+        }
+        #login-profile-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-left: 0.5rem;
+        }
+        .login-btn {
+            background: var(--primary-glow);
+            color: #0b0f19;
+            border: none;
+            padding: 0.5rem 1.1rem;
+            font-size: 0.88rem;
+            font-weight: 700;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 14px rgba(0, 242, 254, 0.3);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 242, 254, 0.5);
+            color: #000;
+        }
+        .login-btn i {
+            font-size: 1rem;
+        }
+        .profile-name {
+            font-size: 0.9rem;
+            color: #f3f4f6;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: rgba(255, 255, 255, 0.06);
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .profile-name i {
+            color: #00f2fe;
+        }
+        .logout-btn {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 0.4rem 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: all 0.2s ease;
+        }
+        .logout-btn:hover {
+            color: #ef4444;
+            border-color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        /* Model Comparison UI Styles */
+        #comparison-bar button {
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+        #comparison-bar button:hover {
+            border-color: var(--accent-color);
+            background: rgba(0, 242, 254, 0.08);
+            color: var(--accent-color);
+            transform: translateY(-1px);
+        }
+        #comparison-panel button {
+            transition: all 0.2s ease;
+        }
+        #comparison-list div {
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s ease, background 0.15s ease;
+        }
+        #comparison-list div:hover {
+            transform: translateX(4px);
+        }
+        #comparison-list-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        #comparison-list-container::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+        #comparison-list-container::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.15);
+            border-radius: 3px;
+        }
+        #comparison-list-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        /* Selection Mode & Highlighting for comparison */
+        .version-history-table.compare-selecting tbody tr {
+            cursor: crosshair !important;
+        }
+        .version-history-table.compare-selecting tbody tr:hover {
+            background: rgba(0, 242, 254, 0.12) !important;
+        }
+        .version-history-table tbody tr.selected-compare-row {
+            background: rgba(0, 242, 254, 0.22) !important;
+            border-left: 4px solid var(--accent-color) !important;
+        }
+
+        /* 메인 화면일 때는 작동 안 함, 오직 비교 활성화 시에만 강제 고정 */
+        body.comparison-active #comparison-container {
+            height: 100vh !important;
+            max-height: 100vh !important;
+            width: 100vw !important;
+            max-width: 100vw !important;
+            overflow: hidden !important;
+            display: flex !important;
+            flex-direction: column !important;
+            position: relative !important;
+        }
+        body.comparison-active #viewer-overlay,
+        body.comparison-active #viewer-split-wrapper { 
+            height: 65vh !important; 
+            min-height: 65vh !important; 
+            max-height: 65vh !important; 
+        }
+        body.comparison-active #comparison-panel { 
+            height: 35vh !important; 
+            min-height: 35vh !important; 
+            max-height: 35vh !important; 
+            display: flex !important; 
+            flex-direction: column !important; 
+            overflow: hidden !important; 
+        }
+
+        /* Premium Tab Buttons */
+        #main-tab-menu {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            background: transparent !important;
+            border: none !important;
+            padding: 0 !important;
+        }
+        
+        .main-tab-btn {
+            background-color: #1e293b !important;
+            color: #94a3b8 !important;
+            border: 1px solid #334155 !important;
+            padding: 8px 16px !important;
+            border-radius: 8px !important;
+            cursor: pointer !important;
+            font-weight: bold !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            transition: all 0.2s ease !important;
+        }
+        
+        .main-tab-btn:hover {
+            background-color: #334155 !important;
+            color: #f8fafc !important;
+        }
+
+        .main-tab-btn.active {
+            background: var(--primary-glow) !important;
+            color: #0b0f19 !important;
+            border: none !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+        }
+
+        /* 📌 에이전트 적용 스타일: 레이아웃 파괴 방지 */
+        .filter-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 100%; /* 셀 너비를 절대 넘지 않음 */
+            overflow: hidden;
+        }
+
+        .column-filter {
+            width: calc(100% - 15px) !important; 
+            min-width: 0 !important; /* select 요소의 min-width: 250px; 전역 스타일 덮어쓰기 */
+            box-sizing: border-box !important; /* 패딩과 테두리가 너비 계산에 포함되도록 강제 */
+            padding: 2px 4px;
+            font-size: 11px;
+            background: #0f172a;
+            color: white;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            margin-top: 4px;
+            margin: 0 auto; /* 필요시 가운데 정렬 */
+        }
+
+        #tab-content-issue table {
+            table-layout: fixed;
+            width: 100%;
+        }
+
+        /* th 너비 제어 */
+        #issue-table-header th {
+            white-space: nowrap; /* 제목 한 줄 유지 */
+            padding: 8px !important;
+            font-weight: bold;
+            border-bottom: 2px solid #334155;
+            vertical-align: top;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-section">
+            <div class="logo-badge">K</div>
+            <div class="logo-title">강북정수장 APS AI 플랫폼</div>
+        </div>
+        <div class="controls-section">
+            <!-- Hidden Select to prevent TypeError in main.js core viewer logic -->
+            <select id="source-selector" style="display: none;">
+                <option value="docs" selected>Autodesk Docs</option>
+                <option value="local">로컬 업로드 모델</option>
+            </select>
+
+            <!-- Main Tab Menu -->
+            <div id="main-tab-menu" style="margin-right: 0.5rem;">
+                <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
+                <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
+                    <i class="fas fa-chart-line"></i> 대시보드
+                </button>
+                <button id="main-tab-project-btn" class="tab-btn main-tab-btn" onclick="switchTab('project')">
+                    <i class="fas fa-cube"></i> 프로젝트
+                </button>
+                <button id="main-tab-issue-btn" class="tab-btn main-tab-btn" onclick="switchTab('issue')">
+                    <i class="fas fa-exclamation-circle"></i> 이슈
+                </button>
+                <button id="main-tab-cctv-btn" class="tab-btn main-tab-btn" onclick="switchTab('cctv')">
+                    <i class="fas fa-video"></i> 현장 관제
+                </button>
+            </div>
+            
+            <!-- Local OSS Dropdown & Upload -->
+            <select name="models" id="models">
+                <option value="">모델 리스트 로딩 중...</option>
+            </select>
+            <button class="upload-button" id="upload" title="새로운 BIM 모델 파일 업로드">업로드</button>
+            <input style="display: none" type="file" id="input" accept=".rvt,.f3d,.nwd,.dwg,.zip">
+
+            <!-- Back to Explorer Button for Autodesk Docs -->
+            <button id="back-to-explorer-btn" class="upload-button" style="display: none; background: rgba(255, 255, 255, 0.1); color: var(--text-main); border: 1px solid var(--border-color); box-shadow: none;">
+                <i class="fas fa-arrow-left"></i> 목록으로
+            </button>
+
+            <!-- Login / Profile Section -->
+            <div id="login-profile-section">
+                <a href="/api/auth/login" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="dashboard-body">
+        <!-- 1. Dashboard Tab Content -->
+        <div id="tab-content-dashboard" style="display: block; position: relative; z-index: 10; flex: 1; overflow: hidden; height: calc(100vh - 70px);">
+
+          <div id="dashboard-root">
+
+            <!-- ══ 상단: 일정 및 업무 진행 현황 ══ -->
+            <div>
+              <div class="db-section-title">일정 및 업무 진행 현황</div>
+            </div>
+
+            <div class="db-top-section">
+
+              <!-- 간트 차트 카드 -->
+              <div class="db-card gantt-panel">
+                <div class="db-card-header">
+                  <span class="db-card-title"><i class="fas fa-tasks"></i> 업무 일정 (Gantt)</span>
+                  <button class="db-btn db-btn-primary" id="btn-add-schedule">
+                    <i class="fas fa-plus"></i> 일정 추가
+                  </button>
+                </div>
+                <div class="gantt-body">
+                  <!-- 좌측 테이블 -->
+                  <div class="gantt-table-wrap">
+                    <table class="gantt-table">
+                      <thead>
+                        <tr>
+                          <th style="min-width:110px">업무명</th>
+                          <th>시작일</th>
+                          <th>계획일</th>
+                          <th>종료일</th>
+                          <th style="min-width:90px">진행률</th>
+                          <th>담당자</th>
+                        </tr>
+                      </thead>
+                      <tbody id="gantt-table-body">
+                        <tr><td colspan="6" class="gantt-empty">로딩 중...</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <!-- 우측 타임라인 -->
+                  <div class="gantt-timeline-wrap">
+                    <div class="gantt-timeline">
+                      <div class="gantt-header-row" id="gantt-header-days"></div>
+                      <div id="gantt-timeline-body" style="position:relative;"></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- 타임라인 스크롤 슬라이더 -->
+                <div class="gantt-slider-wrap">
+                  <span class="gantt-slider-label"><i class="fas fa-sliders-h"></i> 타임라인 이동</span>
+                  <input type="range" id="gantt-scroll-slider" min="0" max="0" value="0">
+                </div>
+              </div>
+
+              <!-- KPI 2×2 -->
+              <div class="db-kpi-grid">
+                <!-- ① 금주 발생 이슈 -->
+                <div class="db-kpi-card">
+                  <div class="db-kpi-label">금주 발생 이슈</div>
+                  <div class="db-kpi-value accent" id="kpi-week-issues">00건</div>
+                  <div class="db-kpi-sub"><i class="fas fa-arrow-up" style="color:#ef4444"></i> 이번 주 신규</div>
+                </div>
+                <!-- ② 금주 이슈 해결률 -->
+                <div class="db-kpi-card">
+                  <div class="db-kpi-label">금주 이슈 해결률</div>
+                  <div class="db-kpi-value success" id="kpi-week-resolve">00%</div>
+                  <div class="db-kpi-sub"><i class="fas fa-check-circle" style="color:#10b981"></i> 해결/발생</div>
+                </div>
+                <!-- ③ 금주 투입 인원 -->
+                <div class="db-kpi-card">
+                  <div class="db-kpi-label" style="display:flex;justify-content:space-between;align-items:center">
+                    금주 투입 인원
+                    <button class="db-kpi-edit-btn" onclick="window.dashboardEditCrew()">수정</button>
+                  </div>
+                  <div class="db-kpi-value warning" id="kpi-crew">00명</div>
+                  <div class="db-kpi-sub"><i class="fas fa-users" style="color:#f59e0b"></i> 활성 인원</div>
+                </div>
+                <!-- ④ 진행중 업무 -->
+                <div class="db-kpi-card">
+                  <div class="db-kpi-label">진행중 업무</div>
+                  <div class="db-kpi-value purple" id="kpi-inprogress">00건</div>
+                  <div class="db-kpi-sub"><i class="fas fa-spinner" style="color:#8b5cf6"></i> 미완료 일정</div>
+                </div>
+              </div>
+
+            </div><!-- /db-top-section -->
+
+            <!-- ══ 하단: 프로젝트 이슈 현황 ══ -->
+            <div>
+              <div class="db-section-title">프로젝트 이슈 현황</div>
+            </div>
+
+            <div class="db-bottom-section">
+
+              <!-- 좌측: 도넛 차트 -->
+              <div class="db-card" style="display:flex;flex-direction:column;">
+                <div class="db-card-header">
+                  <span class="db-card-title"><i class="fas fa-chart-pie"></i> <span id="main-chart-title">이슈 유형</span></span>
+                </div>
+                <div class="donut-panel-body">
+                  <!-- 메인 차트 행 -->
+                  <div class="donut-main-row">
+                    <div class="donut-canvas-wrap">
+                      <canvas id="donut-chart" width="165" height="165"></canvas>
+                      <div class="donut-center-text">
+                        <div class="donut-center-num" id="donut-total">00건</div>
+                        <div class="donut-center-label">전체</div>
+                      </div>
+                    </div>
+                    <div class="donut-legend-cards" id="donut-main-legends">
+                      <!-- 동적으로 데이터가 주입됩니다. -->
+                    </div>
+                  </div>
+
+                  <!-- 구분선 -->
+                  <div class="donut-divider"></div>
+
+                  <!-- 하단 서브 차트 3개 행 -->
+                  <div class="donut-sub-row">
+                    <div class="donut-sub-item" id="sub-item-1" data-metric="">
+                      <div class="donut-sub-title" id="sub-title-1">상태별</div>
+                      <div class="sub-canvas-wrap">
+                        <canvas id="sub-chart-1" width="80" height="80"></canvas>
+                        <div class="sub-center-text" id="sub-total-1">0건</div>
+                      </div>
+                    </div>
+                    <div class="donut-sub-item" id="sub-item-2" data-metric="">
+                      <div class="donut-sub-title" id="sub-title-2">구조물별</div>
+                      <div class="sub-canvas-wrap">
+                        <canvas id="sub-chart-2" width="80" height="80"></canvas>
+                        <div class="sub-center-text" id="sub-total-2">0건</div>
+                      </div>
+                    </div>
+                    <div class="donut-sub-item" id="sub-item-3" data-metric="">
+                      <div class="donut-sub-title" id="sub-title-3">공종별</div>
+                      <div class="sub-canvas-wrap">
+                        <canvas id="sub-chart-3" width="80" height="80"></canvas>
+                        <div class="sub-center-text" id="sub-total-3">0건</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 중앙: 막대 차트 -->
+              <div class="db-card" style="display:flex;flex-direction:column;">
+                <div class="db-card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span class="db-card-title"><i class="fas fa-chart-bar"></i> <span id="bar-chart-title">주차별 이슈 발생 현황</span></span>
+                  <select id="bar-metric-selector" style="background:#0f172a; border:1px solid #334155; color:white; padding:4px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer; outline:none;">
+                    <option value="weekly_status">주차별 이슈 발생 현황</option>
+                    <option value="assignee_status">이슈 담당자 현황</option>
+                    <option value="structure_status">구조물별 이슈 현황</option>
+                    <option value="by_status">상태별 이슈 현황</option>
+                  </select>
+                </div>
+                <div class="bar-panel-body" style="flex:1;min-height:0;">
+                  <canvas id="bar-chart"></canvas>
+                </div>
+              </div>
+
+              <!-- 우측: 이슈 목록 -->
+              <div class="db-card" style="display:flex;flex-direction:column;">
+                <div class="db-card-header">
+                  <span class="db-card-title"><i class="fas fa-list"></i> 진행 중 이슈 목록</span>
+                  <span id="db-issue-count" style="font-size:0.75rem;color:#64748b;"></span>
+                </div>
+                <div class="issue-list-panel-body">
+                  <table class="db-issue-table">
+                    <thead>
+                      <tr>
+                        <th>제목</th>
+                        <th>구조물</th>
+                        <th>공종</th>
+                        <th>담당자</th>
+                        <th>내용</th>
+                      </tr>
+                    </thead>
+                    <tbody id="db-issue-table-body">
+                      <tr class="no-data"><td colspan="5">로딩 중...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div><!-- /db-bottom-section -->
+
+          </div><!-- /dashboard-root -->
+        </div>
+
+
+            <div id="construction-bim-dashboard" class="construction-bim-dashboard" style="display:none;">
+                <section class="bim-db-panel bim-db-panel-issue">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-chart-bar"></i> 구조물별 월간 이슈 진행</div>
+                        <div class="bim-db-panel-actions">
+                            <span id="bim-dashboard-issue-total" class="bim-db-total">이슈 0건</span>
+                            <button id="bim-dashboard-refresh" class="bim-db-refresh" type="button" title="이슈 새로고침">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="bim-issue-gantt-wrap" class="bim-issue-gantt-wrap">
+                        <div class="bim-db-placeholder">이슈 데이터를 불러오는 중입니다.</div>
+                    </div>
+                </section>
+
+                <section class="bim-db-panel bim-db-panel-work">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-clipboard-list"></i> 주간 업무 현황</div>
+                        <div class="bim-db-panel-actions">
+                            <div id="bim-work-tabs" class="bim-work-tabs" role="tablist" aria-label="업무 보기">
+                                <button type="button" class="bim-work-tab active" data-work-view="week">주간 업무</button>
+                                <button type="button" class="bim-work-tab" data-work-view="filter">검색</button>
+                                <button type="button" class="bim-work-tab" data-work-view="stats">통계</button>
+                                <button type="button" class="bim-work-tab" data-work-view="timeline">타임라인</button>
+                            </div>
+                            <select id="bim-week-select" class="bim-week-select" title="주차 선택"></select>
+                            <button id="bim-task-add-btn" class="bim-icon-btn" type="button" title="업무 추가">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="bim-week-board" class="bim-week-board">
+                        <div class="bim-db-placeholder">업무 현황을 불러오는 중입니다.</div>
+                    </div>
+                </section>
+
+                <section class="bim-db-panel bim-db-panel-progress">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-layer-group"></i> 현황 진척도</div>
+                    </div>
+                    <div class="bim-progress-layout">
+                        <div id="bim-progress-map" class="bim-progress-map">
+                            <img src="/images/gangbuk-progress-map.png" alt="강북정수장 공사 영역도" class="bim-progress-map-img"
+                                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                            <div class="bim-progress-map-fallback" style="display:none;">공사 영역 이미지가 없습니다.</div>
+                            <button type="button" class="bim-zone zone-new-main" data-zone="new" aria-label="신설 영역">신설</button>
+                            <button type="button" class="bim-zone zone-new-sub" data-zone="new" aria-label="신설 영역">신설</button>
+                            <button type="button" class="bim-zone zone-extension" data-zone="extension" aria-label="증설 영역">증설</button>
+                            <button type="button" class="bim-zone zone-priority" data-zone="priority" aria-label="우선시공분 영역">우선시공분</button>
+                            <div class="bim-progress-viewer-layer">
+                                <div class="bim-progress-viewer-head">
+                                    <span id="bim-progress-viewer-title">3D Viewer</span>
+                                    <button id="bim-progress-viewer-back" class="bim-icon-btn" type="button" title="영역도로 돌아가기">
+                                        <i class="fas fa-arrow-left"></i>
+                                    </button>
+                                </div>
+                                <div id="bim-progress-mini-viewer" class="bim-progress-mini-viewer"></div>
+                            </div>
+                        </div>
+                        <aside class="bim-progress-side">
+                            <div class="bim-progress-side-title">간단 공사 일정</div>
+                            <div id="bim-construction-gantt" class="bim-construction-gantt"></div>
+                            <div id="bim-progress-donuts" class="bim-progress-donuts"></div>
+                        </aside>
+                    </div>
+                    <div id="bim-zone-focus-note" class="bim-zone-focus-note">영역을 선택하면 진행 구조물이 강조됩니다.</div>
+                </section>
+                <section class="bim-db-panel bim-db-panel-clash">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-code-branch"></i> 구조물별 간섭 현황</div>
+                        <div class="bim-db-panel-actions">
+                            <span id="bim-clash-total" class="bim-db-total">간섭 0건</span>
+                        </div>
+                    </div>
+                    <div class="bim-clash-panel-body">
+                        <div class="bim-clash-summary">
+                            <div class="bim-clash-kpi"><span>검토</span><strong id="bim-clash-review-count">0</strong></div>
+                            <div class="bim-clash-kpi"><span>지연</span><strong id="bim-clash-delayed-count">0</strong></div>
+                            <div class="bim-clash-kpi"><span>종료</span><strong id="bim-clash-closed-count">0</strong></div>
+                        </div>
+                        <div class="bim-clash-chart-wrap">
+                            <canvas id="bim-clash-structure-chart"></canvas>
+                            <div id="bim-clash-empty" class="bim-db-placeholder" style="display:none;">표시할 간섭 이슈 데이터가 없습니다.</div>
+                        </div>
+                    </div>
+                </section>
+
+                <div id="bim-task-modal" class="bim-task-modal" aria-hidden="true" style="display:none;">
+                    <div class="bim-task-dialog" role="dialog" aria-modal="true" aria-labelledby="bim-task-modal-title">
+                        <div class="bim-task-dialog-head">
+                            <span id="bim-task-modal-title">업무 추가</span>
+                            <button id="bim-task-close-btn" class="bim-icon-btn" type="button" title="닫기">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <form id="bim-task-form" class="bim-task-form">
+                            <label>수행인원
+                                <input id="bim-task-people" type="text" autocomplete="off">
+                            </label>
+                            <label>구분
+                                <select id="bim-task-category">
+                                    <option value="BIM">BIM</option>
+                                    <option value="행정">행정</option>
+                                    <option value="보고">보고</option>
+                                    <option value="회의">회의</option>
+                                    <option value="기타">기타</option>
+                                </select>
+                            </label>
+                            <label>진행 상태
+                                <select id="bim-task-status">
+                                    <option value="계획">계획</option>
+                                    <option value="진행중">진행중</option>
+                                    <option value="완료">완료</option>
+                                    <option value="보류">보류</option>
+                                </select>
+                            </label>
+                            <label>시작일
+                                <input id="bim-task-start" type="date">
+                            </label>
+                            <label>마감일
+                                <input id="bim-task-due" type="date">
+                            </label>
+                            <label>주요내용
+                                <textarea id="bim-task-content"></textarea>
+                            </label>
+                            <div class="bim-task-form-actions">
+                                <button id="bim-task-cancel-btn" type="button">취소</button>
+                                <button id="bim-task-save-btn" class="primary" type="submit"><i class="fas fa-plus"></i> 추가</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div id="bim-timeline-modal" class="bim-timeline-modal" aria-hidden="true" style="display:none;">
+                    <div class="bim-timeline-dialog" role="dialog" aria-modal="true">
+                        <div class="bim-task-dialog-head">
+                            <span>업무 타임라인</span>
+                            <button id="bim-timeline-close-btn" class="bim-icon-btn" type="button" title="닫기">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div id="bim-timeline-modal-body" class="bim-timeline-modal-body"></div>
+                    </div>
+                </div>
+            </div>
+
+            
+
+        <!-- 2. Main 3D Viewer Pane (Project Tab) -->
+        <div class="viewer-pane" id="tab-content-project" style="position: absolute; top: 0px; left: 0px; width: 100%; height: 100%; opacity: 0.01; pointer-events: none; z-index: -999;">
+            <div id="preview" style="width: 100%; height: 100%;"></div>
+            
+            <!-- 3D 뷰어 화면 상단 플로팅 컨트롤 바 ([3D 모델 가시성/병합] 아이콘 버튼 - 3D 뷰 로드 시에만 표시) -->
+            <div id="main-viewer-controls" style="display: none; position: absolute; top: 16px; left: 16px; z-index: 1000; align-items: center; gap: 8px;">
+                <button id="btn-main-floating-visibility" type="button" onclick="event.stopPropagation(); window.refreshGlobalVisibilityPopup && window.refreshGlobalVisibilityPopup();" style="background: rgba(15, 23, 42, 0.9); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.5); padding: 8px 14px; border-radius: 8px; font-size: 0.82rem; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); transition: all 0.2s;" onmouseover="this.style.background='rgba(56, 189, 248, 0.2)'; this.style.borderColor='#38bdf8';" onmouseout="this.style.background='rgba(15, 23, 42, 0.9)'; this.style.borderColor='rgba(56, 189, 248, 0.5)';">
+                    <i class="fas fa-layer-group" style="font-size: 0.9rem;"></i>
+                    <span>3D 모델 가시성/병합</span>
+                </button>
+            </div>
+            
+            <!-- Comparison Viewer Area -->
+            <div id="comparison-container" style="display: none; width: 100%; height: 100%; position: relative; flex-direction: column;">
+                <!-- Overlay view (single viewer) -->
+                <div id="viewer-overlay" style="flex: 1; min-height: 0; width: 100%;"></div>
+                <!-- Split view (dual viewer layout) -->
+                <div id="viewer-split-wrapper" style="display: none; flex-direction: row; flex: 1; min-height: 0; width: 100%; height: 100%; box-sizing: border-box; overflow: hidden;">
+                    <div id="viewer-left" style="flex: 1; width: 50%; height: 100%; position: relative; overflow: hidden; border-right: 2px solid var(--border-color); box-sizing: border-box;">
+                        <span style="position: absolute; top: 10px; left: 10px; z-index: 100; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; border: 1px solid rgba(255,255,255,0.15);">이전 버전</span>
+                    </div>
+                    <div id="viewer-right" style="flex: 1; width: 50%; height: 100%; position: relative; overflow: hidden; box-sizing: border-box;">
+                        <span style="position: absolute; top: 10px; left: 10px; z-index: 100; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; border: 1px solid rgba(255,255,255,0.15);">비교 대상</span>
+                    </div>
+                </div>
+
+                <!-- Comparison Result Bottom Panel -->
+                <div id="comparison-panel" style="display: none; position: relative; width: 100%; height: 180px; min-height: 100px; max-height: 60vh; z-index: 1000; background: rgba(17, 24, 39, 0.95); border-top: 1px solid var(--border-color); flex-direction: column; box-shadow: 0 -5px 20px rgba(0,0,0,0.5); backdrop-filter: blur(4px); overflow: hidden; flex-shrink: 0;">
+                    <div id="panel-resizer" style="height: 6px; width: 100%; cursor: row-resize; position: absolute; top: 0; left: 0; z-index: 110; background: rgba(255, 255, 255, 0.1); border-top: 1px solid rgba(255, 255, 255, 0.2);"></div>
+                    
+                    <div id="panel-header" style="padding: 16px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2);">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <h4 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: #fff;">비교 분석 결과</h4>
+                            <span id="comparison-count" style="font-size: 0.8rem; background: var(--border-color); padding: 2px 7px; border-radius: 10px; color: var(--text-muted);">0개 객체</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 3 Columns Layout -->
+                    <div style="display: flex; flex: 1; overflow: hidden; padding: 0.35rem 1.0rem; gap: 0.5rem; box-sizing: border-box;">
+                        <!-- Column 1: Added -->
+                        <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px;">
+                            <div style="padding: 4px 8px; background: rgba(16, 185, 129, 0.08); border-bottom: 1px solid rgba(16, 185, 129, 0.12); display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.9rem; font-weight: 600; color: #10b981;">추가됨</span>
+                                <span id="count-added" style="font-size: 0.8rem; background: rgba(16, 185, 129, 0.2); color: #10b981; padding: 1px 6px; border-radius: 8px; font-weight: 600;">0</span>
+                            </div>
+                            <div id="list-added" style="flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+                        
+                        <!-- Column 2: Removed -->
+                        <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px;">
+                            <div style="padding: 4px 8px; background: rgba(239, 68, 68, 0.08); border-bottom: 1px solid rgba(239, 68, 68, 0.12); display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.9rem; font-weight: 600; color: #ef4444;">제거됨</span>
+                                <span id="count-removed" style="font-size: 0.8rem; background: rgba(239, 68, 68, 0.2); color: #ef4444; padding: 1px 6px; border-radius: 8px; font-weight: 600;">0</span>
+                            </div>
+                            <div id="list-removed" style="flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+                        
+                        <!-- Column 3: Modified -->
+                        <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px;">
+                            <div style="padding: 4px 8px; background: rgba(245, 158, 11, 0.08); border-bottom: 1px solid rgba(245, 158, 11, 0.12); display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.9rem; font-weight: 600; color: #f59e0b;">변경됨</span>
+                                <span id="count-modified" style="font-size: 0.8rem; background: rgba(245, 158, 11, 0.2); color: #f59e0b; padding: 1px 6px; border-radius: 8px; font-weight: 600;">0</span>
+                            </div>
+                            <!-- 3중 토글 필터 칩 영역 -->
+                            <div style="padding: 4px 8px; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 6px; justify-content: flex-start; align-items: center;">
+                                <button id="toggle-filter-shape" class="filter-chip active" style="font-size: 0.72rem; padding: 3px 8px; border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 20px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600; transition: all 0.2s; outline: none;">
+                                    <i class="fas fa-check" style="font-size: 0.6rem;"></i> 형상
+                                </button>
+                                <button id="toggle-filter-transform" class="filter-chip active" style="font-size: 0.72rem; padding: 3px 8px; border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 20px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600; transition: all 0.2s; outline: none;">
+                                    <i class="fas fa-check" style="font-size: 0.6rem;"></i> 위치
+                                </button>
+                                <button id="toggle-filter-property" class="filter-chip active" style="font-size: 0.72rem; padding: 3px 8px; border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 20px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600; transition: all 0.2s; outline: none;">
+                                    <i class="fas fa-check" style="font-size: 0.6rem;"></i> 속성
+                                </button>
+                            </div>
+                            <div id="list-modified" style="flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Comparison Control Bar -->
+            <div id="comparison-bar" style="display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 100; background: rgba(17, 24, 39, 0.95); border: 1px solid var(--border-color); border-radius: 30px; padding: 8px 20px; align-items: center; gap: 15px; box-shadow: rgba(0, 0, 0, 0.5) 0px 4px 15px; backdrop-filter: blur(4px);">
+                <span id="comparison-bar-title" style="color: var(--accent-color); font-weight: 600; font-size: 0.9rem;">모델 버전 비교 모드</span>
+                <div style="height: 15px; width: 1px; background: rgba(255,255,255,0.2);"></div>
+                <button id="btn-toggle-overlay" class="upload-button" style="padding: 4px 12px; font-size: 0.8rem; background: var(--accent-color); color: #0b0f19;">중첩 뷰 (Overlay)</button>
+                <button id="btn-toggle-split" class="upload-button" style="padding: 4px 12px; font-size: 0.8rem; background: rgba(255,255,255,0.1); color: var(--text-main); border: 1px solid var(--border-color); box-shadow: none;">분할 뷰 (Split)</button>
+                <div style="height: 15px; width: 1px; background: rgba(255,255,255,0.2);"></div>
+                <button id="btn-exit-comparison" class="upload-button" style="padding: 4px 12px; font-size: 0.8rem; background: #ef4444; color: #fff;">비교 종료</button>
+            </div>
+
+            <!-- Hubs Explorer Table Panel -->
+            <div id="explorer-container" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #111522; flex-direction: column; padding: 1.5rem; box-sizing: border-box; overflow-y: auto;">
+                <div class="explorer-header">
+                    <div id="explorer-breadcrumb">
+                        <span class="breadcrumb-item active">Root</span>
+                    </div>
+                    <div>
+                        <button id="refresh-explorer-btn" class="upload-button" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">
+                            <i class="fas fa-sync-alt"></i> 새로고침
+                        </button>
+                    </div>
+                </div>
+                <div class="explorer-table-wrapper">
+                    <table class="explorer-table">
+                        <thead>
+                            <tr>
+                                <th>이름</th>
+                                <th style="width: 80px;">버전</th>
+                                <th style="width: 140px;">수정일</th>
+                                <th style="width: 140px;">수정자</th>
+                                <th style="width: 100px; text-align: right;">작업</th>
+                            </tr>
+                        </thead>
+                        <tbody id="explorer-list">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Status overlay -->
+            <div id="overlay" style="display: none;"></div>
+        </div>
+
+        <!-- 3. Issue Tab Content -->
+        <div id="tab-content-issue" style="display: none; width: 100%; height: 100%; padding: 24px; box-sizing: border-box; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #334155; padding-bottom: 12px; position: relative;">
+                <div style="display: flex; gap: 8px;">
+                    <button id="sub-tab-all" class="issue-sub-btn active" onclick="filterIssues('all')" style="background: #334155; color: white; border: 1px solid #475569; padding: 8px 20px; border-radius: 4px; font-weight: bold; cursor: pointer;">전체 이슈</button>
+                    <button id="sub-tab-standalone" class="issue-sub-btn" onclick="filterIssues('standalone')" style="background: transparent; color: #94a3b8; border: 1px solid transparent; padding: 8px 20px; border-radius: 4px; cursor: pointer;">단독 모델 이슈</button>
+                    <button id="sub-tab-compare" class="issue-sub-btn" onclick="filterIssues('compare')" style="background: transparent; color: #94a3b8; border: 1px solid transparent; padding: 8px 20px; border-radius: 4px; cursor: pointer;">버전 비교 이슈</button>
+                </div>
+                <!-- 열 설정 버튼 & 드롭다운 -->
+                <div style="position: relative; display: flex; align-items: center;">
+                    <button id="btn-main-pdf-export" class="btn btn-sm btn-outline-secondary" style="margin-right: 8px; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s;" title="PDF 내보내기">
+                        <i class="fas fa-file-pdf" style="color: #ef4444;"></i>
+                    </button>
+                    <button id="btn-column-settings" style="background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                        <i class="fas fa-cog"></i> 열 설정
+                    </button>
+                    <div id="column-settings-dropdown" style="display: none; position: absolute; right: 0; top: 40px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 12px; width: 220px; z-index: 1000; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">
+                        <div style="font-weight: bold; font-size: 13px; color: #94a3b8; margin-bottom: 8px; border-bottom: 1px solid #334155; padding-bottom: 6px;">표시할 열 선택</div>
+                        <div id="column-settings-container" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                            <!-- Checkboxes populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="flex: 1; overflow-y: auto; background: #1e293b; border-radius: 8px; border: 1px solid #334155;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; color: #f8fafc; font-size: 14px;">
+                    <thead id="issue-table-header" style="background: #0f172a; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #475569;">
+                    </thead>
+                    <tbody id="issue-table-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Version Modal -->
+        <div id="version-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(4px);">
+            <div style="background: #111827; border: 1px solid var(--border-color); border-radius: 12px; width: 80%; max-width: 1000px; display: flex; flex-direction: column; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+                <div style="padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--accent-color);">버전 이력: <span id="version-modal-filename" style="color: #fff;"></span></h3>
+                    <div style="display: flex; align-items: center; gap: 1rem;">
+                        <button id="btn-start-select-compare" class="upload-button" style="background: var(--accent-color); color: #0b0f19; padding: 0.4rem 1rem; font-size: 0.85rem; border: none; font-weight: 600; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.35rem; transition: background 0.2s;">
+                            <i class="fas fa-columns"></i> 버전 비교
+                        </button>
+                        <span id="close-version-modal" style="cursor: pointer; font-size: 1.25rem; color: var(--text-muted);">&times;</span>
+                    </div>
+                </div>
+                <div style="padding: 1rem; flex: 1; overflow-y: auto; overflow-x: auto; max-height: 400px;">
+                    <table class="version-history-table" style="width: 100%; table-layout: fixed; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid var(--border-color); color: var(--text-muted);">
+                                <th style="width: 8%; min-width: 80px;">버전</th>
+                                <th style="width: 22%; min-width: 170px;">작성일</th>
+                                <th style="width: 15%; min-width: 130px;">작성자</th>
+                                <th style="width: 43%; min-width: 250px;">메모</th>
+                                <th style="text-align: right; width: 12%; min-width: 100px;">작업</th>
+                            </tr>
+                        </thead>
+                        <tbody id="version-list-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <div style="padding: 1rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.5rem;">
+                    <button id="close-version-btn" class="upload-button" style="background: rgba(255, 255, 255, 0.1); color: var(--text-main); border: 1px solid var(--border-color); box-shadow: none;">닫기</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Issue Creation Modal -->
+        <div id="dynamic-standalone-issue-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 999999; align-items: center; justify-content: center; font-family: sans-serif; overflow-x: hidden;">
+            <div style="background: #1e293b; color: white; width: 520px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; padding: 24px; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); box-sizing: border-box;">
+                <h3 style="margin-top: 0; margin-bottom: 16px; font-size: 18px; font-weight: bold; border-bottom: 1px solid #334155; padding-bottom: 10px; color: #f97316;">📍 프로젝트 단독 이슈 등록</h3>
+                
+                <div style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 12px;">
+                    <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">제목</label>
+                    <input type="text" id="dyn-issue-title" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0;">
+                </div>
+
+                <!-- Hidden/Readonly dbid for Autodesk model component -->
+                <div style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 12px; display: none;">
+                    <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">선택된 객체 ID</label>
+                    <input type="text" id="dyn-issue-dbid" readonly style="width: 100%; background: #334155; border: 1px solid #475569; color: #cbd5e1; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0;">
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 0;">
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">상태</label>
+                        <select id="dyn-issue-status" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0; min-width: 0 !important;">
+                            <option value="초안">초안</option>
+                            <option value="생성">생성</option>
+                            <option value="지연">지연</option>
+                            <option value="검토 중">검토 중</option>
+                            <option value="종료">종료</option>
+                        </select>
+                    </div>
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">유형</label>
+                        <select id="dyn-issue-type" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0; min-width: 0 !important;">
+                            <option value="간섭">간섭</option>
+                            <option value="설계 이슈">설계 이슈</option>
+                            <option value="도면 정합성">도면 정합성</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 12px;">
+                    <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">설명</label>
+                    <textarea id="dyn-issue-desc" style="width: 100%; height: 80px; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; resize: none; max-width: 100%; margin: 0;" placeholder="상세 검토 의견을 입력하세요..."></textarea>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 0;">
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">구조물 명</label>
+                        <input type="text" id="dyn-issue-structure" readonly style="width: 100%; background: #334155; border: 1px solid #475569; color: #cbd5e1; padding: 8px; border-radius: 4px; box-sizing: border-box; cursor: not-allowed; max-width: 100%; margin: 0;">
+                    </div>
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">공종</label>
+                        <input type="text" id="dyn-issue-trade" readonly style="width: 100%; background: #334155; border: 1px solid #475569; color: #cbd5e1; padding: 8px; border-radius: 4px; box-sizing: border-box; cursor: not-allowed; max-width: 100%; margin: 0;">
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 0;">
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">담당자</label>
+                        <select id="dyn-issue-assignee" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0; min-width: 0 !important;"></select>
+                    </div>
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">확인자</label>
+                        <select id="dyn-issue-verifier" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0; min-width: 0 !important;"></select>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 0;">
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">시작 날짜</label>
+                        <input type="date" id="dyn-issue-startdate" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0;">
+                    </div>
+                    <div style="box-sizing: border-box; min-width: 0;">
+                        <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">마감일</label>
+                        <input type="date" id="dyn-issue-duedate" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; max-width: 100%; margin: 0;">
+                    </div>
+                </div>
+
+                <div style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 20px;">
+                    <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px;">배치</label>
+                    <input type="text" id="dyn-issue-placement" readonly style="width: 100%; background: #334155; border: 1px solid #475569; color: #cbd5e1; padding: 8px; border-radius: 4px; box-sizing: border-box; cursor: not-allowed; max-width: 100%; margin: 0;">
+                </div>
+
+                <div class="issue-multi-image-section" style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 18px;">
+                    <label style="display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px;">첨부 이미지</label>
+                    <div id="capture-image-list" style="display: flex; gap: 10px; overflow-x: auto; align-items: center; padding: 5px 0;">
+                        <button type="button" id="btn-add-capture" style="min-width: 100px; height: 75px; border: 2px dashed #cbd5e1; background-color: #f8fafc; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #64748b;">
+                            <span style="font-size: 24px; font-weight: bold; line-height: 1;">+</span>
+                            <span style="font-size: 12px; margin-top: 4px;">캡처 추가</span>
+                        </button>
+                    </div>
+                    <input type="hidden" id="multi-capture-data" value="[]">
+                </div>
+
+                <!-- 종료 상태 시 변경사항 및 추가 캡처 영역 -->
+                <div id="issue-resolve-section" style="display: none; width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 15px; border-top: 1px dashed #475569; padding-top: 15px;">
+                    <div style="width: 100%; box-sizing: border-box; padding: 0; margin-bottom: 12px;">
+                        <label style="display: block; font-size: 13px; color: #f97316; margin-bottom: 4px; font-weight: bold;">📝 조치 변경사항</label>
+                        <textarea id="issue-resolve-note" style="width: 100%; height: 70px; background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; resize: none; max-width: 100%; margin: 0;" placeholder="변경사항 조치 완료 내용을 입력하세요..."></textarea>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; box-sizing: border-box; margin-bottom: 12px;">
+                        <label style="font-size: 13px; color: #94a3b8;">📸 조치 완료 스크린샷</label>
+                        <button id="btn-resolve-capture" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 4px;">
+                            <i class="fas fa-camera"></i> + 추가 캡처
+                        </button>
+                    </div>
+
+                    <div id="resolve-image-preview-container" style="display: none; width: 100%; height: 150px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; align-items: center; justify-content: center; overflow: hidden; margin-top: 8px;">
+                        <img id="resolve-image-preview" src="" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; gap: 8px; width: 100%; box-sizing: border-box;">
+                    <button id="dyn-issue-cancel" style="background: #475569; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">취소</button>
+                    <button id="dyn-issue-submit" style="background: #f97316; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer;">이슈 생성</button>
+                </div>
+            </div>
+        </div>
+
+                <!-- 4. CCTV Tab Content -->
+        <div id="tab-content-cctv" style="display: none; position: relative; z-index: 10; flex: 1; overflow: hidden; height: calc(100vh - 70px); background: #0b0f19;">
+            <div class="cctv-main-layout" style="width: 100%; height: 100%;">
+                <main class="split-view-container">
+                    <section class="panel-card">
+                        <div class="panel-header">
+                            <span id="cctv-live-title" class="panel-title"><i class="fas fa-video"></i> 실시간 CCTV 영상</span>
+                            <span style="font-size: 0.75rem; color: #10b981; display: flex; align-items: center; gap: 4px;">
+                                <span style="width: 6px; height: 6px; background: #10b981; border-radius: 50%; display: inline-block;"></span> LIVE
+                            </span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="video-wrapper" style="position: relative; width: 100%; height: 100%; background: #000;">
+                                <video id="cctv-video-player" controls autoplay muted playsinline style="width: 100%; height: 100%; object-fit: contain; background: #000;"></video>
+                                <img id="cctv-fallback-img" src="/img/lapse/lapse_1.jpg" alt="CCTV fallback" style="display:none; width:100%; height:100%; object-fit:contain; background:#000;">
+                                <div id="video-pause-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 5; align-items: center; justify-content: center; flex-direction: column; gap: 10px;">
+                                    <span style="font-size: 3rem; color: white; opacity: 0.8;"><i class="fas fa-pause"></i></span>
+                                    <span style="font-size: 1rem; color: white; font-weight: 500;">이슈 등록을 위해 화면이 정지되었습니다.</span>
+                                </div>
+                                <div class="video-control-bar">
+                                    <button id="btn-issue-register" class="btn-issue-trigger">
+                                        <i class="fas fa-camera"></i> 현재 영상으로 이슈 등록
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel-card">
+                        <div class="panel-header" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                            <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                                <span class="panel-title"><i class="fas fa-cube"></i> APS 3D 모델 교차 검증</span>
+                                <span id="loaded-model-name" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">로드된 모델 정보 없음</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                                <button id="btn-cctv-model-visibility" onclick="window.refreshGlobalVisibilityPopup && window.refreshGlobalVisibilityPopup()" style="padding: 4px 10px; font-size: 0.75rem; background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 4px;" title="3D 모델 가시성/병합 팝업 열기">
+                                    <i class="fas fa-layer-group"></i> 모델 가시성/병합
+                                </button>
+                                <button id="btn-cctv-save-viewpoint" style="padding: 4px 10px; font-size: 0.75rem; background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 4px;" title="현재 3D 카메라 시점을 이 채널에 저장">
+                                    <i class="fas fa-camera-retro"></i> 시점 저장
+                                </button>
+                                <button id="btn-cctv-preset-view" style="padding: 4px 10px; font-size: 0.75rem; background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 4px;" title="3D 카메라 프리셋 전환">
+                                    <i class="fas fa-compass"></i> 시점 프리셋
+                                </button>
+                            </div>
+                        </div>
+                        <div class="panel-body" style="background: #ffffff;">
+                            <div id="cctv-viewer" style="width: 100%; height: 100%; position: relative;"></div>
+                            <div class="viewer-sync-floating">
+                                <button id="btn-view-sync" class="btn-sync-trigger">
+                                    <i class="fas fa-arrows-spin"></i> 뷰어-CCTV 시점 동기화
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                </main>
+
+                <footer class="timeline-panel" style="display: flex; flex-direction: column; overflow: hidden; padding: 10px 16px;">
+                    <div class="cctv-subtabs-bar" style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; margin-bottom: 8px;">
+                        <div style="display: flex; gap: 8px;">
+                            <button id="btn-subtab-cctv-channels" class="cctv-subtab-btn active" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); padding: 5px 12px; border-radius: 6px; font-size: 0.78rem; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                                <i class="fas fa-desktop"></i> 위치별 실시간 CCTV 관제
+                            </button>
+                            <button id="btn-subtab-field-issues" class="cctv-subtab-btn" style="background: rgba(255, 255, 255, 0.05); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.1); padding: 5px 12px; border-radius: 6px; font-size: 0.78rem; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                                <i class="fas fa-exclamation-triangle" style="color: #f59e0b;"></i> 현장 이슈 목록 및 등록
+                            </button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span id="cctv-channel-status-tag" style="color: #10b981; font-weight: bold; font-size: 0.75rem;">
+                                <i class="fas fa-circle-play"></i> CCTV 채널 로딩 중
+                            </span>
+                            <button id="btn-cctv-capture-issue" style="display: none; background: #f97316; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; align-items: center; gap: 4px;">
+                                <i class="fas fa-camera"></i> CCTV 캡처 & 이슈 등록
+                            </button>
+                            <button id="btn-export-cctv-pdf" style="display: none; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; align-items: center; gap: 4px;">
+                                <i class="fas fa-file-pdf"></i> PDF 보고서 출력
+                            </button>
+                        </div>
+                    </div>
+                    <div id="subtab-content-channels" style="display: block; width: 100%;">
+                        <div class="timeline-thumbs-row" id="thumbs-container">
+                            <div class="thumb-card active" data-cctv-id="fallback_1" data-stream-url="https://strm2.spatic.go.kr/live/207.stream/playlist.m3u8" data-img="/img/lapse/lapse_1.jpg" data-title="CCTV 1">
+                                <img src="/img/lapse/lapse_1.jpg" alt="CCTV 1">
+                                <div class="thumb-info">CCTV 1</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="subtab-content-issues" style="display: none; width: 100%; max-height: 140px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.76rem; color: #cbd5e1;">
+                            <thead>
+                                <tr style="background: rgba(30, 41, 59, 0.8); border-bottom: 1px solid rgba(255,255,255,0.1); color: #38bdf8; text-align: left;">
+                                    <th style="padding: 6px 10px; width: 40px; text-align: center;">NO</th>
+                                    <th style="padding: 6px 10px; width: 70px;">캡처</th>
+                                    <th style="padding: 6px 10px; min-width: 120px;">이슈 제목</th>
+                                    <th style="padding: 6px 10px; min-width: 110px;">관련 위치</th>
+                                    <th style="padding: 6px 10px; min-width: 180px;">상세 내용</th>
+                                    <th style="padding: 6px 10px; width: 80px; text-align: center;">작성자</th>
+                                    <th style="padding: 6px 10px; width: 110px; text-align: center;">일시</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cctv-issues-table-body">
+                                <tr>
+                                    <td colspan="7" style="padding: 16px; text-align: center; color: #94a3b8;">등록된 현장 CCTV 이슈가 없습니다.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </footer>
+            </div>
+        </div>
+<!-- Standalone Issue Registration Dialog -->
+            <div class="modal-overlay" id="issue-modal-overlay">
+                <div class="modal-box">
+                    <h3 class="modal-title">📍 현장 CCTV 연동 단독 이슈 등록</h3>
+                    
+                    <div class="capture-preview-box form-group">
+                        <span style="font-size: 11px; font-weight: bold; color: #94a3b8; text-align: left; display: block;">CCTV 영상 캡처본</span>
+                        <img id="capture-image-view" src="/img/lapse/lapse_3.jpg" alt="CCTV Screen capture">
+                    </div>
+
+                    <div class="form-group">
+                        <label>제목</label>
+                        <input type="text" id="issue-title" value="CCTV 분석 이슈 - 장비 부식 발생 가능성">
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>상태</label>
+                            <select id="issue-status">
+                                <option value="초안">초안</option>
+                                <option value="생성" selected>생성</option>
+                                <option value="지연">지연</option>
+                                <option value="검토 중">검토 중</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>유형</label>
+                            <select id="issue-type">
+                                <option value="간섭">간섭</option>
+                                <option value="설계 이슈" selected>설계 이슈</option>
+                                <option value="도면 정합성">도면 정합성</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>설명</label>
+                        <textarea id="issue-desc" placeholder="상세 검토 의견을 입력하세요...">현장 CCTV 확인 결과, 배관 플랜지 부근에 습기가 누적되어 부식 우려가 발생하였습니다. BIM 모델상 동일 위치 검토 및 방청 조치가 필요합니다.</textarea>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>구조물 명</label>
+                            <input type="text" id="issue-structure" value="급속여과지" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>공종</label>
+                            <input type="text" id="issue-trade" value="기계" readonly>
+                        </div>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>담당자</label>
+                            <input type="text" id="issue-assignee" value="홍길동 과장">
+                        </div>
+                        <div class="form-group">
+                            <label>확인자</label>
+                            <input type="text" id="issue-verifier" value="김안전 부장">
+                        </div>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>시작 날짜</label>
+                            <input type="date" id="issue-startdate" value="2026-07-16">
+                        </div>
+                        <div class="form-group">
+                            <label>마감일</label>
+                            <input type="date" id="issue-duedate" value="2026-07-23">
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btn-modal-cancel">취소</button>
+                        <button class="btn btn-primary" id="btn-modal-save">이슈 저장</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating AI Chat Panel -->
+        <div id="ai-chat-panel">
+            <!-- Resize handles -->
+            <div class="chat-resize-handle top"      data-dir="top"></div>
+            <div class="chat-resize-handle left"     data-dir="left"></div>
+            <div class="chat-resize-handle right"    data-dir="right"></div>
+            <div class="chat-resize-handle top-left" data-dir="top-left"></div>
+            <div class="chat-resize-handle top-right" data-dir="top-right"></div>
+            <!-- Resize grip (bottom-right) -->
+            <div id="chat-resize-grip" data-dir="bottom-right" title="크기 조절">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <line x1="3" y1="13" x2="13" y2="3" stroke="#00f2fe" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="7" y1="13" x2="13" y2="7" stroke="#00f2fe" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="11" y1="13" x2="13" y2="11" stroke="#00f2fe" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </div>
+
+            <div class="chat-header" id="chat-header-drag">
+                <span class="chat-header-icon">🤖</span>
+                <span>BIM AI Assistant 에이전트</span>
+                <span style="margin-left:auto; font-size:0.75rem; opacity:0.45; font-weight:400;">↕ 드래그로 이동/크기조절</span>
+            </div>
+            <div class="chat-history" id="chat-history">
+                <div class="chat-bubble assistant">
+                    <div class="sender">AI 에이전트</div>
+                    <div class="text">
+                        안녕하세요! 강북정수장 APS AI 플랫폼에 오신 것을 환영합니다.<br>
+                        로드된 BIM 모델에 대해 질문해 주시면 도면 객체의 수량 집계, 위치 추적 및 채색 강조 등을 자동으로 수행합니다.
+                    </div>
+                </div>
+            </div>
+            <div class="chat-footer">
+                <form class="chat-form" id="chat-form">
+                    <textarea class="chat-input" id="chat-input" placeholder="AI 에이전트에게 질문하세요..." required></textarea>
+                    <button type="submit" class="chat-send-btn" title="전송">➔</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Floating Resolve Capture Wait Button -->
+        <div id="floating-resolve-capture" style="display: none; position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%); z-index: 999999; background: rgba(30, 41, 59, 0.95); border: 2px solid #10b981; border-radius: 30px; padding: 8px 16px; align-items: center; gap: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">
+            <div id="btn-floating-capture-start" style="color: #cbd5e1; font-weight: bold; font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+                <i class="fas fa-camera" style="color: #10b981; font-size: 16px;"></i>
+                <span>📸 조치 완료 스크린샷 캡처 시작</span>
+            </div>
+            <div style="width: 1px; height: 16px; background: #475569;"></div>
+            <button id="btn-floating-capture-cancel" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 4px 12px; border-radius: 20px; font-weight: bold; cursor: pointer; font-size: 12px; transition: all 0.2s;" onmouseover="this.style.background='rgba(239, 68, 68, 0.25)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.15)'">
+                ✕ 취소
+            </button>
+        </div>
+
+        <!-- FAB Toggle Button -->
+        <button id="chat-fab" aria-label="AI 챗봇 열기/닫기" title="AI Assistant">
+            <span class="icon-open">🤖</span>
+            <span class="icon-close">✕</span>
+        </button>
+
+        <div id="floating-multi-capture" style="display: none; position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%); z-index: 999999; background: rgba(30, 41, 59, 0.95); border: 2px solid #38bdf8; border-radius: 30px; padding: 8px 16px; align-items: center; gap: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">
+            <button type="button" id="btn-floating-multi-capture-shot" style="background: transparent; border: 0; color: #cbd5e1; font-weight: bold; font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+                <i class="fas fa-camera" style="color: #38bdf8; font-size: 16px;"></i>
+                <span>화면 캡처하기</span>
+            </button>
+            <div style="width: 1px; height: 16px; background: #475569;"></div>
+            <button type="button" id="btn-floating-multi-capture-cancel" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 4px 12px; border-radius: 20px; font-weight: bold; cursor: pointer; font-size: 12px; transition: all 0.2s;" onmouseover="this.style.background='rgba(239, 68, 68, 0.25)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.15)'">
+                취소
+            </button>
+        </div>
+
+
+        <!-- 3D Model Visibility / Merge Popup -->
+        <div id="model-visibility-popup" style="display:none; position:fixed; top:75px; left:20px; width:420px; max-width:calc(100vw - 40px); max-height:calc(100vh - 110px); z-index:999999; flex-direction:column; background:rgba(15,23,42,0.96); border:1px solid rgba(56,189,248,0.42); border-radius:8px; box-shadow:0 18px 40px rgba(0,0,0,0.45); color:#e2e8f0; overflow:hidden; backdrop-filter:blur(10px);">
+            <div id="model-visibility-header" style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; background:rgba(30,41,59,0.95); border-bottom:1px solid rgba(56,189,248,0.22); cursor:move; user-select:none;">
+                <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+                    <i class="fas fa-layer-group" style="color:#38bdf8;"></i>
+                    <span style="font-size:13px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">3D 모델 가시성/병합</span>
+                </div>
+                <button id="btn-close-model-visibility" type="button" style="width:26px; height:26px; border:0; border-radius:5px; background:rgba(148,163,184,0.14); color:#cbd5e1; cursor:pointer; display:flex; align-items:center; justify-content:center;" title="닫기">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid rgba(148,163,184,0.16); background:rgba(2,6,23,0.42);">
+                <button id="btn-visibility-all-on" type="button" style="height:26px; padding:0 10px; border-radius:5px; border:1px solid rgba(34,197,94,0.35); background:rgba(34,197,94,0.12); color:#86efac; font-size:12px; font-weight:800; cursor:pointer;">전체 ON</button>
+                <button id="btn-visibility-all-off" type="button" style="height:26px; padding:0 10px; border-radius:5px; border:1px solid rgba(248,113,113,0.35); background:rgba(248,113,113,0.1); color:#fca5a5; font-size:12px; font-weight:800; cursor:pointer;">전체 OFF</button>
+                <span style="margin-left:auto; color:#94a3b8; font-size:11px;">Autodesk Docs 실시간 모델 목록</span>
+            </div>
+            <div id="model-visibility-list" style="padding:10px; overflow:auto; max-height:calc(100vh - 210px); display:flex; flex-direction:column; gap:6px;">
+                <div style="padding:12px; color:#94a3b8; font-size:12px;">모델 목록을 불러오는 중입니다.</div>
+            </div>
+        </div>
+    <!-- Autodesk Viewer Scripts -->
+    <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
+    <script type="module">
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260803-clash-area4-1';
+        document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
+    </script>
+    <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
+    <!-- Main Entry Point Module -->
+    <script src="./js/main.js?v=20260804-tab-preserve1" type="module"></script>
+
+    <script>
+        // ── Tab Switching Logic ────────────────────────────────────
+        // 🚨 [오프스크린 탭 전환 엔진] 뷰어의 기절을 막는 무중단 탭 스위치 로직
+        window.switchTab = function(tabName) {
+            tabName = tabName || 'dashboard';
+            var previousMainTab = window.currentMainTab || null;
+            window.currentMainTab = tabName;
+            if (previousMainTab && previousMainTab !== tabName && window._initialMainTabApplied) {
+                window.userHasSwitchedTab = true;
+            }
+            var tabs = document.querySelectorAll('.tab-btn');
+            for (var i = 0; i < tabs.length; i++) {
+                tabs[i].classList.remove('active');
+            }
+            var activeBtn = document.querySelector('.tab-btn[onclick*="' + tabName + '"]') || document.getElementById('main-tab-' + tabName + '-btn');
+            if (activeBtn) activeBtn.classList.add('active');
+
+            var dashboard = document.getElementById('tab-content-dashboard');
+            var project = document.getElementById('tab-content-project');
+            var issue = document.getElementById('tab-content-issue');
+            var cctv = document.getElementById('tab-content-cctv');
+            var construction = document.getElementById('construction-bim-dashboard');
+
+            // 🚨 이슈/대시보드/CCTV 탭에 솔리드 배경색을 부여하여 뒤에 숨은 뷰어를 가림
+            if (dashboard) {
+                dashboard.style.display = (tabName === 'dashboard') ? 'block' : 'none';
+                dashboard.style.position = 'relative';
+                dashboard.style.zIndex = '10';
+                // 대시보드 탭 최초 전환 시 dashboard.js lazy import
+                if (tabName === 'dashboard' && !window._dashboardInited) {
+                    window._dashboardInited = true;
+                    import('./js/dashboard.js?v=20260803-forma-dashboard1')
+                        .then(mod => { if (typeof mod.initDashboard === 'function') mod.initDashboard(); })
+                        .catch(err => console.error('[Dashboard] init 실패:', err));
+                } else if (tabName === 'dashboard' && window.refreshDashboard) {
+                    window.refreshDashboard();
+                }
+            }
+            
+
+            if (construction) {
+                construction.style.display = (tabName === 'construction') ? 'grid' : 'none';
+                construction.style.position = 'relative';
+                construction.style.zIndex = '10';
+                if (tabName === 'construction' && window.refreshConstructionBimDashboard) {
+                    window.refreshConstructionBimDashboard();
+                }
+            }
+            if (issue) {
+                issue.style.display = (tabName === 'issue') ? 'flex' : 'none';
+                issue.style.position = 'relative';
+                issue.style.zIndex = '10';
+                issue.style.backgroundColor = '#0f172a';
+            }
+
+            if (cctv) {
+                cctv.style.display = (tabName === 'cctv') ? 'block' : 'none';
+                cctv.style.position = 'relative';
+                cctv.style.zIndex = '10';
+                if (tabName === 'cctv') {
+                    if (!window._cctvInited) {
+                        window._cctvInited = true;
+                        import('./js/cctv.js')
+                            .then(mod => { if (typeof mod.initCctvTab === 'function') mod.initCctvTab(); })
+                            .catch(err => console.error('[CCTV] init 실패:', err));
+                    }
+                    setTimeout(function() {
+                        if (window.cctvViewer && typeof window.cctvViewer.resize === 'function') {
+                            window.cctvViewer.resize();
+                        }
+                    }, 100);
+                }
+            }
+
+            if (project) {
+                if (tabName === 'project') {
+                    // 뷰어 복귀 (정상 표시)
+                    project.style.position = 'relative';
+                    project.style.opacity = '1';
+                    project.style.pointerEvents = 'auto';
+                    project.style.zIndex = '1';
+                    
+                    setTimeout(function() {
+                        var activeViewer = window.myGlobalViewer || window.viewer || window.NOP_VIEWER;
+                        if (activeViewer && typeof activeViewer.resize === 'function') {
+                            activeViewer.resize();
+                        }
+                    }, 100);
+                } else {
+                    // 🚨 [궁극의 속임수] 화면 중앙에 100% 크기로 놔두되, 투명도 0.01(인간의 눈에 안보임)로 설정하고 터치만 막음
+                    project.style.position = 'absolute';
+                    project.style.top = '0px';
+                    project.style.left = '0px';
+                    project.style.width = '100%'; 
+                    project.style.height = '100%';
+                    project.style.opacity = '0.01'; // 0으로 하면 브라우저가 렌더링을 멈출 수 있으므로 0.01 부여
+                    project.style.pointerEvents = 'none'; // 클릭 통과
+                    project.style.zIndex = '-999'; // 다른 탭 뒤로 숨김
+                }
+            }
+
+            if (tabName === 'issue' && typeof window.filterIssues === 'function') {
+                window.filterIssues(window.currentIssueFilter || 'all');
+            }
+        };
+
+        // URL 파라미터 감지하여 초기 탭 활성화 연동 (새로고침 시 기본 탭: 대시보드 'dashboard')
+        window.addEventListener('DOMContentLoaded', function() {
+            var params = new URLSearchParams(window.location.search);
+            var tabParam = params.get('tab') || 'dashboard';
+            if (tabParam && ['dashboard', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
+                if (typeof window.switchTab === 'function') {
+                    window._initialMainTabApplied = false;
+                    window.switchTab(tabParam);
+                    window._initialMainTabApplied = true;
+                    window.userHasSwitchedTab = false;
+                }
+            }
+        });
+
+        window.currentIssueFilter = 'all';
+
+        window.filterIssues = function(type) {
+            window.currentIssueFilter = type || 'all';
+            var btnAll = document.getElementById('sub-tab-all');
+            var btnStand = document.getElementById('sub-tab-standalone');
+            var btnComp = document.getElementById('sub-tab-compare');
+            
+            var inactiveStyle = "background: transparent; color: #94a3b8; border: 1px solid transparent; padding: 8px 20px; border-radius: 4px; cursor: pointer;";
+            var activeStyle = "background: #334155; color: white; border: 1px solid #475569; padding: 8px 20px; border-radius: 4px; font-weight: bold; cursor: pointer;";
+            
+            if(btnAll) btnAll.style.cssText = inactiveStyle;
+            if(btnStand) btnStand.style.cssText = inactiveStyle;
+            if(btnComp) btnComp.style.cssText = inactiveStyle;
+            
+            if(window.currentIssueFilter === 'all' && btnAll) btnAll.style.cssText = activeStyle;
+            if(window.currentIssueFilter === 'standalone' && btnStand) btnStand.style.cssText = activeStyle;
+            if(window.currentIssueFilter === 'compare' && btnComp) btnComp.style.cssText = activeStyle;
+            
+            if (window.currentTableFilterValues) {
+                window.currentTableFilterValues = {};
+            }
+            renderIssueTable();
+        };
+
+        // 🚨 [스마트 대기 카메라 워킹 엔진] 뷰어가 로딩 중이면 포기하지 않고 기다렸다가 줌인을 실행하는 무결점 로직
+        window.focusIssueOnViewer = function(dbId, targetUrn) {
+            if (!dbId || dbId === "-" || dbId === "선택없음") return;
+            
+            var numericId = parseInt(dbId, 10);
+            if (isNaN(numericId)) return;
+
+            // 1. 프로젝트 탭으로 즉시 전환하여 뷰어 렌더링 활성화
+            if (typeof window.switchTab === 'function') {
+                window.switchTab('project');
+            }
+
+            setTimeout(function() {
+                var activeViewer = window.myGlobalViewer || 
+                                   window.viewer || 
+                                   window.NOP_VIEWER || 
+                                   window.overlayViewer || 
+                                   window.leftViewer;
+                
+                if (!activeViewer) return;
+
+                var currentUrn = (activeViewer.model) ? (activeViewer.model.getData().urn || activeViewer.model.getSeedUrn()) : "";
+
+                // 🚨 에이전트 연동 구역: 타겟 URN이 존재하고 현재 URN과 다르면 모델 교체 실행
+                if (targetUrn && currentUrn && targetUrn !== currentUrn) {
+                    console.log("다른 모델의 이슈입니다. 타겟 모델을 로드합니다: " + targetUrn);
+                    
+                    // 에이전트 연동: 실제 전역 모델 로드 함수 호출
+                    if (typeof window.onModelSelected === 'function') {
+                        window.onModelSelected(targetUrn);
+                    } else if (typeof window.loadModel === 'function') {
+                        window.loadModel(activeViewer, targetUrn);
+                    }
+                    
+                    // 로드 완료 후 줌인 이벤트 바인딩
+                    var onGeometryLoaded = function(event) {
+                        activeViewer.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeometryLoaded);
+                        setTimeout(function() {
+                            if (typeof activeViewer.clearSelection === 'function') activeViewer.clearSelection();
+                            activeViewer.select(numericId);
+                            activeViewer.fitToView([numericId]);
+                        }, 500);
+                    };
+                    activeViewer.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeometryLoaded);
+                } else {
+                    // 동일 모델이거나 URN이 없는 경우 (기존 Polling 로직 사용)
+                    var retryCount = 0;
+                    var maxRetries = 10;
+                    function tryFocus() {
+                        if (activeViewer && activeViewer.model && typeof activeViewer.select === 'function' && typeof activeViewer.fitToView === 'function') {
+                            if (typeof activeViewer.clearSelection === 'function') activeViewer.clearSelection();
+                            activeViewer.select(numericId);
+                            activeViewer.fitToView([numericId]);
+                        } else if (retryCount < maxRetries) {
+                            retryCount++;
+                            console.log("[Viewer 대기 중...] 3D 모델 초기화 대기 (" + retryCount + "/" + maxRetries + ")");
+                            setTimeout(tryFocus, 500);
+                        } else {
+                            alert("3D 모델 로딩이 지연되고 있습니다. 모델이 화면에 완전히 표시된 후 다시 클릭해주세요.");
+                        }
+                    }
+                    tryFocus();
+                }
+            }, 300);
+        };
+
+
+
+        // 메인 탭 전환 오버라이딩 제거 (통합 엔진에서 이미 완벽히 처리됨)
+        
+        // 로딩 직후 강제 세팅 및 대시보드 탭 유지 보장
+        window.addEventListener('load', function() {
+            var params = new URLSearchParams(window.location.search);
+            var targetTab = params.get('tab') || 'dashboard';
+            var currentTab = window.currentMainTab || targetTab;
+            if (typeof window.switchTab === 'function' && !window.userHasSwitchedTab && currentTab === targetTab) {
+                window._initialMainTabApplied = false;
+                window.switchTab(targetTab);
+                window._initialMainTabApplied = true;
+                window.userHasSwitchedTab = false;
+            }
+            setTimeout(function() {
+                if(typeof window.renderIssueTable === 'function') window.renderIssueTable();
+            }, 300);
+        });
+    </script>
+
+    <script>
+        // ── FAB Chat Toggle ────────────────────────────────────────
+        (function () {
+            const fab   = document.getElementById('chat-fab');
+            const panel = document.getElementById('ai-chat-panel');
+            if (!fab || !panel) return;
+
+            fab.addEventListener('click', () => {
+                const isOpen = panel.classList.toggle('open');
+                fab.classList.toggle('active', isOpen);
+                fab.setAttribute('aria-expanded', isOpen);
+
+                // Auto-focus textarea when opening
+                if (isOpen) {
+                    const ta = document.getElementById('chat-input');
+                    if (ta) setTimeout(() => ta.focus(), 260);
+                }
+            });
+
+            // Close panel when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!panel.contains(e.target) && !fab.contains(e.target)) {
+                    panel.classList.remove('open');
+                    fab.classList.remove('active');
+                    fab.setAttribute('aria-expanded', 'false');
+                }
+            }, true);
+        })();
+    </script>
+
+    <script>
+        // ── Chat Panel Resize & Drag ────────────────────────────────
+        (function () {
+            const panel = document.getElementById('ai-chat-panel');
+            if (!panel) return;
+
+            // Convert bottom/right anchoring to top/left for free positioning
+            function anchorToTopLeft() {
+                const rect = panel.getBoundingClientRect();
+                panel.style.bottom = 'auto';
+                panel.style.right  = 'auto';
+                panel.style.top    = rect.top + 'px';
+                panel.style.left   = rect.left + 'px';
+            }
+
+            /* ── RESIZE ─────────────────────────────────────────── */
+            const MIN_W = 280, MIN_H = 320;
+            let resizing = false, resDir = null;
+            let startX, startY, startW, startH, startT, startL;
+
+            function onResizeStart(e, dir) {
+                if (!panel.classList.contains('open')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                anchorToTopLeft();
+                resizing = true;
+                resDir = dir;
+                startX = e.clientX;
+                startY = e.clientY;
+                const rect = panel.getBoundingClientRect();
+                startW = rect.width;
+                startH = rect.height;
+                startT = rect.top;
+                startL = rect.left;
+                panel.classList.add('is-resizing');
+                document.body.classList.add('chat-no-select');
+            }
+
+            function onResizeMove(e) {
+                if (!resizing) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                const maxW = window.innerWidth  * 0.9;
+                const maxH = window.innerHeight * 0.85;
+
+                let newW = startW, newH = startH, newT = startT, newL = startL;
+
+                if (resDir.includes('right'))      newW = Math.min(maxW, Math.max(MIN_W, startW + dx));
+                if (resDir.includes('left'))  { newW = Math.min(maxW, Math.max(MIN_W, startW - dx)); newL = startL + (startW - newW); }
+                if (resDir.includes('bottom'))     newH = Math.min(maxH, Math.max(MIN_H, startH + dy));
+                if (resDir.includes('top'))   { newH = Math.min(maxH, Math.max(MIN_H, startH - dy)); newT = startT + (startH - newH); }
+
+                panel.style.width  = newW + 'px';
+                panel.style.height = newH + 'px';
+                panel.style.top    = newT + 'px';
+                panel.style.left   = newL + 'px';
+            }
+
+            function onResizeEnd() {
+                if (!resizing) return;
+                resizing = false;
+                resDir = null;
+                panel.classList.remove('is-resizing');
+                document.body.classList.remove('chat-no-select');
+            }
+
+            // Bind resize handles
+            panel.querySelectorAll('.chat-resize-handle, #chat-resize-grip').forEach(handle => {
+                const dir = handle.dataset.dir;
+                handle.addEventListener('mousedown', e => onResizeStart(e, dir));
+            });
+
+            document.addEventListener('mousemove', onResizeMove);
+            document.addEventListener('mouseup',   onResizeEnd);
+
+            /* ── DRAG (header) ───────────────────────────────────── */
+            const header = document.getElementById('chat-header-drag');
+            if (!header) return;
+
+            let dragging = false;
+            let dragStartX, dragStartY, panelStartT, panelStartL;
+
+            header.addEventListener('mousedown', e => {
+                if (!panel.classList.contains('open')) return;
+                // Only drag on left click
+                if (e.button !== 0) return;
+                e.preventDefault();
+                anchorToTopLeft();
+                dragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                const rect = panel.getBoundingClientRect();
+                panelStartT = rect.top;
+                panelStartL = rect.left;
+                panel.classList.add('is-dragging');
+                document.body.classList.add('chat-no-select');
+            });
+
+            document.addEventListener('mousemove', e => {
+                if (!dragging) return;
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                const newT = Math.max(0, Math.min(window.innerHeight - 60,  panelStartT + dy));
+                const newL = Math.max(0, Math.min(window.innerWidth  - 60,  panelStartL + dx));
+                panel.style.top  = newT + 'px';
+                panel.style.left = newL + 'px';
+            });
+
+            document.addEventListener('mouseup', e => {
+                if (!dragging) return;
+                dragging = false;
+                panel.classList.remove('is-dragging');
+                document.body.classList.remove('chat-no-select');
+            });
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime logs / pid files
+*.log
+*.pid
+.server.*.log
+.server.pid
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Local generated data and private project exports
+data/*.json
+data/*.db
+data/*.sqlite
+uploads/
+temp/
+tmp/
+cache/
+.cache/
+
+# Debug outputs / generated reports
+debug_*
+*_debug.*
+*.tmp
+*.bak
+*.backup
+*.zip
+*.pdf
+
+# Local backups / restore workspaces
+APS Test/
+APS_Test_public_backup/
+APS_Test_wwwroot_backup/
+wwwroot_backup/
+KH-APS__2/
+scratch/
+_archive/
+
+# Local notes / editor metadata
+.agents/
+.obsidian/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+.project
+.classpath
+.cproject
+.settings/
+*.launch
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+# Local one-off debug/check scripts
+check_*.js
+copy_*.js
+generate_debug_pdf.js
+inspect_html_details.js
+print_html_table.js
+test_prompt.js
+verify_images.js

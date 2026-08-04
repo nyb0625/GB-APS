@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>현장 관제 센터 — 강북정수장 APS AI 플랫폼</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Autodesk Viewer CSS -->
+    <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css" type="text/css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+    <!-- Custom CCTV CSS -->
+    <link rel="stylesheet" href="/css/cctv.css">
+    <!-- HLS.js Library for live video streams -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+    <!-- CCTV Header -->
+    <header class="cctv-header">
+        <div class="cctv-brand" style="cursor: pointer;" onclick="location.href='/index.html'">
+            <img src="/img/logo.png" alt="APS Logo" onerror="this.style.display='none'">
+            <span>강북정수장 APS AI 플랫폼</span>
+        </div>
+
+        <div class="header-right">
+            <!-- Navigation Tab Menu -->
+            <div id="main-tab-menu">
+                <button class="tab-btn main-tab-btn" onclick="location.href='/index.html?tab=dashboard'">
+                    <i class="fas fa-chart-line"></i> 대시보드
+                </button>
+                <button class="tab-btn main-tab-btn" onclick="location.href='/index.html?tab=project'">
+                    <i class="fas fa-cube"></i> 프로젝트
+                </button>
+                <button class="tab-btn main-tab-btn" onclick="location.href='/index.html?tab=issue'">
+                    <i class="fas fa-exclamation-circle"></i> 이슈
+                </button>
+                <button class="tab-btn main-tab-btn active" onclick="location.href='/cctv.html'">
+                    <i class="fas fa-video"></i> 현장 관제
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Layout Grid -->
+    <div class="cctv-main-layout">
+        <!-- Top Split View Section -->
+        <main class="split-view-container">
+            <!-- Left Side: CCTV Panel -->
+            <section class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-title" id="cctv-live-title"><i class="fas fa-video"></i> 실시간 CCTV 영상 (강남역)</span>
+                    <span style="font-size: 0.75rem; color: #10b981; display: flex; align-items: center; gap: 4px;">
+                        <span style="width: 6px; height: 6px; background: #10b981; border-radius: 50%; display: inline-block;"></span> LIVE
+                    </span>
+                </div>
+                <div class="panel-body">
+                    <div class="video-wrapper">
+                        <!-- HTML5 Video Player for HLS Live Streams -->
+                        <video id="cctv-video-player" controls autoplay muted playsinline style="width: 100%; height: 100%; object-fit: cover; background: #000;"></video>
+                        <img id="cctv-fallback-img" src="/img/lapse/lapse_1.jpg" style="display: none; width: 100%; height: 100%; object-fit: cover;">
+                        
+                        <!-- Pause Overlay for Issue Registration -->
+                        <div id="video-pause-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 5; align-items: center; justify-content: center; flex-direction: column; gap: 10px;">
+                            <span style="font-size: 3rem; color: white; opacity: 0.8;"><i class="fas fa-pause"></i></span>
+                            <span style="font-size: 1rem; color: white; font-weight: 500;">이슈 등록을 위해 화면이 정지되었습니다.</span>
+                        </div>
+
+                        <!-- Floating Action Button -->
+                        <div class="video-control-bar">
+                            <button id="btn-issue-register" class="btn-issue-trigger">
+                                📸 현재 영상으로 이슈 등록
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Side: BIM View Panel -->
+            <section class="panel-card">
+                <div class="panel-header">
+                    <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden;">
+                        <span class="panel-title" style="flex-shrink: 0;"><i class="fas fa-cube"></i> APS 3D 모델 교차 검증</span>
+                        <span id="loaded-model-name" style="font-size: 0.75rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">로딩 중...</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                        <button id="btn-cctv-save-viewpoint" class="btn-tool" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: bold;"><i class="fas fa-camera"></i> 3D 시점 저장</button>
+                        <button id="btn-cctv-preset-view" class="btn-tool" style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); color: #cbd5e1; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem;"><i class="fas fa-eye"></i> 각도 조절</button>
+                    </div>
+                </div>
+                <div class="panel-body" style="background: #ffffff;">
+                    <!-- Autodesk Viewer Container -->
+                    <div id="cctv-viewer" style="width: 100%; height: 100%;"></div>
+
+                    <!-- Floating Viewport Sync Button -->
+                    <div class="viewer-sync-floating">
+                        <button id="btn-view-sync" class="btn-sync-trigger">
+                            <i class="fas fa-arrows-spin"></i> 뷰어-CCTV 시점 동기화
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom CCTV Subtabs & Channels Section -->
+        <footer class="timeline-panel">
+            <div class="timeline-header" style="border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px; margin-bottom: 8px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button id="btn-subtab-cctv-channels" class="main-tab-btn active" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); padding: 6px 12px; font-size: 0.8rem;">
+                        <i class="fas fa-desktop"></i> 위치별 실시간 CCTV 관제
+                    </button>
+                    <button id="btn-subtab-field-issues" class="main-tab-btn" style="background: rgba(255, 255, 255, 0.05); color: #94a3b8; border-color: rgba(255, 255, 255, 0.1); padding: 6px 12px; font-size: 0.8rem;">
+                        <i class="fas fa-list-check"></i> 현장 관제 이슈 목록
+                    </button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="btn-cctv-capture-issue" class="btn-tool" style="display:none; background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.75rem;"><i class="fas fa-camera"></i> CCTV 캡처 & 이슈 등록</button>
+                    <button id="btn-export-cctv-pdf" class="btn-tool" style="display:none; background: #0284c7; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.75rem;"><i class="fas fa-file-pdf"></i> PDF 보고서 출력</button>
+                    <span style="color: #10b981; font-size: 0.8rem; font-weight: bold; margin-left: 8px;"><i class="fas fa-circle-play"></i> 6개 채널 라이브 운영 중</span>
+                </div>
+            </div>
+
+            <!-- Subtab Content 1: Live CCTV Channel Cards -->
+            <div id="subtab-content-channels" style="display: block;">
+                <div class="timeline-thumbs-row" id="thumbs-container">
+                    <div class="thumb-card active" data-cctv-id="cctv_gangnam_stn" data-stream-url="https://strm2.spatic.go.kr/live/207.stream/playlist.m3u8" data-img="/img/lapse/lapse_1.jpg" data-title="강남역" data-model-name="강북_구조물_신설_02_응집침전지_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLk1EYVFnc1N6UVBheVJHaU53dGl3cUE_dmVyc2lvbj0y">
+                        <img src="/img/lapse/lapse_1.jpg" alt="강남역">
+                        <div class="thumb-info">강남역</div>
+                    </div>
+                    <div class="thumb-card" data-cctv-id="cctv_yangjae_stn" data-stream-url="https://strm2.spatic.go.kr/live/208.stream/playlist.m3u8" data-img="/img/lapse/lapse_2.jpg" data-title="양재역" data-model-name="강북_구조물_신설_03_급속여과지_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLnVXSjRybjluUjJTTnNBaGZ0OW5aLVE_dmVyc2lvbj0z">
+                        <img src="/img/lapse/lapse_2.jpg" alt="양재역">
+                        <div class="thumb-info">양재역</div>
+                    </div>
+                    <div class="thumb-card" data-cctv-id="cctv_gangseo_gu" data-stream-url="https://strm1.spatic.go.kr/live/103.stream/playlist.m3u8" data-img="/img/lapse/lapse_3.jpg" data-title="강서구청" data-model-name="강북_구조물_신설_04_후오존접촉지_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLko5dGd0S0hNU19DQ0pSMDEtVVR4R0E_dmVyc2lvbj0y">
+                        <img src="/img/lapse/lapse_3.jpg" alt="강서구청">
+                        <div class="thumb-info">강서구청</div>
+                    </div>
+                    <div class="thumb-card" data-cctv-id="cctv_gwanghwamun" data-stream-url="https://strm3.spatic.go.kr/live/273.stream/playlist.m3u8" data-img="/img/lapse/lapse_1.jpg" data-title="광화문광장" data-model-name="강북_구조물_신설_05_활성탄흡착지_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLlVVdkJia3dIU2QyQmt4aEhCaGZKLVE_dmVyc2lvbj0y">
+                        <img src="/img/lapse/lapse_1.jpg" alt="광화문광장">
+                        <div class="thumb-info">광화문광장</div>
+                    </div>
+                    <div class="thumb-card" data-cctv-id="cctv_hyunchung_won" data-stream-url="https://strm1.spatic.go.kr/live/82.stream/playlist.m3u8" data-img="/img/lapse/lapse_2.jpg" data-title="국립현충원" data-model-name="강북_구조물_신설_06_역세척펌프동_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLjFZR3FvRXZ0U1lXZ29SN19WN016bXc_dmVyc2lvbj04">
+                        <img src="/img/lapse/lapse_2.jpg" alt="국립현충원">
+                        <div class="thumb-info">국립현충원</div>
+                    </div>
+                    <div class="thumb-card" data-cctv-id="cctv_nonhyeon_stn" data-stream-url="https://strm2.spatic.go.kr/live/206.stream/playlist.m3u8" data-img="/img/lapse/lapse_3.jpg" data-title="논현역" data-model-name="강북_구조물_신설_07_정수지_C" data-model-urn="dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLmxWN1cwcnduUnNpTnNJOWFaaF9jR2c_dmVyc2lvbj05">
+                        <img src="/img/lapse/lapse_3.jpg" alt="논현역">
+                        <div class="thumb-info">논현역</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Subtab Content 2: Field Issues Table -->
+            <div id="subtab-content-issues" style="display: none; width: 100%; overflow-x: auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.8rem; text-align:left;">
+                    <thead>
+                        <tr style="background:rgba(0,0,0,0.3); color:#94a3b8; border-bottom:1px solid rgba(255,255,255,0.1);">
+                            <th style="padding:8px 10px; text-align:center; width:50px;">NO</th>
+                            <th style="padding:8px 10px; width:70px;">캡처</th>
+                            <th style="padding:8px 10px;">이슈 제목</th>
+                            <th style="padding:8px 10px;">관제 위치</th>
+                            <th style="padding:8px 10px;">상세 설명</th>
+                            <th style="padding:8px 10px; text-align:center;">담당자</th>
+                            <th style="padding:8px 10px; text-align:center;">등록일시</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cctv-issues-table-body"></tbody>
+                </table>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Standalone Dynamic Issue Registration Dialog -->
+    <div class="modal-overlay" id="dynamic-issue-modal">
+        <div class="modal-box">
+            <h3 class="modal-title"><i class="fas fa-camera" style="color: #00f2fe;"></i> 현장 CCTV 연동 이슈 등록</h3>
+            
+            <input type="hidden" id="multi-capture-data" value="">
+            <div class="form-group">
+                <label>CCTV 캡처본</label>
+                <div id="capture-image-list" style="display: flex; gap: 8px; overflow-x: auto; padding: 4px 0;"></div>
+            </div>
+
+            <div class="form-group">
+                <label>제목 <span style="color:#ef4444">*</span></label>
+                <input type="text" id="issue-title" value="CCTV 분석 이슈">
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>상태</label>
+                    <select id="issue-status">
+                        <option value="초안">초안</option>
+                        <option value="Open" selected>Open</option>
+                        <option value="검토중">검토중</option>
+                        <option value="완료">완료</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>유형</label>
+                    <select id="issue-type">
+                        <option value="현장 안전">현장 안전</option>
+                        <option value="설계 이슈" selected>설계 이슈</option>
+                        <option value="간섭 검토">간섭 검토</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>설명</label>
+                <textarea id="issue-desc" placeholder="상세 검토 의견을 입력하세요...">현장 CCTV 확인 결과, 특이사항이 포착되었습니다.</textarea>
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>구조물 명</label>
+                    <input type="text" id="issue-structure" value="강북정수장">
+                </div>
+                <div class="form-group">
+                    <label>공종</label>
+                    <input type="text" id="issue-trade" value="기계">
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>담당자</label>
+                    <input type="text" id="issue-assignee" value="홍길동 과장">
+                </div>
+                <div class="form-group">
+                    <label>확인자</label>
+                    <input type="text" id="issue-verifier" value="김안전 부장">
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>시작 날짜</label>
+                    <input type="date" id="issue-startdate" value="2026-08-03">
+                </div>
+                <div class="form-group">
+                    <label>마감일</label>
+                    <input type="date" id="issue-duedate" value="2026-08-10">
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btn-modal-cancel" type="button">취소</button>
+                <button class="btn btn-primary" id="btn-modal-save" type="button"><i class="fas fa-floppy-disk"></i> 이슈 저장</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Autodesk Viewer Scripts -->
+    <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
+    
+    <!-- Custom CCTV Scripts -->
+    <script src="/js/cctv.js" type="module"></script>
+</body>
+</html>
