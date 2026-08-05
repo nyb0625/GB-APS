@@ -95,6 +95,9 @@ export function applyModelRotation(viewer, urn, rotateMinus90) {
  * 🔍 현재 활성화된 뷰어 타겟(메인 3D 뷰어 window.viewer 또는 CCTV 뷰어 window.cctvViewer) 반환
  */
 export function getActiveViewer() {
+    if (window._modelVisibilityTargetViewer) {
+        return window._modelVisibilityTargetViewer;
+    }
     const cctvTab = document.getElementById('tab-content-cctv');
     if (cctvTab && cctvTab.style.display !== 'none' && window.cctvViewer) {
         return window.cctvViewer;
@@ -125,7 +128,7 @@ export async function fetchGlobalRvtModels(force = false) {
 /**
  * Popup manager for the 3D model visibility/merge panel.
  */
-export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = []) {
+export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = [], targetViewer = null) {
     const popup = document.getElementById('model-visibility-popup');
     const listEl = document.getElementById('model-visibility-list');
     if (!popup || !listEl) {
@@ -136,9 +139,11 @@ export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = []) 
     const isOpen = popup.style.display && popup.style.display !== 'none';
     if (isOpen) {
         popup.style.display = 'none';
+        window._modelVisibilityTargetViewer = null;
         return;
     }
 
+    window._modelVisibilityTargetViewer = targetViewer || null;
     popup.style.top = '75px';
     popup.style.left = '20px';
     popup.style.zIndex = '999999';
@@ -475,6 +480,7 @@ export function closeModelVisibilityPopup() {
     if (popup) {
         popup.style.display = 'none';
     }
+    window._modelVisibilityTargetViewer = null;
 }
 
 /**

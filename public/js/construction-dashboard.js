@@ -22,7 +22,9 @@ const STATUS_GROUPS = {
 };
 
 const GROUP_ORDER = ['created', 'review', 'delayed', 'closed'];
+const monthlyIssueChartMode = 'bar'; // Change to 'dumbbell' to preview the dumbbell monthly chart.
 let clashStructureChart = null;
+const monthlyIssueDrilldownState = { location: '', month: '' };
 const dashboardIssueRegistry = new Map();
 const CONSTRUCTION_PROGRESS_ITEMS = [
     { id: 'new-01', zone: 'new', name: '신설 수처리동', progress: 68, status: '진행중', startDate: '2026-07-20', endDate: '2026-08-08', color: '#ef4444' },
@@ -42,6 +44,7 @@ const CONSTRUCTION_ZONE_FOLDER_KEYWORDS = {
 };
 const CONSTRUCTION_TARGET_HUB_ID = 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const CONSTRUCTION_TARGET_PROJECT_ID = 'b.374bde3a-83a3-4dd5-80c2-2e01ddeac719';
+const CONSTRUCTION_VIEW_STATE_PREFIX = 'gangbuk_construction_progress_view_';
 
 function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -180,6 +183,26 @@ function getIssueAssignee(issue) {
     return displayValue(issue.assignee || issue.assignedTo || issue.assigned_to || issue.owner || issue.responsible || '미지정') || '미지정';
 }
 
+function resolveKnownUserName(value) {
+    const id = String(value || '').trim();
+    if (id === '783606258') return '현대건설';
+    if (id.toUpperCase() === '2BTDKKFEB6SF') return '기술연구소(AEC) 박도해';
+    return id;
+}
+
+function getIssueReviewer(issue) {
+    const raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+    const watchers = raw && (raw.watcherObjects || raw.watchers || raw.attributes?.watcherObjects || raw.attributes?.watchers);
+    if (Array.isArray(watchers) && watchers.length) {
+        const watcher = watchers.find(item => item && (item.name || item.displayName || item.id || item.userId || item.autodeskId || item.email)) || watchers[0];
+        if (typeof watcher === 'string') return resolveKnownUserName(watcher) || '미지정';
+        return displayValue(watcher.name || watcher.displayName || watcher.fullName || watcher.email) ||
+            resolveKnownUserName(watcher.id || watcher.userId || watcher.autodeskId || watcher.accountId || watcher.oxygenId) ||
+            '미지정';
+    }
+    return resolveKnownUserName(issue.reviewer || issue.verifier || issue.reviewedBy || '') || '미지정';
+}
+
 function getIssueDescription(issue) {
     return displayValue(issue.description || issue.desc || issue.reviewContent || issue.changeContent || '');
 }
@@ -239,7 +262,7 @@ function buildMonthRange(issues) {
     issues.forEach(issue => {
         const start = getIssueStart(issue);
         const end = getIssueEnd(issue, start);
-        dates.push(start, end);
+        dates.push(end);
     });
 
     const now = new Date();
@@ -267,11 +290,17 @@ function issueOverlapsMonth(issue, monthKey) {
     return start <= monthEnd && end >= monthStart;
 }
 
+function issueEndsInMonth(issue, monthKey) {
+    const start = getIssueStart(issue);
+    return getMonthKey(getIssueEnd(issue, start)) === monthKey;
+}
+
 function mergeIssues(lists) {
     const seen = new Set();
     const merged = [];
     lists.flat().forEach(issue => {
         if (!issue) return;
+        if (!isVisibleIssueForMainTabs(issue)) return;
         const key = getIssueKey(issue);
         if (!key || seen.has(key)) return;
         seen.add(key);
@@ -281,13 +310,18 @@ function mergeIssues(lists) {
     return merged;
 }
 
+function isVisibleIssueForMainTabs(issue) {
+    const typeText = String(issue && (issue.typePath || issue.type || issue.category || '') || '');
+    return typeText.indexOf('\uAC74\uD654') === -1;
+}
+
 async function loadIssues() {
     let formaIssues = [];
     try {
         const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
         if (resp.ok) {
             const json = await resp.json();
-            formaIssues = Array.isArray(json.data) ? json.data : [];
+            formaIssues = (Array.isArray(json.data) ? json.data : []).filter(isVisibleIssueForMainTabs);
             window._gangbukFormaCache = formaIssues;
             return mergeIssues([formaIssues]);
         }
@@ -307,6 +341,7 @@ function summarizeByLocationAndMonth(issues, months) {
     issues.forEach(issue => {
         const location = getIssueLocation(issue);
         const group = getStatusGroup(issue);
+        const endMonth = getMonthKey(getIssueEnd(issue, getIssueStart(issue)));
         if (!rows.has(location)) {
             rows.set(location, {
                 location,
@@ -321,13 +356,28 @@ function summarizeByLocationAndMonth(issues, months) {
         if (group === 'closed') row.closed += 1;
 
         months.forEach(monthKey => {
-            if (!issueOverlapsMonth(issue, monthKey)) return;
+            if (!issueEndsInMonth(issue, monthKey)) return;
             if (!row.months.has(monthKey)) {
-                row.months.set(monthKey, { created: 0, review: 0, delayed: 0, closed: 0, total: 0 });
+                row.months.set(monthKey, {
+                    created: 0,
+                    review: 0,
+                    delayed: 0,
+                    closed: 0,
+                    total: 0,
+                    active: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 },
+                    started: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 },
+                    ended: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 }
+                });
             }
             const bucket = row.months.get(monthKey);
-            bucket[group] += 1;
-            bucket.total += 1;
+            bucket.active[group] += 1;
+            bucket.active.total += 1;
+            if (monthKey === endMonth) {
+                bucket.ended[group] += 1;
+                bucket.ended.total += 1;
+                bucket[group] += 1;
+                bucket.total += 1;
+            }
         });
     });
 
@@ -366,7 +416,7 @@ function renderGantt(issues) {
         return `<div class="bim-chart-row">${cells}</div>`;
     }).join('');
 
-    const xAxis = months.map(month => `<div class="bim-chart-month">${getMonthLabel(month)}</div>`).join('');
+    const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 전체 이슈 분석 보기`)}">${getMonthLabel(month)}</button>`).join('');
 
     wrap.innerHTML = `
         ${renderStatusLegend()}
@@ -380,6 +430,15 @@ function renderGantt(issues) {
 }
 
 function renderStatusLegend() {
+    if (monthlyIssueChartMode === 'dumbbell') {
+        return `
+            <div class="bim-chart-legend" aria-label="덤벨 차트 범례">
+                <span class="bim-chart-legend-item"><span class="bim-chart-legend-dot start"></span><span>시작 이슈</span></span>
+                <span class="bim-chart-legend-item"><span class="bim-chart-legend-dot end"></span><span>종료 이슈</span></span>
+                <span class="bim-chart-legend-item"><span class="bim-chart-legend-line"></span><span>활성 기간</span></span>
+            </div>
+        `;
+    }
     const items = GROUP_ORDER.map(groupKey => {
         const group = STATUS_GROUPS[groupKey];
         return `
@@ -394,24 +453,34 @@ function renderStatusLegend() {
 }
 
 function renderChartCell(bucket, location = '', month = '') {
-    if (!bucket || !bucket.total) {
+    if (monthlyIssueChartMode === 'dumbbell') {
+        return renderDumbbellChartCell(bucket, location, month);
+    }
+    const active = bucket && bucket.active ? bucket.active : bucket;
+    const ended = bucket && bucket.ended ? bucket.ended : bucket;
+    if (!active || !active.total) {
         return '<div class="bim-chart-cell"><div class="bim-chart-empty"></div></div>';
     }
 
     const label = GROUP_ORDER
         .map(groupKey => {
-            const count = bucket[groupKey] || 0;
-            return count ? `${STATUS_GROUPS[groupKey].label} ${count}` : '';
+            const activeCount = active[groupKey] || 0;
+            const endedCount = ended[groupKey] || 0;
+            if (!activeCount) return '';
+            return `${STATUS_GROUPS[groupKey].label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ''}`;
         })
         .filter(Boolean)
         .join(' · ');
 
     const segments = GROUP_ORDER.map(groupKey => {
-        const count = bucket[groupKey] || 0;
-        if (!count) return '';
+        const activeCount = active[groupKey] || 0;
+        const endedCount = ended[groupKey] || 0;
+        if (!activeCount) return '';
         const group = STATUS_GROUPS[groupKey];
-        const width = Math.max(3, (count / bucket.total) * 100);
-        return `<div class="bim-chart-seg" title="${escapeHtml(group.label)} ${count}건" style="width:${width}%; background:${group.color};">${count}</div>`;
+        const width = Math.max(3, (activeCount / active.total) * 100);
+        const segmentClass = endedCount ? 'bim-chart-seg' : 'bim-chart-seg bim-chart-seg-continuing';
+        const segmentText = endedCount ? String(endedCount) : '';
+        return `<div class="${segmentClass}" title="${escapeHtml(`${group.label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ' · 진행 중'}`)}" style="width:${width}%; background:${group.color};">${segmentText}</div>`;
     }).join('');
 
     return `
@@ -421,12 +490,49 @@ function renderChartCell(bucket, location = '', month = '') {
     `;
 }
 
+function renderDumbbellChartCell(bucket, location = '', month = '') {
+    const active = bucket && bucket.active ? bucket.active : bucket;
+    const started = bucket && bucket.started ? bucket.started : { total: 0 };
+    const ended = bucket && bucket.ended ? bucket.ended : { total: 0 };
+    if (!active || !active.total) {
+        return '<div class="bim-chart-cell bim-dumbbell-cell"><div class="bim-chart-empty"></div></div>';
+    }
+
+    const label = [
+        `활성 ${active.total}건`,
+        started.total ? `시작 ${started.total}건` : '',
+        ended.total ? `종료 ${ended.total}건` : ''
+    ].filter(Boolean).join(' · ');
+
+    const startDot = started.total ? `
+        <span class="bim-dumbbell-dot start" title="${escapeHtml(`시작 ${started.total}건`)}">${started.total}</span>
+    ` : '<span class="bim-dumbbell-dot-spacer"></span>';
+    const endDot = ended.total ? `
+        <span class="bim-dumbbell-dot end" title="${escapeHtml(`종료 ${ended.total}건`)}">${ended.total}</span>
+    ` : '<span class="bim-dumbbell-dot-spacer"></span>';
+
+    return `
+        <div class="bim-chart-cell bim-chart-clickable bim-dumbbell-cell" data-location="${escapeHtml(location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} · ${location} · ${label}`)}">
+            <div class="bim-dumbbell-track ${started.total || ended.total ? '' : 'continuing'}">
+                ${startDot}
+                <span class="bim-dumbbell-line" aria-hidden="true"></span>
+                ${endDot}
+            </div>
+        </div>
+    `;
+}
+
 function getIssuesForStructure(location, month = '') {
     const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
     return issues.filter(issue => {
         if (getIssueLocation(issue) !== location) return false;
-        return month ? issueOverlapsMonth(issue, month) : true;
+        return month ? issueEndsInMonth(issue, month) : true;
     });
+}
+
+function getIssuesForMonth(month = '') {
+    const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+    return month ? issues.filter(issue => issueEndsInMonth(issue, month)) : issues.slice();
 }
 
 function renderStructureIssueList(issues, emptyMessage) {
@@ -499,14 +605,13 @@ function bindStructureIssueListEvents(container, issues) {
     });
 }
 
-function openStructureIssueModal(location, month = '') {
-    if (!location) return;
+function openMonthlyIssueListModal(titleText, issues = []) {
     const modal = document.getElementById('bim-timeline-modal');
     const body = document.getElementById('bim-timeline-modal-body');
     if (!modal || !body) return;
-    const issues = getIssuesForStructure(location, month);
-    const monthLabel = month ? `${getMonthLabel(month)} · ` : '';
-    const titleText = `${monthLabel}${location} 이슈 목록`;
+    if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+    }
     const title = modal.querySelector('.bim-task-dialog-head span');
     if (title) title.textContent = titleText;
     body.innerHTML = `
@@ -519,6 +624,516 @@ function openStructureIssueModal(location, month = '') {
     bindStructureIssueListEvents(body, issues);
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
+}
+
+function openStructureIssueModal(location, month = '') {
+    if (!location) return;
+    const modal = document.getElementById('bim-timeline-modal');
+    const body = document.getElementById('bim-timeline-modal-body');
+    if (!modal || !body) return;
+    if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+    }
+    const allIssues = getIssuesForStructure(location);
+    const issues = month ? getIssuesForStructure(location, month) : allIssues;
+    const months = buildMonthRange(allIssues.length ? allIssues : issues);
+    const summary = getStatusSummary(allIssues);
+    const completion = summary.total ? Math.round((summary.closed / summary.total) * 100) : 0;
+    const monthLabel = month ? `${getMonthLabel(month)} · ` : '';
+    const titleText = `${monthLabel}${location} 이슈 목록`;
+    const title = modal.querySelector('.bim-task-dialog-head span');
+    if (title) title.textContent = titleText;
+    body.innerHTML = `
+        <div class="monthly-issue-popup-detail">
+            <div class="monthly-drilldown-section-head monthly-popup-title-head">
+                <h3>이슈 상태</h3>
+                <span>${issues.length}건</span>
+            </div>
+            <div class="monthly-drilldown-kpis">
+                ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
+                ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
+                ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
+                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
+                ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
+                ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
+            </div>
+            <section class="monthly-drilldown-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>월별 추이</h3>
+                    ${month ? '<button type="button" class="monthly-drilldown-clear-month">전체 보기</button>' : ''}
+                </div>
+                ${renderMonthlyTrend(location, months, month)}
+            </section>
+            <section class="monthly-drilldown-section monthly-popup-list-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>${month ? `${getMonthLabel(month)} 이슈 목록` : '이슈 목록'}</h3>
+                    <span>${issues.length}건</span>
+                </div>
+                ${renderStructureIssueList(issues, `${titleText}이 없습니다.`)}
+            </section>
+        </div>
+    `;
+    bindStructureIssueListEvents(body, issues);
+    body.querySelectorAll('.monthly-drilldown-month[data-drilldown-month]').forEach(button => {
+        button.addEventListener('click', () => openStructureIssueModal(location, button.dataset.drilldownMonth || ''));
+    });
+    const clearMonth = body.querySelector('.monthly-drilldown-clear-month');
+    if (clearMonth) clearMonth.addEventListener('click', () => openStructureIssueModal(location, ''));
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function renderMonthStructureSummary(month, issues) {
+    const rows = new Map();
+    issues.forEach(issue => {
+        const location = getIssueLocation(issue);
+        if (!rows.has(location)) rows.set(location, { location, total: 0 });
+        rows.get(location).total += 1;
+    });
+    const buttons = Array.from(rows.values())
+        .sort((a, b) => b.total - a.total || a.location.localeCompare(b.location, 'ko'))
+        .map(row => `
+            <button type="button" class="monthly-drilldown-month monthly-popup-structure-filter" data-location="${escapeHtml(row.location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${row.location} 이슈 ${row.total}건`)}">
+                <span title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</span>
+                <strong>${row.total}</strong>
+            </button>
+        `).join('');
+    return `<div class="monthly-drilldown-trend monthly-popup-structure-grid">${buttons || '<div class="monthly-drilldown-empty">표시할 구조물 이슈가 없습니다.</div>'}</div>`;
+}
+
+function openMonthIssueModal(month = '') {
+    if (!month) return;
+    const modal = document.getElementById('bim-timeline-modal');
+    const body = document.getElementById('bim-timeline-modal-body');
+    if (!modal || !body) return;
+    if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+    }
+    const issues = getIssuesForMonth(month);
+    const summary = getStatusSummary(issues);
+    const completion = summary.total ? Math.round((summary.closed / summary.total) * 100) : 0;
+    const titleText = `${getMonthLabel(month)} 이슈 목록`;
+    const title = modal.querySelector('.bim-task-dialog-head span');
+    if (title) title.textContent = titleText;
+    body.innerHTML = `
+        <div class="monthly-issue-popup-detail">
+            <div class="monthly-drilldown-section-head monthly-popup-title-head">
+                <h3>이슈 상태</h3>
+                <span>${issues.length}건</span>
+            </div>
+            <div class="monthly-drilldown-kpis">
+                ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
+                ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
+                ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
+                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
+                ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
+                ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
+            </div>
+            <section class="monthly-drilldown-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>구조물별 현황</h3>
+                    <span>${escapeHtml(getMonthLabel(month))}</span>
+                </div>
+                ${renderMonthStructureSummary(month, issues)}
+            </section>
+            <section class="monthly-drilldown-section monthly-popup-list-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>${escapeHtml(titleText)}</h3>
+                    <span>${issues.length}건</span>
+                </div>
+                ${renderStructureIssueList(issues, `${titleText}이 없습니다.`)}
+            </section>
+        </div>
+    `;
+    bindStructureIssueListEvents(body, issues);
+    body.querySelectorAll('.monthly-popup-structure-filter[data-location][data-month]').forEach(button => {
+        button.addEventListener('click', () => openStructureIssueModal(button.dataset.location || '', button.dataset.month || ''));
+    });
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function getStatusSummary(issues) {
+    return issues.reduce((acc, issue) => {
+        const groupKey = getStatusGroup(issue);
+        acc.total += 1;
+        acc[groupKey] += 1;
+        return acc;
+    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+}
+
+function getTopIssuePeople(issues, getter, limit = 3) {
+    const counts = new Map();
+    issues.forEach(issue => {
+        const name = getter(issue) || '미지정';
+        counts.set(name, (counts.get(name) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'))
+        .slice(0, limit);
+}
+
+function renderDrilldownKpi(label, value, color) {
+    return `
+        <div class="monthly-drilldown-kpi" style="--monthly-kpi-color:${color};">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+        </div>
+    `;
+}
+
+function renderDrilldownPeople(title, rows) {
+    const body = rows.length
+        ? rows.map(([name, count]) => `
+            <div class="monthly-drilldown-person">
+                <span title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+                <strong>${count}건</strong>
+            </div>
+        `).join('')
+        : '<div class="monthly-drilldown-empty">표시할 담당 정보가 없습니다.</div>';
+    return `
+        <div class="monthly-drilldown-people">
+            <h4>${escapeHtml(title)}</h4>
+            ${body}
+        </div>
+    `;
+}
+
+function renderMonthlyTrend(location, months, selectedMonth = '') {
+    const buttons = months.map(month => {
+        const count = getIssuesForStructure(location, month).length;
+        const active = selectedMonth === month ? ' active' : '';
+        return `
+            <button type="button" class="monthly-drilldown-month${active}" data-drilldown-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 이슈 ${count}건`)}">
+                <span>${escapeHtml(getMonthLabel(month))}</span>
+                <strong>${count}</strong>
+            </button>
+        `;
+    }).join('');
+    return `<div class="monthly-drilldown-trend">${buttons}</div>`;
+}
+
+function renderMonthlyIssueDrilldownPanel(location, month, months) {
+    if (!location) return '';
+    const allIssues = getIssuesForStructure(location);
+    const visibleIssues = month ? getIssuesForStructure(location, month) : allIssues;
+    const summary = getStatusSummary(allIssues);
+    const visibleSummary = getStatusSummary(visibleIssues);
+    const completion = summary.total ? Math.round((summary.closed / summary.total) * 100) : 0;
+    const title = month ? `${location} · ${getMonthLabel(month)}` : location;
+    const assignees = getTopIssuePeople(allIssues, getIssueAssignee);
+    const reviewers = getTopIssuePeople(allIssues, getIssueReviewer);
+
+    return `
+        <aside class="monthly-issue-drilldown" data-location="${escapeHtml(location)}">
+            <div class="monthly-drilldown-head">
+                <div>
+                    <span>구조물 상세</span>
+                    <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+                </div>
+                <button type="button" class="bim-icon-btn monthly-drilldown-close" title="닫기" aria-label="닫기">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="monthly-drilldown-kpis">
+                ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
+                ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
+                ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
+                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
+                ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
+                ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
+            </div>
+            <section class="monthly-drilldown-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>월별 추이</h3>
+                    ${month ? `<button type="button" class="monthly-drilldown-clear-month">전체 보기</button>` : ''}
+                </div>
+                ${renderMonthlyTrend(location, months, month)}
+            </section>
+            <section class="monthly-drilldown-section">
+                <div class="monthly-drilldown-section-head">
+                    <h3>${month ? `${getMonthLabel(month)} 이슈 목록` : '이슈 목록'}</h3>
+                    <span>${visibleSummary.total}건</span>
+                </div>
+                ${renderStructureIssueList(visibleIssues, `${title} 이슈가 없습니다.`)}
+            </section>
+            <section class="monthly-drilldown-section">
+                <div class="monthly-drilldown-people-grid">
+                    ${renderDrilldownPeople('주요 담당자', assignees)}
+                    ${renderDrilldownPeople('주요 확인자', reviewers)}
+                </div>
+            </section>
+        </aside>
+    `;
+}
+
+function openMonthlyIssueDrilldown(location, month = '') {
+    if (!location) return;
+    monthlyIssueDrilldownState.location = location;
+    monthlyIssueDrilldownState.month = month || '';
+    renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+}
+
+function closeMonthlyIssueDrilldown() {
+    monthlyIssueDrilldownState.location = '';
+    monthlyIssueDrilldownState.month = '';
+    renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+}
+
+function getMonthlyIssueTabMonth() {
+    const input = document.getElementById('monthly-issue-month');
+    const value = input && input.value ? input.value : getMonthKey(new Date());
+    return /^\d{4}-\d{2}$/.test(value) ? value : getMonthKey(new Date());
+}
+
+function getMonthlyIssueRows(issues, monthKey, statusFilter = 'all', search = '') {
+    const query = String(search || '').trim().toLowerCase();
+    const rows = new Map();
+    issues.forEach(issue => {
+        if (!issueEndsInMonth(issue, monthKey)) return;
+        const groupKey = getStatusGroup(issue);
+        if (statusFilter && statusFilter !== 'all' && groupKey !== statusFilter) return;
+        const location = getIssueLocation(issue);
+        if (query && !String(location || '').toLowerCase().includes(query)) return;
+
+        if (!rows.has(location)) {
+            rows.set(location, {
+                location,
+                total: 0,
+                created: 0,
+                review: 0,
+                delayed: 0,
+                closed: 0,
+                latest: null,
+                issues: []
+            });
+        }
+        const row = rows.get(location);
+        row.total += 1;
+        row[groupKey] += 1;
+        row.issues.push(issue);
+        const end = getIssueEnd(issue, getIssueStart(issue));
+        if (!row.latest || end > row.latest) row.latest = end;
+    });
+    return Array.from(rows.values()).sort((a, b) => b.total - a.total || a.location.localeCompare(b.location, 'ko'));
+}
+
+function renderMonthlyIssueStatusTableLegacy(issues = []) {
+    const root = document.getElementById('monthly-issue-status-root');
+    const monthInput = document.getElementById('monthly-issue-month');
+    if (!root) return;
+    if (monthInput && !monthInput.value) monthInput.value = getMonthKey(new Date());
+
+    const monthKey = getMonthlyIssueTabMonth();
+    const statusFilter = document.getElementById('monthly-issue-status-filter')?.value || 'all';
+    const search = document.getElementById('monthly-issue-search')?.value || '';
+    const rows = getMonthlyIssueRows(issues, monthKey, statusFilter, search);
+    const totals = rows.reduce((acc, row) => {
+        acc.total += row.total;
+        acc.created += row.created;
+        acc.review += row.review;
+        acc.delayed += row.delayed;
+        acc.closed += row.closed;
+        return acc;
+    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+    const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+
+    if (!rows.length) {
+        root.innerHTML = `
+            <div class="monthly-issue-kpis">
+                ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8')}
+                ${renderMonthlyIssueKpi('진행/검토', totals.review, '#a78bfa')}
+                ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b')}
+                ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981')}
+            </div>
+            <div class="bim-db-placeholder">${escapeHtml(getMonthLabel(monthKey))} 기준으로 표시할 구조물 이슈가 없습니다.</div>
+        `;
+        return;
+    }
+
+    const tableRows = rows.map(row => {
+        const progress = row.total ? Math.round((row.closed / row.total) * 100) : 0;
+        return `
+            <tr class="monthly-issue-row" data-location="${escapeHtml(row.location)}">
+                <td>
+                    <button type="button" class="monthly-issue-structure" title="${escapeHtml(row.location)} 이슈 목록 보기">${escapeHtml(row.location)}</button>
+                </td>
+                <td><strong>${row.total}</strong></td>
+                <td>${row.created}</td>
+                <td>${row.review}</td>
+                <td>${row.delayed}</td>
+                <td>${row.closed}</td>
+                <td>
+                    <div class="monthly-issue-progress" title="완료율 ${progress}%">
+                        <span style="width:${progress}%;"></span>
+                    </div>
+                    <em>${progress}%</em>
+                </td>
+                <td>${escapeHtml(formatShortDate(row.latest))}</td>
+                <td><button type="button" class="monthly-issue-open-list">이슈 보기</button></td>
+            </tr>
+        `;
+    }).join('');
+
+    root.innerHTML = `
+        <div class="monthly-issue-kpis">
+            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8')}
+            ${renderMonthlyIssueKpi('진행/검토', totals.review, '#a78bfa')}
+            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b')}
+            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981')}
+        </div>
+        <div class="monthly-issue-table-wrap">
+            <table class="monthly-issue-table">
+                <thead>
+                    <tr>
+                        <th>구조물</th>
+                        <th>전체</th>
+                        <th>생성</th>
+                        <th>진행/검토</th>
+                        <th>지연</th>
+                        <th>완료</th>
+                        <th>완료율</th>
+                        <th>최근 변경</th>
+                        <th>목록</th>
+                    </tr>
+                </thead>
+                <tbody>${tableRows}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderMonthlyIssueKpi(label, value, color, statusKey = '') {
+    return `
+        <button type="button" class="monthly-issue-kpi" data-status="${escapeHtml(statusKey)}" style="--monthly-kpi-color:${color};" title="${escapeHtml(label)} 이슈 목록 보기">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+        </button>
+    `;
+}
+
+function renderMonthlyIssueStatusTab(issues = []) {
+    const root = document.getElementById('monthly-issue-status-root');
+    if (!root) return;
+
+    const search = document.getElementById('monthly-issue-search')?.value || '';
+    const query = String(search || '').trim().toLowerCase();
+    const filteredIssues = (Array.isArray(issues) ? issues : []).filter(issue => {
+        if (!query) return true;
+        return getIssueLocation(issue).toLowerCase().includes(query);
+    });
+
+    if (!filteredIssues.length) {
+        root.innerHTML = '<div class="bim-db-placeholder">표시할 월간 이슈 데이터가 없습니다.</div>';
+        return;
+    }
+
+    const months = buildMonthRange(filteredIssues);
+    const rows = summarizeByLocationAndMonth(filteredIssues, months);
+    const totals = filteredIssues.reduce((acc, issue) => {
+        const groupKey = getStatusGroup(issue);
+        acc.total += 1;
+        acc[groupKey] += 1;
+        return acc;
+    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+    const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+    const monthWidth = Math.max(84, Math.floor(980 / Math.max(months.length, 1)));
+    const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px;`;
+    const yAxis = rows.map(row => {
+        const progress = row.total ? Math.round((row.closed / row.total) * 100) : 0;
+        return `
+            <div class="bim-chart-yitem monthly-issue-yitem monthly-issue-structure-cell bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
+                <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
+            </div>
+        `;
+    }).join('');
+
+    const plot = rows.map(row => {
+        const cells = months.map(month => renderChartCell(row.months.get(month), row.location, month)).join('');
+        return `<div class="bim-chart-row monthly-issue-chart-row">${cells}</div>`;
+    }).join('');
+    const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 전체 이슈 분석 보기`)}">${getMonthLabel(month)}</button>`).join('');
+
+    root.innerHTML = `
+        <div class="monthly-issue-kpis monthly-issue-kpis-compact">
+            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
+            ${renderMonthlyIssueKpi('생성', totals.created, '#38bdf8', 'created')}
+            ${renderMonthlyIssueKpi('검토', totals.review, '#a78bfa', 'review')}
+            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b', 'delayed')}
+            ${renderMonthlyIssueKpi('종료', totals.closed, '#10b981', 'closed')}
+            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+        </div>
+        <div class="monthly-issue-workspace">
+            <div class="monthly-issue-chart-wrap">
+                ${renderStatusLegend()}
+                <div class="bim-chart monthly-issue-chart" style="${chartStyle}">
+                    <div class="bim-chart-yaxis">${yAxis}</div>
+                    <div class="bim-chart-plot">${plot}</div>
+                </div>
+                <div class="monthly-issue-axis-row" style="${chartStyle}">
+                    <div class="monthly-issue-axis-spacer"></div>
+                    <div class="monthly-issue-month-row">${xAxis}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function bindMonthlyIssueStatusTab() {
+    const root = document.getElementById('monthly-issue-status-root');
+    const month = document.getElementById('monthly-issue-month');
+    const status = document.getElementById('monthly-issue-status-filter');
+    const search = document.getElementById('monthly-issue-search');
+    const refresh = document.getElementById('monthly-issue-refresh');
+    if (month && !month.value) month.value = getMonthKey(new Date());
+
+    const rerender = () => renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+    [month, status].forEach(el => {
+        if (el && !el.dataset.monthlyIssueBound) {
+            el.dataset.monthlyIssueBound = 'true';
+            el.addEventListener('change', rerender);
+        }
+    });
+    if (search && !search.dataset.monthlyIssueBound) {
+        search.dataset.monthlyIssueBound = 'true';
+        search.addEventListener('input', rerender);
+    }
+    if (refresh && !refresh.dataset.monthlyIssueBound) {
+        refresh.dataset.monthlyIssueBound = 'true';
+        refresh.addEventListener('click', () => refreshMonthlyIssueStatusTab(true));
+    }
+    if (root && !root.dataset.monthlyIssueBound) {
+        root.dataset.monthlyIssueBound = 'true';
+        root.addEventListener('click', event => {
+            const kpi = event.target.closest('.monthly-issue-kpi[data-status]');
+            if (kpi) {
+                const statusKey = kpi.dataset.status || 'all';
+                const searchValue = document.getElementById('monthly-issue-search')?.value || '';
+                const query = String(searchValue || '').trim().toLowerCase();
+                const issues = (Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []).filter(issue => {
+                    if (query && !getIssueLocation(issue).toLowerCase().includes(query)) return false;
+                    return statusKey === 'all' || getStatusGroup(issue) === statusKey;
+                });
+                const titleMap = {
+                    all: '전체 이슈 목록',
+                    created: '생성 이슈 목록',
+                    review: '검토 이슈 목록',
+                    delayed: '지연 이슈 목록',
+                    closed: '종료 이슈 목록'
+                };
+                openMonthlyIssueListModal(titleMap[statusKey] || '이슈 목록', issues);
+                return;
+            }
+            const monthButton = event.target.closest('.monthly-issue-month-button[data-month]');
+            if (monthButton) {
+                openMonthIssueModal(monthButton.dataset.month || '');
+                return;
+            }
+            const target = event.target.closest('.monthly-issue-structure-cell[data-location], .bim-chart-clickable[data-location]');
+            if (!target) return;
+            openStructureIssueModal(target.dataset.location || '', target.dataset.month || '');
+        });
+    }
 }
 
 function getIssueTypeText(issue) {
@@ -1001,6 +1616,42 @@ function setConstructionViewerTitle(message) {
     if (title && message) title.textContent = message;
 }
 
+function getConstructionViewStateKey(zone) {
+    return CONSTRUCTION_VIEW_STATE_PREFIX + String(zone || 'default');
+}
+
+function saveConstructionViewerState(zone) {
+    const viewer = window.constructionProgressViewer;
+    const zoneMeta = CONSTRUCTION_ZONES[zone];
+    if (!viewer || typeof viewer.getState !== 'function') {
+        setConstructionProgressNote('저장할 3D 뷰어 시점을 찾지 못했습니다.');
+        return false;
+    }
+    try {
+        const state = viewer.getState({ viewport: true });
+        localStorage.setItem(getConstructionViewStateKey(zone), JSON.stringify(state));
+        setConstructionProgressNote(`${zoneMeta ? zoneMeta.label : '현재'} 뷰 시점을 저장했습니다.`);
+        return true;
+    } catch (error) {
+        console.warn('[Construction Progress] save view state failed:', error);
+        setConstructionProgressNote('뷰 시점 저장 중 오류가 발생했습니다.');
+        return false;
+    }
+}
+
+function restoreConstructionViewerState(zone, viewer) {
+    if (!viewer || typeof viewer.restoreState !== 'function') return false;
+    try {
+        const raw = localStorage.getItem(getConstructionViewStateKey(zone));
+        if (!raw) return false;
+        const state = JSON.parse(raw);
+        return viewer.restoreState(state, null, true);
+    } catch (error) {
+        console.warn('[Construction Progress] restore view state failed:', error);
+        return false;
+    }
+}
+
 function hideConstructionMiniViewerToolbar(viewer) {
     try {
         if (viewer && viewer.toolbar && viewer.toolbar.container) {
@@ -1017,12 +1668,31 @@ function hideConstructionMiniViewerToolbar(viewer) {
     }
 }
 
+function resizeConstructionViewCube() {
+    const container = document.getElementById('bim-progress-mini-viewer');
+    if (!container) return;
+    const cube = container.querySelector('.viewcubeWrapper, .ViewCubeUi, .adsk-viewcube, .viewcube');
+    if (!cube) return;
+    cube.style.transform = 'scale(0.68)';
+    cube.style.transformOrigin = 'top right';
+    cube.style.top = '8px';
+    cube.style.right = '8px';
+    cube.style.left = 'auto';
+    ['.viewcube', '.adsk-viewcube'].forEach(selector => {
+        cube.querySelectorAll(selector).forEach(child => {
+            child.style.transform = '';
+            child.style.transformOrigin = '';
+        });
+    });
+}
+
 async function getConstructionMiniViewer() {
     const container = document.getElementById('bim-progress-mini-viewer');
     if (!container) return null;
 
     if (window.constructionProgressViewer && window.constructionProgressViewer.impl) {
         hideConstructionMiniViewerToolbar(window.constructionProgressViewer);
+        resizeConstructionViewCube();
         return window.constructionProgressViewer;
     }
 
@@ -1031,9 +1701,14 @@ async function getConstructionMiniViewer() {
 
     const viewer = await viewerModule.initViewer(container, true);
     hideConstructionMiniViewerToolbar(viewer);
+    resizeConstructionViewCube();
     if (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.TOOLBAR_CREATED_EVENT) {
-        viewer.addEventListener(Autodesk.Viewing.TOOLBAR_CREATED_EVENT, () => hideConstructionMiniViewerToolbar(viewer));
+        viewer.addEventListener(Autodesk.Viewing.TOOLBAR_CREATED_EVENT, () => {
+            hideConstructionMiniViewerToolbar(viewer);
+            resizeConstructionViewCube();
+        });
     }
+    setTimeout(resizeConstructionViewCube, 500);
     window.constructionProgressViewer = viewer;
     return viewer;
 }
@@ -1096,20 +1771,62 @@ async function openConstructionZoneViewer(zone) {
     }
 
     await viewerModule.loadAggregated(viewer, models);
+    window._constructionActiveModelUrns = models.map(model => model.urn || model.versionId || model.id).filter(Boolean);
+    window._constructionActiveModelNames = models.map(model => model.name).filter(Boolean);
     window._constructionActiveViewerZone = zone;
 
     try {
         if (typeof viewer.resize === 'function') viewer.resize();
-        if (typeof viewer.fitToView === 'function') viewer.fitToView();
+        const restored = restoreConstructionViewerState(zone, viewer);
+        if (!restored && typeof viewer.fitToView === 'function') viewer.fitToView();
         if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
             viewer.impl.invalidate(true, true, true);
         }
+        resizeConstructionViewCube();
     } catch (error) {
         console.warn('[Construction Progress] viewer fit failed:', error);
     }
 
     setConstructionProgressNote(`${zoneMeta.label} 폴더 모델 ${models.length}개를 표시 중입니다.`);
     return true;
+}
+
+async function reloadActiveConstructionZoneModels() {
+    const zone = window._constructionActiveViewerZone || '';
+    const zoneMeta = CONSTRUCTION_ZONES[zone];
+    if (!zoneMeta) {
+        setConstructionProgressNote('먼저 신설 또는 증설 영역을 선택해 주세요.');
+        return;
+    }
+    const viewer = window.constructionProgressViewer;
+    if (viewer && typeof viewer.getAllModels === 'function') {
+        try {
+            viewer.getAllModels().forEach(model => viewer.unloadModel(model));
+        } catch (error) {
+            console.warn('[Construction Progress] failed to clear models before merge reload:', error);
+        }
+    }
+    window._constructionActiveViewerZone = '';
+    await openConstructionZoneViewer(zone);
+}
+
+async function openConstructionMergePanel() {
+    const zone = window._constructionActiveViewerZone || '';
+    const zoneMeta = CONSTRUCTION_ZONES[zone];
+    const viewer = window.constructionProgressViewer;
+    if (!zoneMeta || !viewer) {
+        setConstructionProgressNote('먼저 신설 또는 증설 영역을 선택해 주세요.');
+        return;
+    }
+
+    if (typeof window.refreshGlobalVisibilityPopup === 'function') {
+        const mainUrn = Array.isArray(window._constructionActiveModelUrns) ? window._constructionActiveModelUrns[0] : '';
+        await window.refreshGlobalVisibilityPopup(mainUrn, [], viewer);
+        setConstructionProgressNote(`${zoneMeta.label} 뷰어의 모델 병합 목록을 열었습니다.`);
+        return;
+    }
+
+    await reloadActiveConstructionZoneModels();
 }
 
 async function focusConstructionZone(zone) {
@@ -1162,11 +1879,29 @@ function initConstructionProgressPanel() {
     if (!map || map.dataset.bound) return;
     map.dataset.bound = 'true';
     const backBtn = document.getElementById('bim-progress-viewer-back');
+    const mergeBtn = document.getElementById('bim-progress-viewer-merge');
+    const saveViewBtn = document.getElementById('bim-progress-viewer-save-view');
     if (backBtn) {
         backBtn.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
             closeConstructionViewerLayer();
+        });
+    }
+    if (mergeBtn && !mergeBtn.dataset.bound) {
+        mergeBtn.dataset.bound = 'true';
+        mergeBtn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openConstructionMergePanel();
+        });
+    }
+    if (saveViewBtn && !saveViewBtn.dataset.bound) {
+        saveViewBtn.dataset.bound = 'true';
+        saveViewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            saveConstructionViewerState(window._constructionActiveViewerZone || '');
         });
     }
     map.addEventListener('mouseover', event => {
@@ -2322,6 +3057,20 @@ async function refreshConstructionBimDashboard() {
     const issues = await loadIssues();
     renderGantt(issues);
     renderClashStructureChart(issues);
+    renderMonthlyIssueStatusTab(issues);
+}
+
+async function refreshMonthlyIssueStatusTab(force = false) {
+    bindMonthlyIssueStatusTab();
+    const root = document.getElementById('monthly-issue-status-root');
+    if (root && (!window._constructionIssueCache || force)) {
+        root.innerHTML = '<div class="bim-db-placeholder">월간 이슈 데이터를 불러오는 중입니다.</div>';
+    }
+    const issues = !force && Array.isArray(window._constructionIssueCache) && window._constructionIssueCache.length
+        ? mergeIssues([window._constructionIssueCache])
+        : await loadIssues();
+    window._constructionIssueCache = issues;
+    renderMonthlyIssueStatusTab(issues);
 }
 
 export function initConstructionBimDashboard() {
@@ -2333,10 +3082,12 @@ export function initConstructionBimDashboard() {
     initWeeklyTaskBoard();
     initStructureIssueBoard();
     initConstructionProgressPanel();
+    bindMonthlyIssueStatusTab();
     refreshConstructionBimDashboard();
 }
 
 window.refreshConstructionBimDashboard = refreshConstructionBimDashboard;
+window.refreshMonthlyIssueStatusTab = refreshMonthlyIssueStatusTab;
 
 
 

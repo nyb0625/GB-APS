@@ -493,11 +493,21 @@ class FolderExplorer {
             this.container.style.display = 'flex';
             this.viewerContainer.style.display = 'none';
             if (this.backBtn) this.backBtn.style.display = 'none';
+            this.hideViewerFloatingControls();
         } else if (mode === 'viewer') {
             this.container.style.display = 'none';
             this.viewerContainer.style.display = 'block';
             if (this.backBtn) this.backBtn.style.display = 'block';
         }
+    }
+
+    hideViewerFloatingControls() {
+        const mainControls = document.getElementById('main-viewer-controls');
+        if (mainControls) mainControls.style.display = 'none';
+        if (typeof window.closeModelVisibilityPopup === 'function') {
+            window.closeModelVisibilityPopup();
+        }
+        window._modelVisibilityTargetViewer = null;
     }
 
     handleBackToExplorer() {

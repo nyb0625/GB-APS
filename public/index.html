@@ -15,7 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Dashboard CSS -->
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260803-clash-area4-1">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260805-monthly-end-only1">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     
@@ -915,6 +915,7 @@
 
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
+                <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
                 <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
                 <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
                     <i class="fas fa-chart-line"></i> 대시보드
@@ -1140,6 +1141,34 @@
         </div>
 
 
+            <div id="monthly-issue-status-tab" class="monthly-issue-status-tab" style="display:none;">
+                <section class="bim-db-panel monthly-issue-panel">
+                    <div class="bim-db-panel-head monthly-issue-head">
+                        <div>
+                            <div class="bim-db-panel-title"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</div>
+                            <div class="monthly-issue-subtitle">구조물별 월간 이슈 진행을 전체 구조물 기준으로 확인합니다.</div>
+                        </div>
+                        <div class="bim-db-panel-actions">
+                            <input id="monthly-issue-month" class="bim-filter-input" type="month" title="기준 월">
+                            <select id="monthly-issue-status-filter" class="bim-week-select" title="상태 필터">
+                                <option value="all">전체 상태</option>
+                                <option value="created">생성</option>
+                                <option value="review">진행/검토</option>
+                                <option value="delayed">지연</option>
+                                <option value="closed">완료</option>
+                            </select>
+                            <input id="monthly-issue-search" class="bim-filter-input" type="search" placeholder="구조물 검색">
+                            <button id="monthly-issue-refresh" class="bim-db-refresh" type="button" title="새로고침">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="monthly-issue-status-root" class="monthly-issue-status-root">
+                        <div class="bim-db-placeholder">월간 이슈 데이터를 불러오는 중입니다.</div>
+                    </div>
+                </section>
+            </div>
+
             <div id="construction-bim-dashboard" class="construction-bim-dashboard" style="display:none;">
                 <section class="bim-db-panel bim-db-panel-issue">
                     <div class="bim-db-panel-head">
@@ -1193,9 +1222,17 @@
                             <div class="bim-progress-viewer-layer">
                                 <div class="bim-progress-viewer-head">
                                     <span id="bim-progress-viewer-title">3D Viewer</span>
-                                    <button id="bim-progress-viewer-back" class="bim-icon-btn" type="button" title="영역도로 돌아가기">
-                                        <i class="fas fa-arrow-left"></i>
-                                    </button>
+                                    <div class="bim-progress-viewer-tools">
+                                        <button id="bim-progress-viewer-merge" class="bim-icon-btn" type="button" title="현재 영역 모델 병합 보기">
+                                            <i class="fas fa-layer-group"></i>
+                                        </button>
+                                        <button id="bim-progress-viewer-save-view" class="bim-icon-btn" type="button" title="현재 뷰 시점 저장">
+                                            <i class="fas fa-camera"></i>
+                                        </button>
+                                        <button id="bim-progress-viewer-back" class="bim-icon-btn" type="button" title="영역도로 돌아가기">
+                                            <i class="fas fa-arrow-left"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 <div id="bim-progress-mini-viewer" class="bim-progress-mini-viewer"></div>
                             </div>
@@ -1883,12 +1920,12 @@
     <!-- Autodesk Viewer Scripts -->
     <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
     <script type="module">
-        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260803-clash-area4-1';
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260805-monthly-end-only1';
         document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
     </script>
     <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
     <!-- Main Entry Point Module -->
-    <script src="./js/main.js?v=20260804-tab-preserve1" type="module"></script>
+    <script src="./js/main.js?v=20260805-reviewer-users1" type="module"></script>
 
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
@@ -1904,7 +1941,7 @@
             for (var i = 0; i < tabs.length; i++) {
                 tabs[i].classList.remove('active');
             }
-            var activeBtn = document.querySelector('.tab-btn[onclick*="' + tabName + '"]') || document.getElementById('main-tab-' + tabName + '-btn');
+            var activeBtn = document.getElementById('main-tab-' + tabName + '-btn') || document.querySelector('.tab-btn[onclick="switchTab(\'' + tabName + '\')"]');
             if (activeBtn) activeBtn.classList.add('active');
 
             var dashboard = document.getElementById('tab-content-dashboard');
@@ -1912,6 +1949,7 @@
             var issue = document.getElementById('tab-content-issue');
             var cctv = document.getElementById('tab-content-cctv');
             var construction = document.getElementById('construction-bim-dashboard');
+            var monthlyIssues = document.getElementById('monthly-issue-status-tab');
 
             // 🚨 이슈/대시보드/CCTV 탭에 솔리드 배경색을 부여하여 뒤에 숨은 뷰어를 가림
             if (dashboard) {
@@ -1921,7 +1959,7 @@
                 // 대시보드 탭 최초 전환 시 dashboard.js lazy import
                 if (tabName === 'dashboard' && !window._dashboardInited) {
                     window._dashboardInited = true;
-                    import('./js/dashboard.js?v=20260803-forma-dashboard1')
+                    import('./js/dashboard.js?v=20260805-visible-issues1')
                         .then(mod => { if (typeof mod.initDashboard === 'function') mod.initDashboard(); })
                         .catch(err => console.error('[Dashboard] init 실패:', err));
                 } else if (tabName === 'dashboard' && window.refreshDashboard) {
@@ -1936,6 +1974,14 @@
                 construction.style.zIndex = '10';
                 if (tabName === 'construction' && window.refreshConstructionBimDashboard) {
                     window.refreshConstructionBimDashboard();
+                }
+            }
+            if (monthlyIssues) {
+                monthlyIssues.style.display = (tabName === 'monthly-issues') ? 'flex' : 'none';
+                monthlyIssues.style.position = 'relative';
+                monthlyIssues.style.zIndex = '10';
+                if (tabName === 'monthly-issues' && window.refreshMonthlyIssueStatusTab) {
+                    window.refreshMonthlyIssueStatusTab();
                 }
             }
             if (issue) {
@@ -2000,7 +2046,7 @@
         window.addEventListener('DOMContentLoaded', function() {
             var params = new URLSearchParams(window.location.search);
             var tabParam = params.get('tab') || 'dashboard';
-            if (tabParam && ['dashboard', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
+            if (tabParam && ['dashboard', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
                 if (typeof window.switchTab === 'function') {
                     window._initialMainTabApplied = false;
                     window.switchTab(tabParam);

@@ -28,6 +28,10 @@ const formaIssuesCache = new Map();
 const formaIssueDetailCache = new Map();
 const placementLookupCache = new Map();
 const issueSnapshotCache = new Map();
+const FALLBACK_USER_NAMES = new Map([
+    ['783606258', '현대건설'],
+    ['2BTDKKFEB6SF', '기술연구소(AEC) 박도해']
+]);
 
 function stripBPrefix(id) {
     return String(id || '').replace(/^b\./, '');
@@ -152,10 +156,26 @@ function normalizeStatus(value) {
 
 function displayUser(value, userMap) {
     if (!value) return '';
-    if (typeof value === 'string') return userMap.get(value) || userMap.get(value.toLowerCase()) || (value === '783606258' ? '현대건설' : value);
-    const id = value.autodeskId || value.id || value.userId || value.uid || value.accountId || value.email;
+    if (typeof value === 'string') return userMap.get(value) || userMap.get(value.toLowerCase()) || FALLBACK_USER_NAMES.get(value) || FALLBACK_USER_NAMES.get(value.toUpperCase()) || value;
+    const id = value.autodeskId || value.autodesk_id || value.id || value.userId || value.user_id || value.uid || value.accountId || value.account_id || value.oxygenId || value.oxygen_id || value.email;
     const name = value.name || value.displayName || value.fullName || [value.firstName, value.lastName].filter(Boolean).join(' ') || value.email;
-    return name || userMap.get(id) || id || '';
+    if (name) return name;
+    if (id) return userMap.get(String(id)) || userMap.get(String(id).toLowerCase()) || FALLBACK_USER_NAMES.get(String(id)) || FALLBACK_USER_NAMES.get(String(id).toUpperCase()) || String(id);
+    return '';
+}
+
+function getWatcherReviewer(issue) {
+    const watchers = pick(issue, ['watcherObjects', 'attributes.watcherObjects', 'watchers', 'attributes.watchers'], []);
+    if (!Array.isArray(watchers) || !watchers.length) return '';
+    return watchers.find(item => item && (item.name || item.displayName || item.id || item.userId || item.autodeskId || item.email)) || watchers[0];
+}
+
+function getReviewerRaw(issue) {
+    const customReviewer = getCustomValue(issue, ['확인자', '검토자', 'Reviewer']);
+    if (customReviewer) return customReviewer;
+    const watcherReviewer = getWatcherReviewer(issue);
+    if (watcherReviewer) return watcherReviewer;
+    return pick(issue, ['reviewer', 'reviewedBy', 'verifier', 'attributes.reviewer', 'attributes.reviewedBy', 'attributes.verifier'], '');
 }
 
 function normalizeType(issue, typeMap) {
@@ -767,9 +787,10 @@ async function fetchProjectMembers(projectId, token) {
             const rows = json.results || json.data || json.users || [];
             rows.forEach(u => {
                 const name = u.name || u.displayName || [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '';
-                [u.autodeskId, u.id, u.userId, u.uid, u.email].filter(Boolean).forEach(id => {
+                [u.autodeskId, u.autodesk_id, u.id, u.userId, u.user_id, u.uid, u.accountId, u.account_id, u.oxygenId, u.oxygen_id, u.email].filter(Boolean).forEach(id => {
                     map.set(String(id), name);
                     map.set(String(id).toLowerCase(), name);
+                    map.set(String(id).toUpperCase(), name);
                 });
             });
             if (map.size) return map;
@@ -777,8 +798,11 @@ async function fetchProjectMembers(projectId, token) {
             console.warn('[Forma Issues] member fetch skipped:', err.message);
         }
     }
-    map.set('783606258', '현대건설');
-    map.set('783606258', '현대건설');
+    FALLBACK_USER_NAMES.forEach((name, id) => {
+        map.set(id, name);
+        map.set(id.toLowerCase(), name);
+        map.set(id.toUpperCase(), name);
+    });
     return map;
 }
 
@@ -1145,7 +1169,7 @@ function normalizeFormaIssue(issue, typeMap, userMap) {
     const placementInfo = normalizePlacementInfo(issue);
     const assigneeRaw = pick(issue, ['assignedTo', 'assignee', 'assignedToUser', 'attributes.assignedTo', 'attributes.assignee', 'attributes.assignedToUser'], '');
     const creatorRaw = pick(issue, ['createdBy', 'createdByUser', 'creator', 'attributes.createdBy', 'attributes.createdByUser', 'attributes.creator'], '');
-    const reviewerRaw = pick(issue, ['reviewer', 'reviewedBy', 'attributes.reviewer', 'attributes.reviewedBy'], '') || getCustomValue(issue, ['확인자', '검토자', 'Reviewer']);
+    const reviewerRaw = getReviewerRaw(issue);
     const attachments = pick(issue, ['attachments', 'attributes.attachments'], []);
     const refs = pick(issue, ['references', 'attributes.references', 'linkedDocuments'], []);
     const comments = pick(issue, ['comments', 'attributes.comments'], []);
@@ -1190,7 +1214,7 @@ function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new 
     const placementInfo = normalizePlacementInfo(issue);
     const assigneeRaw = pick(issue, ['assignedTo', 'assignee', 'assignedToUser', 'attributes.assignedTo', 'attributes.assignee', 'attributes.assignedToUser'], '');
     const creatorRaw = pick(issue, ['createdBy', 'createdByUser', 'creator', 'attributes.createdBy', 'attributes.createdByUser', 'attributes.creator'], '');
-    const reviewerRaw = pick(issue, ['reviewer', 'reviewedBy', 'attributes.reviewer', 'attributes.reviewedBy'], '') || getCustomValue(issue, ['확인자', '검토자', 'Reviewer']);
+    const reviewerRaw = getReviewerRaw(issue);
     const attachments = pick(issue, ['attachments', 'attributes.attachments'], []);
     const refs = pick(issue, ['references', 'attributes.references', 'linkedDocuments'], []);
     const comments = pick(issue, ['comments', 'attributes.comments'], []);

@@ -13,6 +13,591 @@
     color: #e5eefb;
 }
 
+.monthly-issue-status-tab {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    padding: 14px;
+    box-sizing: border-box;
+    background: #0b1220;
+    color: #e5eefb;
+    overflow: auto;
+}
+
+.monthly-issue-panel {
+    width: 100%;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+}
+
+.monthly-issue-head {
+    align-items: flex-start;
+}
+
+.monthly-issue-subtitle {
+    margin-top: 4px;
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.monthly-issue-status-root {
+    min-height: max-content;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+}
+
+.monthly-issue-head #monthly-issue-month,
+.monthly-issue-head #monthly-issue-status-filter {
+    display: none;
+}
+
+.monthly-issue-chart-wrap {
+    min-height: 0;
+    flex: 0 0 auto;
+    overflow: visible;
+}
+
+.monthly-issue-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+}
+
+.monthly-issue-workspace.has-drilldown {
+    grid-template-columns: minmax(0, 1fr) minmax(330px, 390px);
+    align-items: start;
+}
+
+.monthly-issue-chart {
+    min-height: max-content;
+    grid-template-rows: auto;
+}
+
+.monthly-issue-chart .bim-chart-yaxis,
+.monthly-issue-chart .bim-chart-plot {
+    grid-row: 1;
+}
+
+.monthly-issue-axis-row {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: minmax(180px, max-content) minmax(0, 1fr);
+    min-width: max-content;
+    min-height: 34px;
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    background: #111827;
+}
+
+.monthly-issue-axis-spacer {
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.monthly-issue-month-row {
+    display: grid;
+    grid-template-columns: repeat(var(--bim-month-count), var(--bim-month-width));
+}
+
+.monthly-issue-month-row .bim-chart-month {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.monthly-issue-month-button {
+    width: 100%;
+    border-top: 0;
+    border-left: 0;
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    background: transparent;
+    color: #cbd5e1;
+    font: inherit;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.monthly-issue-month-button:hover {
+    background: rgba(56, 189, 248, 0.12);
+    color: #e0f2fe;
+}
+
+.monthly-issue-yitem,
+.monthly-issue-chart-row {
+    height: 52px;
+}
+
+.monthly-issue-yitem {
+    align-content: center;
+}
+
+.monthly-issue-yitem.active,
+.monthly-issue-cell-active {
+    background: rgba(56, 189, 248, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.48);
+}
+
+.monthly-issue-drilldown {
+    position: sticky;
+    top: 8px;
+    max-height: calc(100vh - 150px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    border-radius: 8px;
+    background: #0f172a;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.monthly-drilldown-head {
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.94);
+}
+
+.monthly-drilldown-head span {
+    display: block;
+    color: #7dd3fc;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.monthly-drilldown-head strong {
+    display: block;
+    max-width: 280px;
+    margin-top: 3px;
+    color: #f8fafc;
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+.monthly-drilldown-kpis {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.monthly-drilldown-kpi {
+    min-height: 48px;
+    padding: 7px 8px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-left: 3px solid var(--monthly-kpi-color);
+    border-radius: 6px;
+    background: rgba(17, 24, 39, 0.7);
+}
+
+.monthly-drilldown-kpi span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+.monthly-drilldown-kpi strong {
+    display: block;
+    margin-top: 4px;
+    color: var(--monthly-kpi-color);
+    font-size: 18px;
+    line-height: 1;
+}
+
+.monthly-drilldown-section {
+    padding: 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    overflow: auto;
+}
+
+.monthly-drilldown-section:nth-of-type(2) {
+    min-height: 0;
+    flex: 1;
+}
+
+.monthly-drilldown-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 34px;
+    margin-bottom: 10px;
+    padding: 7px 10px;
+    border-left: 3px solid #38bdf8;
+    border-bottom: 1px solid rgba(56, 189, 248, 0.28);
+    border-radius: 6px 6px 0 0;
+    background: rgba(14, 116, 144, 0.16);
+}
+
+.monthly-drilldown-section-head h3,
+.monthly-drilldown-people h4 {
+    margin: 0;
+    color: #e5eefb;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.monthly-drilldown-section-head span {
+    color: #7dd3fc;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.monthly-drilldown-clear-month {
+    height: 24px;
+    border: 1px solid rgba(56, 189, 248, 0.32);
+    border-radius: 5px;
+    background: rgba(56, 189, 248, 0.1);
+    color: #7dd3fc;
+    font-size: 11px;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.monthly-drilldown-trend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 6px;
+}
+
+.monthly-drilldown-month {
+    min-height: 42px;
+    padding: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 6px;
+    background: rgba(17, 24, 39, 0.74);
+    color: #cbd5e1;
+    text-align: left;
+    cursor: pointer;
+}
+
+.monthly-drilldown-month.active,
+.monthly-drilldown-month:hover {
+    border-color: rgba(56, 189, 248, 0.55);
+    background: rgba(56, 189, 248, 0.14);
+}
+
+.monthly-drilldown-month span,
+.monthly-drilldown-month strong {
+    display: block;
+}
+
+.monthly-drilldown-month span {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+.monthly-drilldown-month strong {
+    margin-top: 3px;
+    color: #f8fafc;
+    font-size: 16px;
+}
+
+.monthly-drilldown-people-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.monthly-drilldown-person {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 28px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.monthly-drilldown-person span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monthly-drilldown-person strong {
+    color: #7dd3fc;
+    white-space: nowrap;
+}
+
+.monthly-drilldown-empty {
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+.monthly-issue-drilldown .bim-structure-issue-table {
+    min-width: 620px;
+    font-size: 11px;
+}
+
+.monthly-issue-popup-detail {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.monthly-issue-popup-detail .monthly-drilldown-kpis {
+    grid-template-columns: repeat(6, minmax(92px, 1fr));
+}
+
+.monthly-issue-popup-detail .monthly-drilldown-section {
+    flex: 0 0 auto;
+    overflow: visible;
+}
+
+.monthly-issue-popup-detail .monthly-popup-list-section {
+    min-height: 260px;
+    overflow: auto;
+}
+
+.monthly-issue-popup-detail .monthly-drilldown-trend {
+    grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+}
+
+.monthly-issue-popup-detail .monthly-popup-structure-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.monthly-popup-structure-filter span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monthly-issue-popup-detail .monthly-drilldown-people-grid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.monthly-issue-popup-detail .monthly-popup-title-head {
+    margin: 10px 10px 8px;
+}
+
+@media (max-width: 1180px) {
+    .monthly-issue-workspace.has-drilldown {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .monthly-issue-drilldown {
+        position: static;
+        max-height: none;
+    }
+}
+
+@media (max-width: 760px) {
+    .monthly-issue-popup-detail .monthly-drilldown-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .monthly-issue-popup-detail .monthly-drilldown-people-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.monthly-issue-popup-detail .bim-structure-issue-summary {
+    position: static;
+    top: auto;
+}
+
+.monthly-issue-popup-detail .bim-structure-issue-table th {
+    position: static;
+    top: auto;
+}
+
+.monthly-issue-popup-detail .monthly-popup-list-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: min(460px, 52vh);
+    padding-top: 12px;
+}
+
+.monthly-issue-popup-detail .monthly-popup-list-section > .bim-structure-issue-table,
+.monthly-issue-popup-detail .monthly-popup-list-section > .bim-db-placeholder {
+    flex: 0 0 auto;
+}
+
+.monthly-issue-kpis-compact {
+    grid-template-columns: repeat(6, minmax(78px, 1fr));
+    gap: 6px;
+    padding: 8px 10px;
+}
+
+.monthly-issue-kpis-compact .monthly-issue-kpi {
+    min-height: 46px;
+    padding: 7px 9px;
+}
+
+.monthly-issue-kpis-compact .monthly-issue-kpi strong {
+    font-size: 18px;
+}
+
+.monthly-issue-kpis-compact .monthly-issue-kpi span {
+    font-size: 11px;
+}
+
+.monthly-issue-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(140px, 1fr));
+    gap: 10px;
+    padding: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.monthly-issue-kpis.monthly-issue-kpis-compact {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px 10px;
+}
+
+.monthly-issue-kpi {
+    min-height: 64px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-left: 3px solid var(--monthly-kpi-color);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.72);
+    text-align: left;
+    cursor: pointer;
+}
+
+.monthly-issue-kpi:hover {
+    background: rgba(56, 189, 248, 0.08);
+    border-color: rgba(56, 189, 248, 0.34);
+}
+
+.monthly-issue-kpi span {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.monthly-issue-kpi strong {
+    color: var(--monthly-kpi-color);
+    font-size: 24px;
+    line-height: 1;
+}
+
+.monthly-issue-table-wrap {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+}
+
+.monthly-issue-table {
+    width: 100%;
+    min-width: 920px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.monthly-issue-table th,
+.monthly-issue-table td {
+    padding: 10px 12px;
+    border-right: 1px solid rgba(148, 163, 184, 0.14);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monthly-issue-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.96);
+    font-weight: 900;
+    text-align: left;
+}
+
+.monthly-issue-row {
+    cursor: pointer;
+}
+
+.monthly-issue-row:hover {
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.monthly-issue-structure {
+    max-width: 100%;
+    border: 0;
+    background: transparent;
+    color: #f8fafc;
+    font: inherit;
+    font-weight: 900;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monthly-issue-progress {
+    width: calc(100% - 42px);
+    height: 8px;
+    display: inline-block;
+    vertical-align: middle;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.18);
+}
+
+.monthly-issue-progress span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #10b981;
+}
+
+.monthly-issue-table em {
+    display: inline-block;
+    width: 34px;
+    margin-left: 6px;
+    color: #94a3b8;
+    font-style: normal;
+    font-weight: 800;
+    text-align: right;
+}
+
+.monthly-issue-open-list {
+    height: 26px;
+    border: 1px solid rgba(56, 189, 248, 0.34);
+    border-radius: 5px;
+    background: rgba(56, 189, 248, 0.1);
+    color: #7dd3fc;
+    font-size: 12px;
+    font-weight: 900;
+    cursor: pointer;
+}
+
 .bim-db-panel {
     min-width: 0;
     min-height: 0;
@@ -127,6 +712,28 @@
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 
+.bim-chart-legend-dot {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(248, 250, 252, 0.78);
+    border-radius: 999px;
+}
+
+.bim-chart-legend-dot.start {
+    background: #38bdf8;
+}
+
+.bim-chart-legend-dot.end {
+    background: #10b981;
+}
+
+.bim-chart-legend-line {
+    width: 26px;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(125, 211, 252, 0.62);
+}
+
 .bim-chart {
     display: grid;
     grid-template-columns: minmax(180px, max-content) minmax(0, 1fr);
@@ -223,6 +830,65 @@
     background: rgba(148, 163, 184, 0.08);
 }
 
+.bim-dumbbell-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.bim-dumbbell-track {
+    position: relative;
+    width: calc(100% - 12px);
+    min-width: 58px;
+    height: 28px;
+    display: grid;
+    grid-template-columns: 24px minmax(14px, 1fr) 24px;
+    align-items: center;
+}
+
+.bim-dumbbell-line {
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(125, 211, 252, 0.62);
+}
+
+.bim-dumbbell-track.continuing .bim-dumbbell-line {
+    background: repeating-linear-gradient(
+        90deg,
+        rgba(148, 163, 184, 0.52) 0,
+        rgba(148, 163, 184, 0.52) 5px,
+        transparent 5px,
+        transparent 9px
+    );
+}
+
+.bim-dumbbell-dot,
+.bim-dumbbell-dot-spacer {
+    width: 24px;
+    height: 24px;
+}
+
+.bim-dumbbell-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid rgba(248, 250, 252, 0.78);
+    border-radius: 999px;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+}
+
+.bim-dumbbell-dot.start {
+    background: #38bdf8;
+}
+
+.bim-dumbbell-dot.end {
+    background: #10b981;
+}
+
 .bim-chart-xaxis-spacer {
     grid-column: 1;
     grid-row: 2;
@@ -247,6 +913,22 @@
     color: #cbd5e1;
     font-size: 11px;
     font-weight: 800;
+}
+
+.bim-db-panel.monthly-issue-panel {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+}
+
+.bim-chart.monthly-issue-chart {
+    height: auto;
+    grid-template-rows: auto;
+}
+
+.bim-chart.monthly-issue-chart .bim-chart-yaxis,
+.bim-chart.monthly-issue-chart .bim-chart-plot {
+    grid-row: 1;
 }
 
 .bim-work-tabs {
@@ -681,9 +1363,28 @@
     font-weight: 900;
 }
 
+.bim-progress-viewer-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .bim-progress-mini-viewer {
     flex: 1;
     min-height: 0;
+}
+
+#bim-progress-mini-viewer .viewcubeWrapper,
+#bim-progress-mini-viewer .ViewCubeUi {
+    transform: scale(0.68);
+    transform-origin: top right;
+}
+
+#bim-progress-mini-viewer .viewcubeWrapper,
+#bim-progress-mini-viewer .ViewCubeUi {
+    top: 8px !important;
+    right: 8px !important;
+    left: auto !important;
 }
 
 .bim-progress-side {
@@ -727,6 +1428,17 @@
     color: #cbd5e1;
     font-size: 11px;
     font-weight: 900;
+}
+
+.bim-chart-seg-continuing {
+    opacity: 0.42;
+    background-image: repeating-linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.24) 0,
+        rgba(255, 255, 255, 0.24) 3px,
+        transparent 3px,
+        transparent 7px
+    );
 }
 
 .bim-schedule-controls {
@@ -908,7 +1620,8 @@
 }
 
 .bim-timeline-dialog {
-    width: min(1100px, calc(100vw - 32px));
+    width: min(1320px, calc(100vw - 32px));
+    height: min(840px, calc(100vh - 48px));
 }
 
 .bim-task-dialog-head {
@@ -985,6 +1698,7 @@
 }
 
 .bim-timeline-modal-body {
+    flex: 1;
     min-height: 0;
     overflow: auto;
     background: #111827;
@@ -1022,8 +1736,9 @@
 
 .bim-structure-issue-table {
     width: 100%;
+    min-width: 1080px;
     border-collapse: collapse;
-    table-layout: fixed;
+    table-layout: auto;
     font-size: 12px;
 }
 
@@ -1248,4 +1963,24 @@
     min-width: 520px;
     width: 100% !important;
     height: 100% !important;
+}
+
+/* Monthly issue popup list layout override */
+.monthly-issue-popup-detail .bim-structure-issue-summary,
+.monthly-issue-popup-detail .bim-structure-issue-table th {
+    position: static !important;
+    top: auto !important;
+}
+
+.monthly-issue-popup-detail .monthly-popup-list-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: min(460px, 52vh);
+    padding-top: 12px;
+    overflow: auto;
+}
+
+.monthly-issue-popup-detail .bim-structure-issue-table {
+    margin-top: 0;
 }

@@ -254,6 +254,28 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
         return text || '-';
     }
 
+    function resolveKnownFormaUser(value) {
+        var id = String(value || '').trim();
+        if (id === '783606258') return '현대건설';
+        if (id.toUpperCase() === '2BTDKKFEB6SF') return '기술연구소(AEC) 박도해';
+        return id;
+    }
+
+    function resolveIssueReviewer(issue) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+        var watchers = raw && (raw.watcherObjects || (raw.attributes && raw.attributes.watcherObjects) || raw.watchers || (raw.attributes && raw.attributes.watchers));
+        if (Array.isArray(watchers) && watchers.length) {
+            var item = watchers.find(function(candidate) {
+                return candidate && (candidate.name || candidate.displayName || candidate.id || candidate.userId || candidate.autodeskId || candidate.email);
+            }) || watchers[0];
+            if (item) {
+                if (typeof item === 'string') return resolveKnownFormaUser(item);
+                return item.name || item.displayName || item.fullName || item.email || resolveKnownFormaUser(item.id || item.userId || item.autodeskId || item.accountId || item.oxygenId || '');
+            }
+        }
+        return resolveKnownFormaUser(issue && (issue.reviewer || issue.verifier) || '');
+    }
+
     function getIssueFieldValue(issue, key) {
         if (!issue) return '-';
         if (key === 'displayId') return issue.displayId || issue.issueNumber || issue.dbId || issue.id || '-';
@@ -265,7 +287,7 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
         if (key === 'startDate') return normalizeDate(issue.startDate || issue.startdate);
         if (key === 'placement') return issue.placement || '-';
         if (key === 'desc') return issue.description || issue.desc || '-';
-        if (key === 'reviewer') return issue.reviewer || issue.verifier || '-';
+        if (key === 'reviewer') return resolveIssueReviewer(issue) || '-';
         if (key === 'location') return issue.location || issue.locationName || '-';
         if (key === 'attachments') return issue.attachments || '-';
         if (key === 'references') return issue.references || '-';
@@ -6268,6 +6290,29 @@ window.bindIssueItemClickEvents = function() {
         return text.indexOf('T') > -1 ? text.split('T')[0] : text;
     }
 
+    function resolveKnownUser(value) {
+        var id = String(value || '').trim();
+        if (id === '783606258') return '현대건설';
+        if (id.toUpperCase() === '2BTDKKFEB6SF') return '기술연구소(AEC) 박도해';
+        return id;
+    }
+
+    function resolveReviewer(issue) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+        var watchers = raw && (raw.watcherObjects || (raw.attributes && raw.attributes.watcherObjects) || raw.watchers || (raw.attributes && raw.attributes.watchers));
+        if (Array.isArray(watchers) && watchers.length) {
+            var item = watchers.find(function(candidate) {
+                return candidate && (candidate.name || candidate.displayName || candidate.id || candidate.userId || candidate.autodeskId || candidate.email);
+            }) || watchers[0];
+            if (item) {
+                if (typeof item === 'string') return resolveKnownUser(item);
+                var id = item.id || item.userId || item.autodeskId || item.accountId || item.oxygenId || '';
+                return item.name || item.displayName || item.fullName || item.email || resolveKnownUser(id);
+            }
+        }
+        return resolveKnownUser(issue && (issue.reviewer || issue.verifier) || '');
+    }
+
     function field(issue, key) {
         if (!issue) return '-';
         var value = '-';
@@ -6286,7 +6331,7 @@ window.bindIssueItemClickEvents = function() {
             }
         }
         else if (key === 'desc') value = issue.description || issue.desc;
-        else if (key === 'reviewer') value = issue.reviewer || issue.verifier;
+        else if (key === 'reviewer') value = resolveReviewer(issue);
         else if (key === 'location') value = issue.location || issue.locationName;
         else if (key === 'attachments') value = issue.attachments;
         else if (key === 'references') value = issue.references;

@@ -60,6 +60,7 @@ function getAllIssues() {
     const seen = {};
     return raw.filter(item => {
         if (!item) return false;
+        if (!isVisibleIssueForDashboard(item)) return false;
         const id = String(item.id || item.displayId || item.dbId || item.title || '');
         if (!id) return false;
         if (seen[id]) return false;
@@ -68,10 +69,15 @@ function getAllIssues() {
     });
 }
 
+function isVisibleIssueForDashboard(issue) {
+    const typeText = String(issue && (issue.typePath || issue.type || issue.category || '') || '');
+    return typeText.indexOf('\uAC74\uD654') === -1;
+}
+
 async function loadDashboardFormaIssues(force = false) {
     if (dashboardFormaLoading) return;
     if (!force && Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length) {
-        dashboardFormaIssues = window._gangbukFormaCache;
+        dashboardFormaIssues = window._gangbukFormaCache.filter(isVisibleIssueForDashboard);
         refreshIssueWidgets();
         return;
     }
@@ -80,7 +86,7 @@ async function loadDashboardFormaIssues(force = false) {
         const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const json = await resp.json();
-        dashboardFormaIssues = Array.isArray(json.data) ? json.data : [];
+        dashboardFormaIssues = (Array.isArray(json.data) ? json.data : []).filter(isVisibleIssueForDashboard);
         window._gangbukFormaCache = dashboardFormaIssues;
         window.currentIssueList = dashboardFormaIssues;
         window.currentFilteredIssues = dashboardFormaIssues.slice();
