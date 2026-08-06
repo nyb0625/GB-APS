@@ -316,21 +316,30 @@ function isVisibleIssueForMainTabs(issue) {
 }
 
 async function loadIssues() {
-    let formaIssues = [];
-    try {
-        const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
-        if (resp.ok) {
-            const json = await resp.json();
-            formaIssues = (Array.isArray(json.data) ? json.data : []).filter(isVisibleIssueForMainTabs);
-            window._gangbukFormaCache = formaIssues;
-            return mergeIssues([formaIssues]);
-        }
-    } catch (err) {
-        console.warn('[Construction BIM Dashboard] Forma issue fetch failed:', err);
+    // 🚨 [강력 규제] 오직 '이슈' 탭의 Single Source of Truth(window._gangbukFormaSSOT)만 사용
+    const ssot = window._gangbukFormaSSOT || window._gangbukFormaCache;
+    if (Array.isArray(ssot) && ssot.length) {
+        const filtered = ssot.filter(isVisibleIssueForMainTabs);
+        return mergeIssues([filtered]);
     }
 
-    if (Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length) {
-        return mergeIssues([window._gangbukFormaCache]);
+    let formaIssues = [];
+    try {
+        if (typeof window.loadFormaIssuesForMainTab === 'function') {
+            formaIssues = await window.loadFormaIssuesForMainTab(false);
+        } else {
+            const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const json = await resp.json();
+                formaIssues = Array.isArray(json.data) ? json.data : [];
+            }
+        }
+        formaIssues = (Array.isArray(formaIssues) ? formaIssues : []).filter(isVisibleIssueForMainTabs);
+        window._gangbukFormaSSOT = formaIssues;
+        window._gangbukFormaCache = formaIssues;
+        return mergeIssues([formaIssues]);
+    } catch (err) {
+        console.warn('[Construction BIM Dashboard] Forma issue fetch failed:', err);
     }
     return [];
 }
@@ -2879,27 +2888,34 @@ function closeTaskModal() {
     modal.dataset.taskId = '';
 }
 
+let isSavingWeeklyTask = false;
 function saveTaskFromModal() {
-    const modal = document.getElementById('bim-task-modal');
-    const values = getTaskFormValues();
-    const tasks = getAllWeeklyTasks();
-    const mode = modal ? modal.dataset.mode : 'add';
-    const taskId = modal ? modal.dataset.taskId : '';
+    if (isSavingWeeklyTask) return;
+    isSavingWeeklyTask = true;
+    try {
+        const modal = document.getElementById('bim-task-modal');
+        const values = getTaskFormValues();
+        const tasks = getAllWeeklyTasks();
+        const mode = modal ? modal.dataset.mode : 'add';
+        const taskId = modal ? modal.dataset.taskId : '';
 
-    if (mode === 'edit' && taskId) {
-        const idx = tasks.findIndex(task => task.id === taskId);
-        if (idx > -1) tasks[idx] = { ...tasks[idx], ...values };
-    } else {
-        tasks.push({
-            id: `task-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            ...values
-        });
+        if (mode === 'edit' && taskId) {
+            const idx = tasks.findIndex(task => task.id === taskId);
+            if (idx > -1) tasks[idx] = { ...tasks[idx], ...values };
+        } else {
+            tasks.push({
+                id: `task-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                ...values
+            });
+        }
+
+        setAllWeeklyTasks(tasks);
+        renderWeeklyTaskBoard();
+        refreshTimelineModal();
+        closeTaskModal();
+    } finally {
+        isSavingWeeklyTask = false;
     }
-
-    setAllWeeklyTasks(tasks);
-    renderWeeklyTaskBoard();
-    refreshTimelineModal();
-    closeTaskModal();
 }
 
 function deleteTask(taskId) {
@@ -2930,7 +2946,6 @@ function initWeeklyTaskBoard() {
 
     const closeBtn = document.getElementById('bim-task-close-btn');
     const cancelBtn = document.getElementById('bim-task-cancel-btn');
-    const saveBtn = document.getElementById('bim-task-save-btn');
     if (closeBtn && !closeBtn.dataset.bound) {
         closeBtn.dataset.bound = 'true';
         closeBtn.addEventListener('click', closeTaskModal);
@@ -2938,10 +2953,6 @@ function initWeeklyTaskBoard() {
     if (cancelBtn && !cancelBtn.dataset.bound) {
         cancelBtn.dataset.bound = 'true';
         cancelBtn.addEventListener('click', closeTaskModal);
-    }
-    if (saveBtn && !saveBtn.dataset.bound) {
-        saveBtn.dataset.bound = 'true';
-        saveBtn.addEventListener('click', saveTaskFromModal);
     }
     const timelineCloseBtn = document.getElementById('bim-timeline-close-btn');
     if (timelineCloseBtn && !timelineCloseBtn.dataset.bound) {
@@ -3063,12 +3074,11 @@ async function refreshConstructionBimDashboard() {
 async function refreshMonthlyIssueStatusTab(force = false) {
     bindMonthlyIssueStatusTab();
     const root = document.getElementById('monthly-issue-status-root');
-    if (root && (!window._constructionIssueCache || force)) {
+    if (root && (!window._gangbukFormaCache || force)) {
         root.innerHTML = '<div class="bim-db-placeholder">월간 이슈 데이터를 불러오는 중입니다.</div>';
     }
-    const issues = !force && Array.isArray(window._constructionIssueCache) && window._constructionIssueCache.length
-        ? mergeIssues([window._constructionIssueCache])
-        : await loadIssues();
+    // 🚨 [강력 규제] 오직 '이슈' 탭 캐시(_gangbukFormaCache) 기반으로만 월간 이슈 현황 구성
+    const issues = await loadIssues();
     window._constructionIssueCache = issues;
     renderMonthlyIssueStatusTab(issues);
 }

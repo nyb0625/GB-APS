@@ -49,16 +49,14 @@ export function initDashboard() {
    데이터 헬퍼
 ───────────────────────────────────────────── */
 function getAllIssues() {
-    const forma = Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length
-        ? window._gangbukFormaCache
-        : dashboardFormaIssues;
-    let l1 = [], l2 = [], l3 = [];
-    try { l1 = JSON.parse(localStorage.getItem('aps_project_issues')      || '[]'); } catch(e) {}
-    try { l2 = JSON.parse(localStorage.getItem('my_saved_issues')         || '[]'); } catch(e) {}
-    try { l3 = JSON.parse(localStorage.getItem('my_saved_compare_issues') || '[]'); } catch(e) {}
-    const raw = (Array.isArray(forma) ? forma : []).concat(l1).concat(l2).concat(l3);
+    // 🚨 [강력 규제] 오직 '이슈' 탭의 Single Source of Truth(window._gangbukFormaSSOT)만 사용
+    const forma = (Array.isArray(window._gangbukFormaSSOT) && window._gangbukFormaSSOT.length)
+        ? window._gangbukFormaSSOT
+        : ((Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length)
+            ? window._gangbukFormaCache
+            : dashboardFormaIssues);
     const seen = {};
-    return raw.filter(item => {
+    return (Array.isArray(forma) ? forma : []).filter(item => {
         if (!item) return false;
         if (!isVisibleIssueForDashboard(item)) return false;
         const id = String(item.id || item.displayId || item.dbId || item.title || '');
@@ -70,26 +68,50 @@ function getAllIssues() {
 }
 
 function isVisibleIssueForDashboard(issue) {
-    const typeText = String(issue && (issue.typePath || issue.type || issue.category || '') || '');
-    return typeText.indexOf('\uAC74\uD654') === -1;
+    if (!issue) return false;
+    const typeText = String(issue.typePath || issue.type || issue.category || issue.issueType || '');
+    if (typeText.indexOf('건화') !== -1) return false;
+    try {
+        const fullStr = JSON.stringify(issue).normalize('NFC').toLowerCase();
+        if (fullStr.indexOf('건화') !== -1) return false;
+    } catch (e) {}
+    return true;
+}
+
+function isVisibleIssueForMainTabs(issue) {
+    if (!issue) return false;
+    const typeText = String(issue.typePath || issue.type || issue.category || issue.issueType || '');
+    if (typeText.indexOf('건화') !== -1) return false;
+    try {
+        const fullStr = JSON.stringify(issue).normalize('NFC').toLowerCase();
+        if (fullStr.indexOf('건화') !== -1) return false;
+    } catch (e) {}
+    return true;
 }
 
 async function loadDashboardFormaIssues(force = false) {
     if (dashboardFormaLoading) return;
-    if (!force && Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length) {
-        dashboardFormaIssues = window._gangbukFormaCache.filter(isVisibleIssueForDashboard);
+    const ssot = window._gangbukFormaSSOT || window._gangbukFormaCache;
+    if (!force && Array.isArray(ssot) && ssot.length) {
+        dashboardFormaIssues = ssot.filter(isVisibleIssueForDashboard);
         refreshIssueWidgets();
         return;
     }
     dashboardFormaLoading = true;
     try {
-        const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const json = await resp.json();
-        dashboardFormaIssues = (Array.isArray(json.data) ? json.data : []).filter(isVisibleIssueForDashboard);
+        let fetched = [];
+        if (typeof window.loadFormaIssuesForMainTab === 'function') {
+            fetched = await window.loadFormaIssuesForMainTab(force);
+        } else {
+            const resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
+            if (resp.ok) {
+                const json = await resp.json();
+                fetched = Array.isArray(json.data) ? json.data : [];
+            }
+        }
+        dashboardFormaIssues = (Array.isArray(fetched) ? fetched : []).filter(isVisibleIssueForDashboard);
+        window._gangbukFormaSSOT = dashboardFormaIssues;
         window._gangbukFormaCache = dashboardFormaIssues;
-        window.currentIssueList = dashboardFormaIssues;
-        window.currentFilteredIssues = dashboardFormaIssues.slice();
         refreshIssueWidgets();
     } catch (err) {
         console.warn('[Dashboard] Forma issue sync skipped:', err.message);
@@ -894,11 +916,39 @@ function getWeekNumber(d) {
     return Math.ceil((((d - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
 }
 
+function getFormaTypeText(issue) {
+    return String(
+        issue.typePath ||
+        issue.type_path ||
+        issue.typeFullName ||
+        issue.type_full_name ||
+        issue.issueTypePath ||
+        issue.typeLabel ||
+        issue.type ||
+        ''
+    ).trim();
+}
+
+function getFormaCategory(issue) {
+    const t = (issue.issueType || issue.category || issue.trade || '').toLowerCase();
+    if (t.includes('간섭') || t.includes('clash')) return '간섭';
+    if (t.includes('설계') || t.includes('design')) return '설계';
+    if (t.includes('품질') || t.includes('quality')) return '품질';
+    if (t.includes('안전') || t.includes('safety')) return '안전';
+    if (t.includes('공정') || t.includes('schedule')) return '공정';
+    return issue.issueType || issue.category || '일반';
+}
+
 function renderIssueList() {
     const issues  = getAllIssues();
+    // 건화 포함 이슈 제외 + 진행 중 상태만
     const active  = issues.filter(i => {
         const s = (i.status || '').toLowerCase();
-        return !(s.includes('종료') || s.includes('closed') || s.includes('완료') || s.includes('resolved'));
+        const isDone = s.includes('종료') || s.includes('closed') || s.includes('완료') || s.includes('resolved');
+        if (isDone) return false;
+        const typeText = String(i.typePath || i.type || i.category || '');
+        if (typeText.includes('건화')) return false;
+        return true;
     });
 
     const tbody = document.getElementById('db-issue-table-body');
@@ -910,18 +960,16 @@ function renderIssueList() {
     }
 
     tbody.innerHTML = active.slice(0, 100).map(i => {
-        const statusCls = (() => {
-            const s = (i.status || '').toLowerCase();
-            if (s.includes('검토') || s.includes('review')) return 'status-review';
-            return 'status-open';
-        })();
-        const desc = (i.description || i.desc || i.reviewContent || '').substring(0, 30);
+        const typeText = getFormaTypeText(i);
+        const category = getFormaCategory(i);
+        const location = (i.location || i.locationName || i.structure || '-').substring(0, 10);
+        const assignee = (i.assignee || '-').substring(0, 8);
         return `<tr>
             <td title="${i.title || ''}">${i.title || '-'}</td>
-            <td>${(i.location || i.locationName || i.structure || '-').substring(0, 10)}</td>
-            <td>${(i.trade || '-').substring(0, 8)}</td>
-            <td>${(i.assignee || '-').substring(0, 8)}</td>
-            <td title="${desc}">${desc || '-'}</td>
+            <td title="${typeText}">${typeText ? typeText.substring(0, 16) : '-'}</td>
+            <td>${category.substring(0, 8)}</td>
+            <td>${location}</td>
+            <td>${assignee}</td>
         </tr>`;
     }).join('');
 }

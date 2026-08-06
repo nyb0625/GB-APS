@@ -73,11 +73,15 @@ async function initCctvBimViewer() {
     }
 
     try {
+        const resolvedUrn = await resolveCctvModelUrn(targetName, targetUrn);
         console.log(`[CCTV Viewer] Initializing model: ${targetName}`);
         const viewer = await initViewer(container, true);
         if (viewer) {
             window.cctvViewer = viewer;
-            await loadModel(viewer, targetUrn);
+            await loadModel(viewer, resolvedUrn);
+            if (window.applyModelRotation) {
+                window.applyModelRotation(viewer, resolvedUrn, true);
+            }
             console.log('[CCTV Viewer] Model loaded successfully.');
         }
     } catch (err) {
@@ -109,6 +113,7 @@ async function fetchLiveCctvChannels() {
 
 function getProxiedStreamUrl(url) {
     if (!url) return '';
+    if (url.startsWith('//')) url = 'https:' + url;
     if (url.startsWith('/api/cctv/proxy/')) return url;
     if (url.startsWith('https://')) {
         return '/api/cctv/proxy/https/' + url.replace('https://', '');
@@ -220,6 +225,52 @@ export function playOfficialHlsStream(rawStreamUrl, title) {
     }
 }
 
+function findUrnByModelName(treeNode, targetModelName) {
+    if (!treeNode || !targetModelName) return null;
+    const targetKey = String(targetModelName).normalize('NFC').toLowerCase();
+
+    if (Array.isArray(treeNode.files)) {
+        for (const file of treeNode.files) {
+            const fileName = String(file.name || '').normalize('NFC').toLowerCase();
+            if (fileName.includes(targetKey) || targetKey.includes(fileName.replace(/\.rvt$/i, ''))) {
+                return file.urn;
+            }
+        }
+        const coreKeyword = targetKey.replace(/^강북_구조물_신설_?/i, '').replace(/_c$/i, '').trim();
+        if (coreKeyword) {
+            for (const file of treeNode.files) {
+                const fileName = String(file.name || '').normalize('NFC').toLowerCase();
+                if (fileName.includes(coreKeyword)) {
+                    return file.urn;
+                }
+            }
+        }
+    }
+
+    if (Array.isArray(treeNode.children)) {
+        for (const child of treeNode.children) {
+            const found = findUrnByModelName(child, targetModelName);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+async function resolveCctvModelUrn(modelName, rawUrn) {
+    let treeData = window._globalRvtModelsCache;
+    if (!treeData && typeof window.fetchGlobalRvtModels === 'function') {
+        try { treeData = await window.fetchGlobalRvtModels(); } catch (e) {}
+    }
+    if (treeData && modelName) {
+        const dynamicUrn = findUrnByModelName(treeData, modelName);
+        if (dynamicUrn) {
+            console.log(`[CCTV Dynamic URN Resolved] ${modelName} -> ${dynamicUrn}`);
+            return dynamicUrn;
+        }
+    }
+    return rawUrn;
+}
+
 /**
  * Bind Channel Cards dynamically & restore saved viewpoint
  */
@@ -251,11 +302,12 @@ function bindChannelCards(channels) {
             const title = card.dataset.title || ch.title || ch.name;
             const imgPath = card.dataset.img || ch.img;
             const modelName = card.dataset.modelName || ch.modelName;
-            const modelUrn = card.dataset.modelUrn || ch.modelUrn;
+            const rawModelUrn = card.dataset.modelUrn || ch.modelUrn;
 
             currentCctvImg = imgPath;
             activeChannel = ch;
 
+            const modelUrn = await resolveCctvModelUrn(modelName, rawModelUrn);
             console.log(`[CCTV Click] Channel: ${title} | Stream: ${streamUrl} | Model URN: ${modelUrn}`);
 
             playOfficialHlsStream(streamUrl, title);
@@ -304,7 +356,7 @@ function initTimelineHandlers() {
             const title = card.dataset.title || card.querySelector('.thumb-info')?.textContent || 'CCTV';
             const imgPath = card.dataset.img || '/img/lapse/lapse_1.jpg';
             const modelName = card.dataset.modelName;
-            const modelUrn = card.dataset.modelUrn;
+            const rawModelUrn = card.dataset.modelUrn;
             const cctvId = card.dataset.cctvId || 'default';
 
             currentCctvImg = imgPath;
@@ -313,6 +365,7 @@ function initTimelineHandlers() {
                 playOfficialHlsStream(streamUrl, title);
             }
 
+            const modelUrn = await resolveCctvModelUrn(modelName, rawModelUrn);
             if (window.cctvViewer && modelUrn) {
                 const nameLabel = document.getElementById('loaded-model-name');
                 if (nameLabel) {
@@ -452,79 +505,198 @@ function initCctvSubTabs() {
     }
 }
 
+function getFormattedCurrentDateTime() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function compressCapturedCanvas(sourceElement, maxWidth = 800, quality = 0.75) {
+    try {
+        const srcW = sourceElement.videoWidth || sourceElement.naturalWidth || sourceElement.width || 800;
+        const srcH = sourceElement.videoHeight || sourceElement.naturalHeight || sourceElement.height || 450;
+        
+        let targetW = srcW;
+        let targetH = srcH;
+        if (targetW > maxWidth) {
+            targetH = Math.round((srcH * maxWidth) / targetW);
+            targetW = maxWidth;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(sourceElement, 0, 0, targetW, targetH);
+
+        return canvas.toDataURL('image/jpeg', quality);
+    } catch (e) {
+        console.warn('[CCTV Image Compression] Failed to compress image:', e);
+        return '/img/lapse/lapse_1.jpg';
+    }
+}
+
+function safeSaveCctvFieldIssues(issues) {
+    const STORAGE_KEY = 'cctv_field_issues';
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(issues));
+        return true;
+    } catch (err) {
+        console.warn('[CCTV Storage Quota Exceeded] Retrying with safe pruning:', err.message);
+        // Only if storage quota is strictly exceeded, prune snapshots for older items (index >= 20)
+        const pruned = issues.map((iss, index) => {
+            if (index >= 20 && iss.cctvSnapshot && iss.cctvSnapshot.startsWith('data:')) {
+                return { ...iss, cctvSnapshot: '/img/lapse/lapse_1.jpg' };
+            }
+            return iss;
+        });
+
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
+            return true;
+        } catch (err2) {
+            console.error('[CCTV Storage Save Failure]:', err2);
+            return false;
+        }
+    }
+}
+
 /**
  * 📸 CCTV 실시간 비디오 프레임 캡처 & 이슈 생성 모달 연동
  */
 function captureCctvStreamAndOpenModal() {
     const video = document.getElementById('cctv-video-player');
-    let dataUrl = '/img/lapse/lapse_1.jpg';
+    const fallbackImg = document.getElementById('cctv-fallback-img');
+    let dataUrl = currentCctvImg || '/img/lapse/lapse_1.jpg';
 
-    if (video && video.videoWidth > 0 && video.videoHeight > 0) {
-        try {
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            dataUrl = canvas.toDataURL('image/png');
-        } catch (e) {
-            console.warn('[CCTV Frame Capture] Canvas drawImage cross-origin restriction, fallback to static img:', e.message);
-            dataUrl = currentCctvImg;
+    if (video && video.style.display !== 'none' && video.videoWidth > 0 && video.videoHeight > 0) {
+        dataUrl = compressCapturedCanvas(video, 800, 0.75);
+    } else if (fallbackImg && fallbackImg.style.display !== 'none' && fallbackImg.src) {
+        if (fallbackImg.complete && fallbackImg.naturalWidth > 0 && fallbackImg.src.startsWith('data:')) {
+            dataUrl = compressCapturedCanvas(fallbackImg, 800, 0.75);
+        } else {
+            dataUrl = fallbackImg.src;
         }
-    } else {
-        dataUrl = currentCctvImg;
     }
 
-    const modal = document.getElementById('dynamic-issue-modal');
+    const modal = document.getElementById('issue-modal-overlay') || document.getElementById('dynamic-issue-modal');
     if (modal) {
+        modal.dataset.mode = 'add';
+        modal.dataset.issueId = '';
+
+        const modalTitle = modal.querySelector('.modal-title');
+        if (modalTitle) modalTitle.textContent = '📍 현장 CCTV 연동 이슈 등록';
+
         modal.style.display = 'flex';
         modal.setAttribute('aria-hidden', 'false');
 
         const activeCard = document.querySelector('.thumb-card.active');
         const channelTitle = activeCard ? activeCard.dataset.title : (activeChannel ? activeChannel.title : '강북정수장 현장관제');
 
+        const previewImg = document.getElementById('capture-image-view');
+        const dateInput = document.getElementById('issue-date');
+        const authorInput = document.getElementById('issue-author');
         const titleInput = document.getElementById('issue-title');
-        const structInput = document.getElementById('issue-structure');
         const descInput = document.getElementById('issue-desc');
-        const hiddenData = document.getElementById('multi-capture-data');
-        const imgList = document.getElementById('capture-image-list');
 
+        if (dateInput) dateInput.value = getFormattedCurrentDateTime();
+        if (authorInput && !authorInput.value) authorInput.value = '현장관제자';
+        if (previewImg) previewImg.src = dataUrl;
         if (titleInput) titleInput.value = `[CCTV 관제] ${channelTitle} 특이사항 확인`;
-        if (structInput) structInput.value = channelTitle;
         if (descInput) descInput.value = `${channelTitle} 실시간 CCTV 모니터링 중 특이사항이 포착되어 이슈 등록함.`;
-        if (hiddenData) hiddenData.value = JSON.stringify([dataUrl]);
-
-        if (imgList) {
-            imgList.innerHTML = `
-                <div style="position:relative; min-width:100px; height:75px; border-radius:8px; overflow:hidden; border:2px solid #38bdf8;">
-                    <img src="${dataUrl}" style="width:100%; height:100%; object-fit:cover;">
-                    <span style="position:absolute; bottom:2px; right:2px; background:rgba(0,0,0,0.7); color:#38bdf8; font-size:9px; padding:1px 4px; border-radius:3px;">CCTV 캡처</span>
-                </div>
-            `;
-        }
     }
 }
 
 /**
- * 🔒 현장 관제 이슈 등록 모달 핸들러 바인딩
+ * ✏️ 기존 CCTV 현장 이슈 수정 모달 오픈
+ */
+function openEditCctvFieldIssueModal(issueId) {
+    const saved = JSON.parse(localStorage.getItem('cctv_field_issues') || '[]');
+    const issue = saved.find(item => item.id === issueId);
+    if (!issue) return;
+
+    const modal = document.getElementById('issue-modal-overlay') || document.getElementById('dynamic-issue-modal');
+    if (!modal) return;
+
+    modal.dataset.mode = 'edit';
+    modal.dataset.issueId = issue.id;
+
+    const modalTitle = modal.querySelector('.modal-title');
+    if (modalTitle) modalTitle.textContent = '✏️ 현장 CCTV 연동 이슈 수정';
+
+    const previewImg = document.getElementById('capture-image-view');
+    const dateInput = document.getElementById('issue-date');
+    const authorInput = document.getElementById('issue-author');
+    const titleInput = document.getElementById('issue-title');
+    const descInput = document.getElementById('issue-desc');
+
+    if (previewImg) previewImg.src = issue.cctvSnapshot || issue.thumbnail || '/img/lapse/lapse_1.jpg';
+    if (dateInput) dateInput.value = issue.startDate || getFormattedCurrentDateTime();
+    if (authorInput) authorInput.value = issue.author || '현장관제자';
+    if (titleInput) titleInput.value = issue.title || '';
+    if (descInput) descInput.value = issue.description || '';
+
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+/**
+ * 🗑️ CCTV 현장 이슈 삭제
+ */
+function deleteCctvFieldIssue(issueId) {
+    if (!issueId) return;
+    const saved = JSON.parse(localStorage.getItem('cctv_field_issues') || '[]');
+    const issue = saved.find(item => item.id === issueId);
+    const titleText = issue ? `"${issue.title}" ` : '';
+    if (confirm(`해당 현장 이슈 ${titleText}를 삭제하시겠습니까?`)) {
+        const filtered = saved.filter(item => item.id !== issueId);
+        safeSaveCctvFieldIssues(filtered);
+        refreshCctvIssuesTable();
+    }
+}
+
+/**
+ * 🔒 현장 관제 이슈 등록/수정 모달 핸들러 바인딩
  */
 function initCctvModalHandlers() {
     const btnRegister = document.getElementById('btn-issue-register');
-    if (btnRegister) {
+    if (btnRegister && !btnRegister.dataset.bound) {
+        btnRegister.dataset.bound = 'true';
         btnRegister.addEventListener('click', captureCctvStreamAndOpenModal);
     }
 
-    const modal = document.getElementById('dynamic-issue-modal');
+    const modal = document.getElementById('issue-modal-overlay') || document.getElementById('dynamic-issue-modal');
     const btnCancel = document.getElementById('btn-modal-cancel');
     const btnSave = document.getElementById('btn-modal-save');
 
-    if (btnCancel && modal) {
+    if (btnCancel && modal && !btnCancel.dataset.bound) {
+        btnCancel.dataset.bound = 'true';
         btnCancel.addEventListener('click', () => {
             modal.style.display = 'none';
+            modal.dataset.mode = '';
+            modal.dataset.issueId = '';
         });
     }
 
-    if (btnSave && modal) {
+    if (btnSave && modal && !btnSave.dataset.bound) {
+        btnSave.dataset.bound = 'true';
         btnSave.addEventListener('click', () => {
             const title = (document.getElementById('issue-title')?.value || '').trim();
             if (!title) {
@@ -532,55 +704,64 @@ function initCctvModalHandlers() {
                 return;
             }
 
-            const status = document.getElementById('issue-status')?.value || 'Open';
-            const type = document.getElementById('issue-type')?.value || '설계 이슈';
-            const description = document.getElementById('issue-desc')?.value || '';
-            const location = document.getElementById('issue-structure')?.value || '강북정수장';
-            const trade = document.getElementById('issue-trade')?.value || '기계';
-            const author = document.getElementById('issue-assignee')?.value || '현장관제자';
-            const verifier = document.getElementById('issue-verifier')?.value || '';
-            const startDate = document.getElementById('issue-startdate')?.value || new Date().toISOString().slice(0, 10);
-            const dueDate = document.getElementById('issue-duedate')?.value || '';
+            const mode = modal.dataset.mode || 'add';
+            const editingId = modal.dataset.issueId || '';
 
-            let cctvSnapshot = currentCctvImg;
-            const hiddenData = document.getElementById('multi-capture-data')?.value;
-            if (hiddenData) {
-                try {
-                    const parsed = JSON.parse(hiddenData);
-                    if (Array.isArray(parsed) && parsed[0]) cctvSnapshot = parsed[0];
-                } catch(e) {}
+            const author = (document.getElementById('issue-author')?.value || '').trim() || '현장관제자';
+            const description = document.getElementById('issue-desc')?.value || '';
+            const issueDate = document.getElementById('issue-date')?.value || getFormattedCurrentDateTime();
+
+            const activeCard = document.querySelector('.thumb-card.active');
+            const location = activeCard ? activeCard.dataset.title : (activeChannel ? activeChannel.title : '강북정수장 현장관제');
+
+            const previewImg = document.getElementById('capture-image-view');
+            let cctvSnapshot = previewImg ? previewImg.src : currentCctvImg;
+            if (previewImg && previewImg.complete && previewImg.naturalWidth > 0 && cctvSnapshot && cctvSnapshot.startsWith('data:') && cctvSnapshot.length > 100000) {
+                cctvSnapshot = compressCapturedCanvas(previewImg, 800, 0.75);
             }
 
-            const newIssue = {
-                id: 'cctv_issue_' + Date.now(),
-                title,
-                status,
-                type,
-                location,
-                structureName: location,
-                trade,
-                description,
-                author,
-                assignee: author,
-                verifier,
-                startDate,
-                dueDate,
-                cctvSnapshot,
-                createdAt: new Date().toISOString()
-            };
-
-            // 1. CCTV 현장 이슈 저장
             const cctvIssues = JSON.parse(localStorage.getItem('cctv_field_issues') || '[]');
-            cctvIssues.unshift(newIssue);
-            localStorage.setItem('cctv_field_issues', JSON.stringify(cctvIssues));
 
-            // 2. 전체 이슈 저장소에도 반영하여 대시보드/이슈 탭에 노출
-            const allIssues = JSON.parse(localStorage.getItem('aps_issues') || '[]');
-            allIssues.unshift(newIssue);
-            localStorage.setItem('aps_issues', JSON.stringify(allIssues));
+            if (mode === 'edit' && editingId) {
+                const idx = cctvIssues.findIndex(item => item.id === editingId);
+                if (idx > -1) {
+                    cctvIssues[idx] = {
+                        ...cctvIssues[idx],
+                        title,
+                        author,
+                        assignee: author,
+                        description,
+                        startDate: issueDate,
+                        cctvSnapshot
+                    };
+                    alert(`✅ [현장 이슈 수정 완료]\n"${title}" 이슈가 수정되었습니다.`);
+                }
+            } else {
+                const newIssue = {
+                    id: 'cctv_issue_' + Date.now(),
+                    title,
+                    status: '생성',
+                    type: 'CCTV 관제',
+                    location,
+                    structureName: location,
+                    trade: '현장관제',
+                    description,
+                    author,
+                    assignee: author,
+                    verifier: '',
+                    startDate: issueDate,
+                    dueDate: issueDate,
+                    cctvSnapshot,
+                    createdAt: new Date().toISOString()
+                };
+                cctvIssues.unshift(newIssue);
+                alert(`✅ [현장 이슈 등록 완료]\n"${title}" 이슈가 현장 관제 패널 이슈 목록에 저장되었습니다.`);
+            }
 
-            alert(`✅ [이슈 등록 완료]\n"${title}" 이슈가 정상 등록되었습니다.`);
+            safeSaveCctvFieldIssues(cctvIssues);
             modal.style.display = 'none';
+            modal.dataset.mode = '';
+            modal.dataset.issueId = '';
 
             refreshCctvIssuesTable();
         });
@@ -588,17 +769,42 @@ function initCctvModalHandlers() {
 }
 
 /**
- * 📋 현장 이슈 테이블 실시간 동기화 렌더링
+ * 📋 현장 이슈 테이블 실시간 동기화 렌더링 (수정 & 삭제 지원)
  */
 function refreshCctvIssuesTable() {
     const tbody = document.getElementById('cctv-issues-table-body');
     if (!tbody) return;
 
+    if (!tbody.dataset.bound) {
+        tbody.dataset.bound = 'true';
+        tbody.addEventListener('click', event => {
+            const deleteBtn = event.target.closest('.btn-cctv-issue-delete');
+            if (deleteBtn) {
+                event.stopPropagation();
+                const id = deleteBtn.dataset.id;
+                deleteCctvFieldIssue(id);
+                return;
+            }
+            const editBtn = event.target.closest('.btn-cctv-issue-edit');
+            if (editBtn) {
+                const id = editBtn.dataset.id;
+                openEditCctvFieldIssueModal(id);
+                return;
+            }
+            const row = event.target.closest('tr[data-issue-id]');
+            if (row) {
+                const id = row.dataset.issueId;
+                openEditCctvFieldIssueModal(id);
+                return;
+            }
+        });
+    }
+
     const saved = JSON.parse(localStorage.getItem('cctv_field_issues') || '[]');
     if (saved.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" style="padding: 16px; text-align: center; color: #94a3b8;">
+                <td colspan="8" style="padding: 16px; text-align: center; color: #94a3b8;">
                     등록된 현장 CCTV 관제 이슈가 없습니다. 상단 [📸 CCTV 캡처 & 이슈 등록] 버튼을 눌러 새 이슈를 추가하세요.
                 </td>
             </tr>
@@ -606,19 +812,26 @@ function refreshCctvIssuesTable() {
         return;
     }
 
-    tbody.innerHTML = saved.map((iss, idx) => `
-        <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
-            <td style="padding: 6px 10px; text-align: center; font-weight: bold; color: #64748b;">#${idx + 1}</td>
-            <td style="padding: 6px 10px;">
-                <img src="${iss.cctvSnapshot || iss.thumbnail || '/img/lapse/lapse_1.jpg'}" style="width: 50px; height: 35px; object-fit: cover; border-radius: 4px; border: 1px solid #334155;">
-            </td>
-            <td style="padding: 6px 10px; font-weight: bold; color: #f8fafc;">${iss.title}</td>
-            <td style="padding: 6px 10px; color: #38bdf8;">${iss.location || iss.structureName || '강북정수장'}</td>
-            <td style="padding: 6px 10px; color: #cbd5e1; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${iss.description || '-'}</td>
-            <td style="padding: 6px 10px; text-align: center; color: #94a3b8;">${iss.author || '현장관제자'}</td>
-            <td style="padding: 6px 10px; text-align: center; font-size: 0.7rem; color: #64748b;">${new Date(iss.createdAt || Date.now()).toLocaleDateString()}</td>
-        </tr>
-    `).join('');
+    tbody.innerHTML = saved.map((iss, idx) => {
+        const dateStr = iss.startDate || (iss.createdAt ? new Date(iss.createdAt).toLocaleString() : '-');
+        return `
+            <tr data-issue-id="${iss.id}" style="border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer;" title="클릭하여 이슈 수정">
+                <td style="padding: 6px; text-align: center; font-weight: bold; color: #64748b;">#${idx + 1}</td>
+                <td style="padding: 6px;">
+                    <img src="${iss.cctvSnapshot || iss.thumbnail || '/img/lapse/lapse_1.jpg'}" style="width: 50px; height: 35px; object-fit: cover; border-radius: 4px; border: 1px solid #334155;">
+                </td>
+                <td style="padding: 6px; font-weight: bold; color: #f8fafc; min-width: 220px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(iss.title)}">${escapeHtml(iss.title)}</td>
+                <td style="padding: 6px; color: #38bdf8; max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(iss.location || iss.structureName || '강북정수장')}</td>
+                <td style="padding: 6px; color: #cbd5e1; max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(iss.description || '-')}</td>
+                <td style="padding: 6px; text-align: center; color: #94a3b8;">${escapeHtml(iss.author || '현장관제자')}</td>
+                <td style="padding: 6px; text-align: center; font-size: 0.7rem; color: #94a3b8;">${escapeHtml(dateStr)}</td>
+                <td style="padding: 6px; text-align: center; width: 90px;">
+                    <button type="button" class="btn-cctv-issue-edit" data-id="${iss.id}" style="background: rgba(56,189,248,0.15); border: 1px solid rgba(56,189,248,0.4); color: #38bdf8; cursor: pointer; padding: 3px 6px; border-radius: 4px; font-size: 0.75rem; margin-right: 2px;" title="이슈 수정"><i class="fas fa-pen"></i></button>
+                    <button type="button" class="btn-cctv-issue-delete" data-id="${iss.id}" style="background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.4); color: #f87171; cursor: pointer; padding: 3px 6px; border-radius: 4px; font-size: 0.75rem;" title="이슈 삭제"><i class="fas fa-trash"></i></button>
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
 /**
@@ -698,9 +911,7 @@ export function exportCctvFieldIssuesPdf(fieldIssues) {
 
     let detailPagesHtml = '';
     fieldIssues.forEach((issue, idx) => {
-        const bimModelDisplay = issue.modelUrn
-            ? '02_응집침전지_구조_C.rvt (APS 3D 모델 연동)'
-            : '강북정수장 공종별 통합 Revit 모델';
+        const issueDateStr = issue.startDate || (issue.createdAt ? new Date(issue.createdAt).toLocaleString() : getFormattedCurrentDateTime());
 
         detailPagesHtml += `
             <div class="issue-detail-page" style="page-break-before: always; padding: 20px; box-sizing: border-box;">
@@ -715,22 +926,22 @@ export function exportCctvFieldIssuesPdf(fieldIssues) {
                     </div>
                     <div style="font-size: 10.5px; color: #64748b; text-align: right;">
                         <div><strong>작성자:</strong> ${issue.author || '현장 관제자'}</div>
-                        <div><strong>작성일시:</strong> ${new Date(issue.createdAt || Date.now()).toLocaleString()}</div>
+                        <div><strong>작성일시:</strong> ${issueDateStr}</div>
                     </div>
                 </div>
 
                 <div style="margin-bottom: 6px; background: #0f172a; border-radius: 6px; padding: 4px; border: 1px solid #94a3b8; text-align: center;">
                     <img src="${issue.cctvSnapshot || issue.thumbnail || '/img/lapse/lapse_1.jpg'}"
-                         style="width: 100%; max-height: 385px; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 4px; display: block; margin: 0 auto;">
-                    <div style="margin-top: 2px; font-size: 9.5px; color: #94a3b8; text-align: right;">📸 CCTV 실시간 라이브 프레임 캡처 (4:3 비율)</div>
+                         style="width: 100%; max-height: 400px; aspect-ratio: 16 / 9; object-fit: contain; border-radius: 4px; display: block; margin: 0 auto; image-rendering: -webkit-optimize-contrast; image-rendering: high-quality; font-smooth: always;">
+                    <div style="margin-top: 2px; font-size: 9.5px; color: #94a3b8; text-align: right;">CCTV 실시간 라이브 고화질(HD 1280p) 프레임 캡처</div>
                 </div>
 
                 <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px;">
                     <tr>
                         <th style="width: 15%; background: #f1f5f9; padding: 6px; border: 1px solid #cbd5e1; color: #334155; text-align: left;">관제 위치</th>
                         <td style="width: 35%; padding: 6px; border: 1px solid #cbd5e1; color: #0f172a; font-weight: 600;">${issue.location || issue.structureName || '강북정수장 현장관제 구간'}</td>
-                        <th style="width: 15%; background: #f1f5f9; padding: 6px; border: 1px solid #cbd5e1; color: #334155; text-align: left;">BIM 연동 모델</th>
-                        <td style="width: 35%; padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">${bimModelDisplay}</td>
+                        <th style="width: 15%; background: #f1f5f9; padding: 6px; border: 1px solid #cbd5e1; color: #334155; text-align: left;">작성 일시</th>
+                        <td style="width: 35%; padding: 6px; border: 1px solid #cbd5e1; color: #0f172a; font-weight: 600;">${issueDateStr}</td>
                     </tr>
                     <tr>
                         <th style="background: #f1f5f9; padding: 6px; border: 1px solid #cbd5e1; color: #334155; text-align: left;">상세 내용</th>
@@ -756,7 +967,7 @@ export function exportCctvFieldIssuesPdf(fieldIssues) {
         <body>
             <div class="report-container">
                 <div style="text-align: center; border-bottom: 3px double #0284c7; padding-bottom: 12px; margin-bottom: 20px;">
-                    <h1 style="margin: 0; font-size: 22px; color: #0369a1;">🌊 강북정수장 현장 CCTV 실시간 관제 보고서</h1>
+                    <h1 style="margin: 0; font-size: 22px; color: #0369a1;">강북정수장 현장 CCTV 실시간 관제 보고서</h1>
                     <div style="font-size: 11px; color: #64748b; margin-top: 4px;">출력일시: ${new Date().toLocaleString()} | 총 이슈 ${fieldIssues.length}건</div>
                 </div>
 

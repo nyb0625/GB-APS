@@ -13,9 +13,11 @@
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- Three.js (금주 작업 시각화 3D 뷰어) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260805-monthly-end-only1">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260806-zone-sub-10">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     
@@ -192,7 +194,7 @@
             border-radius: 50%;
             background: var(--primary-glow);
             border: none;
-            cursor: pointer;
+            cursor: grab;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -201,6 +203,14 @@
             transition: transform 0.25s ease, box-shadow 0.25s ease;
             color: #0b0f19;
             outline: none;
+            user-select: none;
+            touch-action: none;
+        }
+        #chat-fab.is-dragging {
+            cursor: grabbing !important;
+            transition: none !important;
+            box-shadow: 0 10px 32px rgba(0, 242, 254, 0.85);
+            transform: scale(1.1) !important;
         }
         #chat-fab:hover {
             transform: scale(1.08);
@@ -915,6 +925,7 @@
 
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
+                <button id="main-tab-example1-btn" class="tab-btn main-tab-btn" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
                 <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
                 <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
                 <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
@@ -1122,10 +1133,10 @@
                     <thead>
                       <tr>
                         <th>제목</th>
+                        <th>유형</th>
+                        <th>구분</th>
                         <th>구조물</th>
-                        <th>공종</th>
                         <th>담당자</th>
-                        <th>내용</th>
                       </tr>
                     </thead>
                     <tbody id="db-issue-table-body">
@@ -1140,6 +1151,279 @@
           </div><!-- /dashboard-root -->
         </div>
 
+
+            <!-- 예시1 탭 (3분할 레이아웃) -->
+            <div id="example1-tab" class="example1-tab" style="display:none; width: 100%; min-height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow-y: auto;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; width: 100%; min-height: 100%;">
+                    
+                    <!-- Column 1: 상단(실시간 공정 D-Day 패널) & 하단(공사 개요 패널) -->
+                    <div style="display: flex; flex-direction: column; gap: 16px; min-height: 100%;">
+                        <!-- 1. 독립 상단 패널: 실시간 공정 D-Day -->
+                        <section class="bim-db-panel" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box;">
+                            <!-- 카드 헤더 -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px;">
+                                <h3 style="margin: 0; font-size: 1.05rem; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                    <i class="fas fa-stopwatch" style="color: #38bdf8;"></i> 실시간 공정 D-Day
+                                </h3>
+                                <span style="font-size: 0.72rem; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.4); padding: 3px 10px; border-radius: 12px; font-weight: bold;">
+                                    ● 정상 순항 중
+                                </span>
+                            </div>
+
+                            <!-- D-Day & 공정률 지표 (2컬럼 카운터) -->
+                            <div style="display: grid; grid-template-columns: 1.35fr 1fr; gap: 10px; align-items: center;">
+                                <div style="background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 8px 10px; text-align: center;">
+                                    <div style="font-size: 0.72rem; color: #94a3b8; margin-bottom: 3px; font-weight: 500;">공사 기간 (2026.04.01 ~ 2029.05.16)</div>
+                                    <div id="example1-dday-val" style="font-size: 1.35rem; font-weight: 900; color: #38bdf8; letter-spacing: -0.5px;">D-1015 일</div>
+                                </div>
+                                <div style="background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 8px 10px; text-align: center;">
+                                    <div style="font-size: 0.72rem; color: #94a3b8; margin-bottom: 3px; font-weight: 500;">종합 공정률</div>
+                                    <div style="font-size: 1.35rem; font-weight: 900; color: #f8fafc; letter-spacing: -0.5px;">
+                                        42.8% <span style="font-size: 0.72rem; font-weight: normal; color: #10b981;">(+1.3% 순항)</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 현재 공종 안내 바 -->
+                            <div style="background: rgba(30, 41, 59, 0.6); border-left: 3px solid #38bdf8; padding: 7px 12px; border-radius: 0 4px 4px 0; font-size: 0.78rem; color: #e2e8f0; display: flex; align-items: center; gap: 6px;">
+                                <i class="fas fa-hammer" style="color: #f59e0b; font-size: 0.82rem;"></i>
+                                <span>현재 공종: <strong style="color: #f8fafc;">응집침전지 철근배근 및 슬래브 타설 단계</strong></span>
+                            </div>
+                        </section>
+
+                        <!-- 2. 독립 하단 패널: 공사 개요 -->
+                        <section class="bim-db-panel" style="flex: 1; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; box-sizing: border-box;">
+                            <div style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px;">
+                                <h3 style="margin: 0; font-size: 1.05rem; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                                    <i class="fas fa-info-circle" style="color: #38bdf8;"></i> 공사 개요
+                                </h3>
+                            </div>
+
+                            <!-- 이미지 영역 (255px 지정 조감도 이미지) -->
+                            <div style="width: 100%; border-radius: 6px; overflow: hidden; border: 1px solid #334155; background: #0f172a; position: relative;">
+                                <img id="example1-overview-img" src="/images/example1-overview.png" alt="공사 개요 조감도" style="width: 100%; height: 255px; object-fit: cover; display: block;">
+                            </div>
+
+                            <!-- 공사 개요 표 -->
+                            <div style="flex: 1; overflow-x: auto;">
+                                <table style="width: 100%; border-collapse: collapse; font-size: 0.78rem; color: #cbd5e1; border: 1px solid #334155;">
+                                    <thead>
+                                        <tr style="background: rgba(51, 65, 85, 0.6); border-bottom: 1px solid #334155;">
+                                            <th style="padding: 8px 10px; width: 26%; text-align: center; border-right: 1px solid #334155; color: #f8fafc; font-weight: bold;">구 분</th>
+                                            <th style="padding: 8px 10px; text-align: center; color: #f8fafc; font-weight: bold;">대 상 시 설</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px 10px; text-align: center; font-weight: bold; background: rgba(30, 41, 59, 0.6); border-right: 1px solid #334155; color: #e2e8f0;">사 업 위 치</td>
+                                            <td style="padding: 8px 10px;">• 경기도 남양주시 고산로 171 강북아리수정수센터 内</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px 10px; text-align: center; font-weight: bold; background: rgba(30, 41, 59, 0.6); border-right: 1px solid #334155; color: #e2e8f0;">사 업 목 적</td>
+                                            <td style="padding: 8px 10px; line-height: 1.45;">• 노후 정수장 순차 재정비에 따른 강북정수장 증설(Q=25만m³/일)로 용수 공급량 확보</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px 10px; text-align: center; font-weight: bold; background: rgba(30, 41, 59, 0.6); border-right: 1px solid #334155; color: #e2e8f0;">과 업 규 모</td>
+                                            <td style="padding: 8px 10px; line-height: 1.45;">
+                                                • 시설용량증설 Q = 25만m³/일 | 부지면적 A = 약 50,000m²<br>
+                                                • 정수처리시설 1식(표준정수처리 + 고도정수처리) 등
+                                            </td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px 10px; text-align: center; font-weight: bold; background: rgba(30, 41, 59, 0.6); border-right: 1px solid #334155; color: #e2e8f0;">추정공사비</td>
+                                            <td style="padding: 8px 10px;">• 257,800 백만원</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 10px; text-align: center; font-weight: bold; background: rgba(30, 41, 59, 0.6); border-right: 1px solid #334155; color: #e2e8f0;">시 행 기 관</td>
+                                            <td style="padding: 8px 10px;">• 서울특별시 아리수본부</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Column 2: 금주 작업 시각화 + 금일 일정 -->
+                    <section class="bim-db-panel" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 100%; box-sizing: border-box;">
+
+                        <!-- 패널 헤더 -->
+                        <div style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0; font-size: 1.05rem; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                                <i class="fas fa-calendar-week" style="color: #38bdf8;"></i> 금주 업무 현황
+                            </h3>
+                        </div>
+
+                        <!-- 상단: 금주 작업 시각화 (Three.js 3D 뷰어) -->
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <div style="font-size: 0.82rem; font-weight: bold; color: #cbd5e1; display: flex; align-items: center; gap: 6px;">
+                                <i class="fas fa-cube" style="color: #38bdf8; font-size: 0.78rem;"></i>
+                                주간 작업 하이라이트 <span style="color: #38bdf8; font-weight: bold;">(강북_구조물_신설_07_정수지_C)</span>
+                            </div>
+
+                            <!-- 3D 뷰어 컨테이너 -->
+                            <div style="position: relative; border-radius: 6px; overflow: hidden; border: 1px solid rgba(56,189,248,0.3); background: #ffffff;">
+                                <div id="weekly-3d-viewer" style="width: 100%; height: 350px; display: block;"></div>
+                            </div>
+                        </div>
+
+                        <!-- 하단: 금일 검측·입회 일정 -->
+                        <div style="display: flex; flex-direction: column; gap: 8px; flex: 1; border-top: 1px solid rgba(255, 255, 255, 0.1); margin-top: 6px; padding-top: 10px;">
+                            <div style="font-size: 0.82rem; font-weight: bold; color: #cbd5e1; display: flex; align-items: center; gap: 6px;">
+                                <i class="fas fa-clipboard-list" style="color: #38bdf8; font-size: 0.78rem;"></i>
+                                금일 검측 · 입회 일정
+                            </div>
+
+                            <!-- 타임라인 -->
+                            <div style="display: flex; flex-direction: column; gap: 0; position: relative;">
+
+                                <!-- 세로 연결선 -->
+                                <div style="position: absolute; left: 29px; top: 10px; bottom: 10px; width: 1px; background: linear-gradient(to bottom, rgba(56,189,248,0.5), rgba(56,189,248,0.1)); z-index: 0;"></div>
+
+                                <!-- 일정 1: 09:00 철근 배근 검측 -->
+                                <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; position: relative; z-index: 1;">
+                                    <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; width: 38px; text-align: right; flex-shrink: 0;">09:00</div>
+                                    <div style="width: 10px; height: 10px; border-radius: 50%; background: #38bdf8; border: 2px solid #0ea5e9; flex-shrink: 0; box-shadow: 0 0 6px rgba(56,189,248,0.7);"></div>
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="font-size: 0.82rem; font-weight: 600; color: #f8fafc; line-height: 1.2;">철근 배근 검측</div>
+                                        <div style="font-size: 0.7rem; color: #64748b; display: flex; align-items: center; gap: 3px; margin-top: 1px;">
+                                            <i class="fas fa-location-dot" style="font-size: 0.6rem;"></i> 응집침전지 B동 2층
+                                        </div>
+                                    </div>
+                                    <span style="font-size: 0.68rem; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.15); border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;">검측 예정</span>
+                                </div>
+
+                                <!-- 일정 2: 11:00 콘크리트 타설 입회 -->
+                                <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; position: relative; z-index: 1;">
+                                    <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; width: 38px; text-align: right; flex-shrink: 0;">11:00</div>
+                                    <div style="width: 10px; height: 10px; border-radius: 50%; background: #f97316; border: 2px solid #ea580c; flex-shrink: 0; box-shadow: 0 0 6px rgba(249,115,22,0.7);"></div>
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="font-size: 0.82rem; font-weight: 600; color: #f8fafc; line-height: 1.2;">슬래브 타설 입회</div>
+                                        <div style="font-size: 0.7rem; color: #64748b; display: flex; align-items: center; gap: 3px; margin-top: 1px;">
+                                            <i class="fas fa-location-dot" style="font-size: 0.6rem;"></i> 침전지 2공구 기초 구간
+                                        </div>
+                                    </div>
+                                    <span style="font-size: 0.68rem; font-weight: 700; color: #f97316; background: rgba(249,115,22,0.15); border: 1px solid rgba(249,115,22,0.4); padding: 3px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;">입회 필요</span>
+                                </div>
+
+                                <!-- 일정 3: 14:00 자재 승인 검토 -->
+                                <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; position: relative; z-index: 1;">
+                                    <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; width: 38px; text-align: right; flex-shrink: 0;">14:00</div>
+                                    <div style="width: 10px; height: 10px; border-radius: 50%; background: #eab308; border: 2px solid #ca8a04; flex-shrink: 0; box-shadow: 0 0 6px rgba(234,179,8,0.7);"></div>
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="font-size: 0.82rem; font-weight: 600; color: #f8fafc; line-height: 1.2;">방수재 자재 승인 검토</div>
+                                        <div style="font-size: 0.7rem; color: #64748b; display: flex; align-items: center; gap: 3px; margin-top: 1px;">
+                                            <i class="fas fa-location-dot" style="font-size: 0.6rem;"></i> 방수재 시험성적서 검토
+                                        </div>
+                                    </div>
+                                    <span style="font-size: 0.68rem; font-weight: 700; color: #eab308; background: rgba(234,179,8,0.15); border: 1px solid rgba(234,179,8,0.4); padding: 3px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;">승인 대기</span>
+                                </div>
+
+                                <!-- 일정 4: 16:00 안전시설 확인 -->
+                                <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; position: relative; z-index: 1;">
+                                    <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; width: 38px; text-align: right; flex-shrink: 0;">16:00</div>
+                                    <div style="width: 10px; height: 10px; border-radius: 50%; background: #10b981; border: 2px solid #059669; flex-shrink: 0; box-shadow: 0 0 6px rgba(16,185,129,0.7);"></div>
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="font-size: 0.82rem; font-weight: 600; color: #f8fafc; line-height: 1.2;">가시설 안전시설 확인</div>
+                                        <div style="font-size: 0.7rem; color: #64748b; display: flex; align-items: center; gap: 3px; margin-top: 1px;">
+                                            <i class="fas fa-location-dot" style="font-size: 0.6rem;"></i> 흙막이 가시설 구간 전체
+                                        </div>
+                                    </div>
+                                    <span style="font-size: 0.68rem; font-weight: 700; color: #10b981; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); padding: 3px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;">조치 확인</span>
+                                </div>
+
+                            </div>
+                        </div>
+
+                    </section>
+
+                    <!-- Column 3: 상단(현장 상황) & 하단(현장 실시간 모니터링) -->
+                    <div style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden;">
+                        <!-- 상단: 현장 상황 (실시간 공정 D-Day 패널과 높이 100% 동일화) -->
+                        <section class="bim-db-panel" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box;">
+                            <div style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                                <h3 style="margin: 0; font-size: 1.05rem; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                    <i class="fas fa-cloud-sun" style="color: #38bdf8;"></i> 현장 상황
+                                </h3>
+                                <span style="font-size: 0.72rem; color: #64748b; font-weight: 500;">출처: OpenWeatherMap</span>
+                            </div>
+                            <div id="example1-weather-box" style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; box-sizing: border-box;">
+                                <!-- 위치 & 날씨 상태 상단 헤더 -->
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-size: 0.85rem; font-weight: bold; color: #38bdf8; display: flex; align-items: center; gap: 5px;">
+                                        <i class="fas fa-location-dot"></i> 남양주시 강북정수장 현장
+                                    </span>
+                                    <span id="example1-weather-desc" style="font-size: 0.85rem; color: #cbd5e1; font-weight: bold;">
+                                        구름 조금 (실시간)
+                                    </span>
+                                </div>
+
+                                <!-- 대표 기온 & 아이콘 메인 영역 -->
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin: 2px 0;">
+                                    <div style="display: flex; align-items: baseline; gap: 4px;">
+                                        <span id="example1-weather-temp" style="font-size: 2.2rem; font-weight: 900; color: #f8fafc; line-height: 1;">36.1</span>
+                                        <span style="font-size: 1.1rem; color: #cbd5e1; font-weight: bold;">°C</span>
+                                    </div>
+                                    <img id="example1-weather-icon" src="https://openweathermap.org/img/wn/01d@2x.png" alt="날씨 아이콘" style="width: 48px; height: 48px; filter: drop-shadow(0 0 6px rgba(56,189,248,0.35)); margin-right: -4px;">
+                                </div>
+
+                                <!-- 세부 실황 그리드 (4분할 와이드 배치) -->
+                                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 10px;">
+                                    <div style="display: flex; align-items: center; gap: 5px; font-size: 0.75rem; color: #cbd5e1;">
+                                        <i class="fas fa-droplet" style="color: #38bdf8; width: 10px; text-align: center;"></i>
+                                        <span>습도: <strong id="example1-weather-humidity" style="color: #f8fafc;">62%</strong></span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px; font-size: 0.75rem; color: #cbd5e1;">
+                                        <i class="fas fa-wind" style="color: #38bdf8; width: 10px; text-align: center;"></i>
+                                        <span>풍속: <strong id="example1-weather-wind" style="color: #f8fafc;">5.9m/s</strong></span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px; font-size: 0.75rem; color: #cbd5e1;">
+                                        <i class="fas fa-temperature-half" style="color: #f59e0b; width: 10px; text-align: center;"></i>
+                                        <span>체감: <strong id="example1-weather-feels" style="color: #f8fafc;">36.9°C</strong></span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 5px; font-size: 0.75rem; color: #cbd5e1;">
+                                        <i class="fas fa-leaf" style="color: #10b981; width: 10px; text-align: center;"></i>
+                                        <span>대기: <strong style="color: #10b981;">좋음</strong></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- 하단: 현장 실시간 모니터링 -->
+                        <section class="bim-db-panel" style="flex: 1; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; overflow: hidden;">
+                            <!-- 헤더 + 현장 관제 탭으로 이동 버튼 -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px;">
+                                <h3 style="margin: 0; font-size: 1.05rem; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                                    <i class="fas fa-video" style="color: #38bdf8;"></i> 현장 실시간 모니터링
+                                </h3>
+                                <button type="button" onclick="switchTab('cctv')" style="background: rgba(30, 41, 59, 0.8); color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='rgba(51, 65, 85, 0.9)'; this.style.borderColor='#38bdf8';" onmouseout="this.style.background='rgba(30, 41, 59, 0.8)'; this.style.borderColor='rgba(148, 163, 184, 0.3)';">
+                                    <span>현장 관제 탭으로 이동</span> <i class="fas fa-arrow-right" style="font-size: 0.72rem; color: #38bdf8;"></i>
+                                </button>
+                            </div>
+
+                            <!-- CCTV 영상 플레이어 컨테이너 (레퍼런스 이미지 스타일) -->
+                            <div style="flex: 1; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; background: #090d16; display: flex; flex-direction: column; overflow: hidden; position: relative;">
+                                <!-- CCTV 구역 선택 드롭다운 헤더 (높이 최적화 & 시인성 개선) -->
+                                <div style="background: rgba(15, 23, 42, 0.95); border-bottom: 1px solid rgba(56, 189, 248, 0.25); padding: 3px 6px; text-align: center; display: flex; justify-content: center; align-items: center;">
+                                    <select id="example1-cctv-select" style="background: transparent; color: #f8fafc; font-size: 0.9rem; font-weight: bold; border: none; padding: 2px 8px; cursor: pointer; text-align-last: center; outline: none; appearance: auto;">
+                                        <option value="0" style="background-color: #0f172a; color: #f8fafc;">구역 현황 CCTV 불러오는 중...</option>
+                                    </select>
+                                </div>
+
+                                <!-- 비디오 & 썸네일 노출 영역 (이슈 버튼 없음) -->
+                                <div style="flex: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                    <video id="example1-cctv-video" autoplay muted playsinline style="width: 100%; height: 100%; object-fit: cover; display: block;"></video>
+                                    <img id="example1-cctv-fallback" src="/img/lapse/lapse_1.jpg" alt="CCTV 썸네일" style="width: 100%; height: 100%; object-fit: cover; display: none;">
+                                    <!-- CCTV 출처 표기 배지 -->
+                                    <div style="position: absolute; bottom: 6px; right: 8px; background: rgba(15, 23, 42, 0.75); color: #cbd5e1; font-size: 0.7rem; font-weight: 500; padding: 2px 6px; border-radius: 4px; z-index: 5; pointer-events: none; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);">
+                                        출처: 경찰청 UTIC
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                </div>
+            </div>
 
             <div id="monthly-issue-status-tab" class="monthly-issue-status-tab" style="display:none;">
                 <section class="bim-db-panel monthly-issue-panel">
@@ -1212,7 +1496,7 @@
                     </div>
                     <div class="bim-progress-layout">
                         <div id="bim-progress-map" class="bim-progress-map">
-                            <img src="/images/gangbuk-progress-map.png" alt="강북정수장 공사 영역도" class="bim-progress-map-img"
+                            <img src="/images/gangbuk-progress-map.png?v=20260806" alt="강북정수장 공사 영역도" class="bim-progress-map-img"
                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
                             <div class="bim-progress-map-fallback" style="display:none;">공사 영역 이미지가 없습니다.</div>
                             <button type="button" class="bim-zone zone-new-main" data-zone="new" aria-label="신설 영역">신설</button>
@@ -1644,9 +1928,12 @@
                     <section class="panel-card">
                         <div class="panel-header">
                             <span id="cctv-live-title" class="panel-title"><i class="fas fa-video"></i> 실시간 CCTV 영상</span>
-                            <span style="font-size: 0.75rem; color: #10b981; display: flex; align-items: center; gap: 4px;">
-                                <span style="width: 6px; height: 6px; background: #10b981; border-radius: 50%; display: inline-block;"></span> LIVE
-                            </span>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 0.72rem; color: #64748b; font-weight: 500;">출처: 경찰청 UTIC</span>
+                                <span style="font-size: 0.75rem; color: #10b981; display: flex; align-items: center; gap: 4px;">
+                                    <span style="width: 6px; height: 6px; background: #10b981; border-radius: 50%; display: inline-block;"></span> LIVE
+                                </span>
+                            </div>
                         </div>
                         <div class="panel-body">
                             <div class="video-wrapper" style="position: relative; width: 100%; height: 100%; background: #000;">
@@ -1728,18 +2015,19 @@
                         <table style="width: 100%; border-collapse: collapse; font-size: 0.76rem; color: #cbd5e1;">
                             <thead>
                                 <tr style="background: rgba(30, 41, 59, 0.8); border-bottom: 1px solid rgba(255,255,255,0.1); color: #38bdf8; text-align: left;">
-                                    <th style="padding: 6px 10px; width: 40px; text-align: center;">NO</th>
-                                    <th style="padding: 6px 10px; width: 70px;">캡처</th>
-                                    <th style="padding: 6px 10px; min-width: 120px;">이슈 제목</th>
-                                    <th style="padding: 6px 10px; min-width: 110px;">관련 위치</th>
-                                    <th style="padding: 6px 10px; min-width: 180px;">상세 내용</th>
-                                    <th style="padding: 6px 10px; width: 80px; text-align: center;">작성자</th>
-                                    <th style="padding: 6px 10px; width: 110px; text-align: center;">일시</th>
+                                    <th style="padding: 6px 6px; width: 35px; text-align: center;">NO</th>
+                                    <th style="padding: 6px 6px; width: 65px;">캡처</th>
+                                    <th style="padding: 6px 6px; min-width: 220px;">이슈 제목</th>
+                                    <th style="padding: 6px 6px; width: 100px;">관련 위치</th>
+                                    <th style="padding: 6px 6px; min-width: 140px;">상세 내용</th>
+                                    <th style="padding: 6px 6px; width: 75px; text-align: center;">작성자</th>
+                                    <th style="padding: 6px 6px; width: 130px; text-align: center;">일시</th>
+                                    <th style="padding: 6px 6px; width: 85px; text-align: center;">관리</th>
                                 </tr>
                             </thead>
                             <tbody id="cctv-issues-table-body">
                                 <tr>
-                                    <td colspan="7" style="padding: 16px; text-align: center; color: #94a3b8;">등록된 현장 CCTV 이슈가 없습니다.</td>
+                                    <td colspan="8" style="padding: 16px; text-align: center; color: #94a3b8;">등록된 현장 CCTV 이슈가 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1750,74 +2038,32 @@
 <!-- Standalone Issue Registration Dialog -->
             <div class="modal-overlay" id="issue-modal-overlay">
                 <div class="modal-box">
-                    <h3 class="modal-title">📍 현장 CCTV 연동 단독 이슈 등록</h3>
+                    <h3 class="modal-title">📍 현장 CCTV 연동 이슈 등록</h3>
                     
                     <div class="capture-preview-box form-group">
                         <span style="font-size: 11px; font-weight: bold; color: #94a3b8; text-align: left; display: block;">CCTV 영상 캡처본</span>
                         <img id="capture-image-view" src="/img/lapse/lapse_3.jpg" alt="CCTV Screen capture">
                     </div>
 
-                    <div class="form-group">
-                        <label>제목</label>
-                        <input type="text" id="issue-title" value="CCTV 분석 이슈 - 장비 부식 발생 가능성">
-                    </div>
-
                     <div class="form-grid">
                         <div class="form-group">
-                            <label>상태</label>
-                            <select id="issue-status">
-                                <option value="초안">초안</option>
-                                <option value="생성" selected>생성</option>
-                                <option value="지연">지연</option>
-                                <option value="검토 중">검토 중</option>
-                            </select>
+                            <label>등록 일시</label>
+                            <input type="text" id="issue-date" value="" readonly style="background: rgba(255,255,255,0.05); color: #38bdf8; border: 1px solid rgba(255,255,255,0.1); font-weight: bold;">
                         </div>
                         <div class="form-group">
-                            <label>유형</label>
-                            <select id="issue-type">
-                                <option value="간섭">간섭</option>
-                                <option value="설계 이슈" selected>설계 이슈</option>
-                                <option value="도면 정합성">도면 정합성</option>
-                            </select>
+                            <label>작성자</label>
+                            <input type="text" id="issue-author" value="현장관제자" placeholder="작성자 이름 입력">
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label>설명</label>
-                        <textarea id="issue-desc" placeholder="상세 검토 의견을 입력하세요...">현장 CCTV 확인 결과, 배관 플랜지 부근에 습기가 누적되어 부식 우려가 발생하였습니다. BIM 모델상 동일 위치 검토 및 방청 조치가 필요합니다.</textarea>
+                        <label>제목</label>
+                        <input type="text" id="issue-title" value="" placeholder="이슈 제목을 입력하세요">
                     </div>
 
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>구조물 명</label>
-                            <input type="text" id="issue-structure" value="급속여과지" readonly>
-                        </div>
-                        <div class="form-group">
-                            <label>공종</label>
-                            <input type="text" id="issue-trade" value="기계" readonly>
-                        </div>
-                    </div>
-
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>담당자</label>
-                            <input type="text" id="issue-assignee" value="홍길동 과장">
-                        </div>
-                        <div class="form-group">
-                            <label>확인자</label>
-                            <input type="text" id="issue-verifier" value="김안전 부장">
-                        </div>
-                    </div>
-
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>시작 날짜</label>
-                            <input type="date" id="issue-startdate" value="2026-07-16">
-                        </div>
-                        <div class="form-group">
-                            <label>마감일</label>
-                            <input type="date" id="issue-duedate" value="2026-07-23">
-                        </div>
+                    <div class="form-group">
+                        <label>내용</label>
+                        <textarea id="issue-desc" placeholder="상세 검토 의견 또는 내용을 입력하세요..."></textarea>
                     </div>
 
                     <div class="modal-actions">
@@ -1950,64 +2196,93 @@
             var cctv = document.getElementById('tab-content-cctv');
             var construction = document.getElementById('construction-bim-dashboard');
             var monthlyIssues = document.getElementById('monthly-issue-status-tab');
+            var example1 = document.getElementById('example1-tab');
 
-            // 🚨 이슈/대시보드/CCTV 탭에 솔리드 배경색을 부여하여 뒤에 숨은 뷰어를 가림
-            if (dashboard) {
-                dashboard.style.display = (tabName === 'dashboard') ? 'block' : 'none';
+            // 🚨 [핵심 방어막] 탭 전환 시 기존의 모든 비-프로젝트 탭들을 우선 일괄 display: none 처리하여 화면 밀림/겹침 완벽 차단
+            var allNonProjectTabs = [dashboard, issue, cctv, construction, monthlyIssues, example1];
+            allNonProjectTabs.forEach(function(tabEl) {
+                if (tabEl) tabEl.style.display = 'none';
+            });
+
+            if (example1 && tabName === 'example1') {
+                example1.style.display = 'block';
+                example1.style.position = 'relative';
+                example1.style.zIndex = '10';
+                if (!window._example1CctvInited) {
+                    window._example1CctvInited = true;
+                    import('./js/example1-cctv.js')
+                        .then(mod => { if (typeof mod.initExample1Cctv === 'function') mod.initExample1Cctv(); })
+                        .catch(err => console.error('[Example1 CCTV] init 실패:', err));
+                } else if (typeof window.initExample1Cctv === 'function') {
+                    window.initExample1Cctv();
+                }
+                // 3D 뷰어 초기화 (최초 1회)
+                if (!window._weekly3DInited && typeof window.initWeekly3DViewer === 'function') {
+                    window._weekly3DInited = true;
+                    window.initWeekly3DViewer('weekly-3d-viewer');
+                    // 힌트 자동 페이드아웃
+                    setTimeout(() => {
+                        const hint = document.getElementById('viewer-hint');
+                        if (hint) hint.style.opacity = '0';
+                    }, 3000);
+                }
+            }
+
+            if (dashboard && tabName === 'dashboard') {
+                dashboard.style.display = 'block';
                 dashboard.style.position = 'relative';
                 dashboard.style.zIndex = '10';
                 // 대시보드 탭 최초 전환 시 dashboard.js lazy import
-                if (tabName === 'dashboard' && !window._dashboardInited) {
+                if (!window._dashboardInited) {
                     window._dashboardInited = true;
                     import('./js/dashboard.js?v=20260805-visible-issues1')
                         .then(mod => { if (typeof mod.initDashboard === 'function') mod.initDashboard(); })
                         .catch(err => console.error('[Dashboard] init 실패:', err));
-                } else if (tabName === 'dashboard' && window.refreshDashboard) {
+                } else if (window.refreshDashboard) {
                     window.refreshDashboard();
                 }
             }
-            
 
-            if (construction) {
-                construction.style.display = (tabName === 'construction') ? 'grid' : 'none';
+            if (construction && tabName === 'construction') {
+                construction.style.display = 'grid';
                 construction.style.position = 'relative';
                 construction.style.zIndex = '10';
-                if (tabName === 'construction' && window.refreshConstructionBimDashboard) {
+                if (window.refreshConstructionBimDashboard) {
                     window.refreshConstructionBimDashboard();
                 }
             }
-            if (monthlyIssues) {
-                monthlyIssues.style.display = (tabName === 'monthly-issues') ? 'flex' : 'none';
+
+            if (monthlyIssues && tabName === 'monthly-issues') {
+                monthlyIssues.style.display = 'flex';
                 monthlyIssues.style.position = 'relative';
                 monthlyIssues.style.zIndex = '10';
-                if (tabName === 'monthly-issues' && window.refreshMonthlyIssueStatusTab) {
+                if (window.refreshMonthlyIssueStatusTab) {
                     window.refreshMonthlyIssueStatusTab();
                 }
             }
-            if (issue) {
-                issue.style.display = (tabName === 'issue') ? 'flex' : 'none';
+
+            if (issue && tabName === 'issue') {
+                issue.style.display = 'flex';
                 issue.style.position = 'relative';
                 issue.style.zIndex = '10';
                 issue.style.backgroundColor = '#0f172a';
             }
 
-            if (cctv) {
-                cctv.style.display = (tabName === 'cctv') ? 'block' : 'none';
+            if (cctv && tabName === 'cctv') {
+                cctv.style.display = 'block';
                 cctv.style.position = 'relative';
                 cctv.style.zIndex = '10';
-                if (tabName === 'cctv') {
-                    if (!window._cctvInited) {
-                        window._cctvInited = true;
-                        import('./js/cctv.js')
-                            .then(mod => { if (typeof mod.initCctvTab === 'function') mod.initCctvTab(); })
-                            .catch(err => console.error('[CCTV] init 실패:', err));
-                    }
-                    setTimeout(function() {
-                        if (window.cctvViewer && typeof window.cctvViewer.resize === 'function') {
-                            window.cctvViewer.resize();
-                        }
-                    }, 100);
+                if (!window._cctvInited) {
+                    window._cctvInited = true;
+                    import('./js/cctv.js')
+                        .then(mod => { if (typeof mod.initCctvTab === 'function') mod.initCctvTab(); })
+                        .catch(err => console.error('[CCTV] init 실패:', err));
                 }
+                setTimeout(function() {
+                    if (window.cctvViewer && typeof window.cctvViewer.resize === 'function') {
+                        window.cctvViewer.resize();
+                    }
+                }, 100);
             }
 
             if (project) {
@@ -2169,23 +2444,101 @@
     </script>
 
     <script>
-        // ── FAB Chat Toggle ────────────────────────────────────────
+        // ── FAB Chat Toggle & Drag & Drop ─────────────────────────────
         (function () {
             const fab   = document.getElementById('chat-fab');
             const panel = document.getElementById('ai-chat-panel');
             if (!fab || !panel) return;
 
-            fab.addEventListener('click', () => {
+            let isMouseDown = false;
+            let hasMoved = false;
+            let startX = 0, startY = 0;
+            let initialLeft = 0, initialTop = 0;
+
+            // Restore saved position if available
+            try {
+                const savedPos = JSON.parse(localStorage.getItem('aps_chat_fab_pos') || 'null');
+                if (savedPos && typeof savedPos.left === 'number' && typeof savedPos.top === 'number') {
+                    const maxL = window.innerWidth - 66;
+                    const maxT = window.innerHeight - 66;
+                    const clampL = Math.max(10, Math.min(maxL, savedPos.left));
+                    const clampT = Math.max(10, Math.min(maxT, savedPos.top));
+                    fab.style.bottom = 'auto';
+                    fab.style.right  = 'auto';
+                    fab.style.left   = clampL + 'px';
+                    fab.style.top    = clampT + 'px';
+                }
+            } catch (e) {}
+
+            fab.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return; // Only left click
+                isMouseDown = true;
+                hasMoved = false;
+                startX = e.clientX;
+                startY = e.clientY;
+
+                const rect = fab.getBoundingClientRect();
+                initialLeft = rect.left;
+                initialTop  = rect.top;
+
+                fab.style.bottom = 'auto';
+                fab.style.right  = 'auto';
+                fab.style.left   = initialLeft + 'px';
+                fab.style.top    = initialTop + 'px';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isMouseDown) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                if (Math.hypot(dx, dy) > 4) {
+                    if (!hasMoved) {
+                        hasMoved = true;
+                        fab.classList.add('is-dragging');
+                    }
+                    const maxL = window.innerWidth - fab.offsetWidth - 10;
+                    const maxT = window.innerHeight - fab.offsetHeight - 10;
+                    const newL = Math.max(10, Math.min(maxL, initialLeft + dx));
+                    const newT = Math.max(10, Math.min(maxT, initialTop + dy));
+
+                    fab.style.left = newL + 'px';
+                    fab.style.top  = newT + 'px';
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (!isMouseDown) return;
+                isMouseDown = false;
+                fab.classList.remove('is-dragging');
+
+                if (hasMoved) {
+                    const rect = fab.getBoundingClientRect();
+                    localStorage.setItem('aps_chat_fab_pos', JSON.stringify({
+                        left: rect.left,
+                        top: rect.top
+                    }));
+                }
+            });
+
+            fab.addEventListener('click', (e) => {
+                if (hasMoved) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    hasMoved = false;
+                    return;
+                }
+
                 const isOpen = panel.classList.toggle('open');
                 fab.classList.toggle('active', isOpen);
                 fab.setAttribute('aria-expanded', isOpen);
 
-                // Auto-focus textarea when opening
                 if (isOpen) {
                     const ta = document.getElementById('chat-input');
                     if (ta) setTimeout(() => ta.focus(), 260);
                 }
-            });
+            }, true);
 
             // Close panel when clicking outside
             document.addEventListener('click', (e) => {
@@ -2314,5 +2667,7 @@
             });
         })();
     </script>
+    <!-- 금주 작업 시각화 3D 뷰어 (Three.js) -->
+    <script src="/js/weekly-3d-viewer.js"></script>
 </body>
 </html>

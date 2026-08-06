@@ -404,40 +404,20 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
     };
 
     window.renderIssueTable = async function(skipFetch) {
-        resetFormaColumnsIfNeeded();
-        var tbody = document.getElementById('issue-table-body');
-        if (!tbody) return;
-        renderHeader();
-        if (!skipFetch) {
-            tbody.innerHTML = '<tr><td colspan="' + (window.activeIssueColumns.length + 1) + '" style="text-align:center;padding:36px;color:#94a3b8;">Forma 이슈를 불러오는 중입니다.</td></tr>';
+        // ──────────────────────────────────────────────────────────────────────
+        // [영구 고정] 이 IIFE 버전은 절대로 직접 렌더링하지 않습니다.
+        // 항상 파일 최하단의 최종 버전(_formaFinalRenderIssueTable)에 위임합니다.
+        // 배지 스타일·건화 필터·구분 열 로직은 최종 버전이 단독으로 관리합니다.
+        // ──────────────────────────────────────────────────────────────────────
+        if (typeof window._formaFinalRenderIssueTable === 'function') {
+            return window._formaFinalRenderIssueTable(skipFetch);
         }
-        var issues = skipFetch ? (window.currentFilteredIssues || window.currentIssueList || cache.issues || []) : await loadFormaIssues(false);
-        window.currentIssueList = issues;
-        window.currentFilteredIssues = issues.slice();
-
-        if (!issues.length) {
-            var msg = cache.error ? ('Forma 이슈를 불러오지 못했습니다: ' + cache.error.message) : '표시할 Forma 이슈 데이터가 없습니다.';
-            tbody.innerHTML = '<tr><td colspan="' + (window.activeIssueColumns.length + 1) + '" style="text-align:center;padding:36px;color:#94a3b8;">' + escapeHtml(msg) + '</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = issues.map(function(issue, rowIdx) {
-            var key = issue.id || issue.displayId || rowIdx;
-            var row = '<tr class="issue-row issue-table-row" data-id="' + escapeHtml(key) + '" style="border-bottom:1px solid #334155;cursor:pointer;">';
-            row += '<td style="padding:10px 12px;text-align:center;"><span style="background:#06b6d4;color:#06202a;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;">FORMA</span></td>';
-            window.activeIssueColumns.forEach(function(colKey) {
-                var value = getIssueFieldValue(issue, colKey);
-                var title = String(value || '');
-                var align = (colKey === 'status' || colKey === 'displayId') ? 'text-align:center;' : '';
-                var color = colKey === 'status' ? 'color:#7dd3fc;font-weight:800;' : '';
-                row += '<td style="padding:10px 12px;' + align + color + 'max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(title) + '">' + escapeHtml(value || '-') + '</td>';
-            });
-            row += '</tr>';
-            return row;
-        }).join('');
-
-        bindFormaIssueRows(issues);
-        if (typeof window.initializeTableFilters === 'function') window.initializeTableFilters();
+        // 최종 버전이 아직 로드되지 않은 경우 (race) — 100ms 후 재시도
+        setTimeout(function() {
+            if (typeof window._formaFinalRenderIssueTable === 'function') {
+                window._formaFinalRenderIssueTable(skipFetch);
+            }
+        }, 100);
     };
 
     function bindFormaIssueRows(issues) {
@@ -4909,7 +4889,10 @@ window.initializeTableFilters = function() {
     applyFilters();
 };
 
-window.renderIssueTable = function() {
+window.renderIssueTable = function(skipFetch) {
+    if (typeof window._formaFinalRenderIssueTable === 'function') {
+        return window._formaFinalRenderIssueTable(skipFetch);
+    }
     // 🚨 [QuotaExceededError 영구 박멸] 쓰기 권한이 완전히 막힌 상태라면 무조건 기존 이미지 캐시 삭제하여 통로 개방
     try {
         localStorage.setItem('__quota_check__', '1');
@@ -4990,9 +4973,23 @@ window.renderIssueTable = function() {
             var item = totalIssues[u];
             if (item && item.id && !uniqueMap[item.id]) {
                 uniqueMap[item.id] = true;
+                // 건화 이슈 제외
+                var _typeCheck = String(item.typePath || item.type || item.category || '');
+                if (_typeCheck.indexOf('건화') > -1) continue;
                 finalMergedList.push(item);
             }
         }
+
+        // Forma 캐시도 건화 제외 후 병합
+        var formaItems = Array.isArray(window._gangbukFormaCache) ? window._gangbukFormaCache : [];
+        formaItems.forEach(function(fi) {
+            if (!fi || !fi.id) return;
+            if (uniqueMap[fi.id]) return;
+            var _tc = String(fi.typePath || fi.type || fi.category || '');
+            if (_tc.indexOf('건화') > -1) return;
+            uniqueMap[fi.id] = true;
+            finalMergedList.push(fi);
+        });
 
         // 시스템 전역 인메모리 캐시 변수에 최종 병합 리스트 동기화
         window.currentIssueList = finalMergedList;
@@ -5094,12 +5091,41 @@ window.renderIssueTable = function() {
             var tdStyle = "padding: 14px 20px;";
             var trHtml = "<tr class='issue-item issue-row' data-id='" + idStr + "' data-issue-id='" + (item.id || "") + "' style='border-bottom: 1px solid #334155; transition: background 0.2s; cursor: pointer;' onmouseover='this.style.background=\"#334155\"' onmouseout='this.style.background=\"transparent\"' onclick='window.focusIssueOnViewer(\"" + idStr + "\", \"" + (item.urn || "") + "\")'>";
             
-            // 🚨 첫 번째 열: 구분 (단독 vs 비교) 식별 및 배지 출력
-            var compareBadgeStyle = "background-color: #8b5cf6; color: #ffffff; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; display: inline-block; white-space: nowrap; line-height: 1.2; text-align: center;";
-            var singleBadgeStyle = "background-color: #f59e0b; color: #ffffff; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; display: inline-block; white-space: nowrap; line-height: 1.2; text-align: center;";
-            var typeBadge = isRealCompare 
-                ? '<span style="' + compareBadgeStyle + '">비교</span>' 
-                : '<span style="' + singleBadgeStyle + '">단독</span>';
+            // 🚨 첫 번째 열: 구분 — issueTypeLabel 기반 배지
+            var _itLabel = (function(iss) {
+                var t = [
+                    iss.typePath,
+                    iss.type,
+                    iss.category,
+                    iss.title,
+                    iss.description,
+                    iss.desc
+                ].map(function(v) {
+                    if (!v) return '';
+                    if (typeof v === 'object') return v.name || v.text || v.title || '';
+                    return String(v);
+                }).join(' ').toLowerCase();
+
+                if (t.indexOf('업데이트') > -1 || t.indexOf('update') > -1) return '업데이트';
+                if (t.indexOf('간섭') > -1 || t.indexOf('clash') > -1 || t.indexOf('collision') > -1) return '간섭이슈';
+                if (t.indexOf('설계') > -1 || t.indexOf('design') > -1) return '설계이슈';
+                if (t.indexOf('품질') > -1 || t.indexOf('quality') > -1) return '품질이슈';
+                if (t.indexOf('안전') > -1 || t.indexOf('safety') > -1) return '안전이슈';
+                if (iss._source === 'cctv' || iss.type === 'CCTV 관제') return '현장관제';
+                if (isRealCompare || iss.isComparison) return '비교';
+                return 'FORMA';
+            })(item);
+            var _itColor = (function(lbl) {
+                if (lbl === '업데이트') return 'background:#f59e0b;color:#111827;';
+                if (lbl === '간섭이슈' || lbl === '간섭') return 'background:#ef4444;color:#fff;';
+                if (lbl === '설계이슈' || lbl === '설계') return 'background:#2563eb;color:#fff;';
+                if (lbl === '품질이슈') return 'background:#10b981;color:#fff;';
+                if (lbl === '안전이슈') return 'background:#8b5cf6;color:#fff;';
+                if (lbl === '현장관제') return 'background:#06b6d4;color:#fff;';
+                if (lbl === '비교') return 'background:#7c3aed;color:#fff;';
+                return 'background:#0284c7;color:#fff;';
+            })(_itLabel);
+            var typeBadge = '<span style="' + _itColor + 'padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;display:inline-block;min-width:52px;text-align:center;">' + _itLabel + '</span>';
             trHtml = trHtml + "<td style='" + tdStyle + " text-align: center;'>" + typeBadge + "</td>";
 
             for(var c=0; c<window.activeIssueColumns.length; c++) {
@@ -5108,19 +5134,13 @@ window.renderIssueTable = function() {
                 else if (colKey === "structure") trHtml = trHtml + "<td style='" + tdStyle + "'>" + (item.structure||"-") + "</td>";
                 else if (colKey === "trade") trHtml = trHtml + "<td style='" + tdStyle + "'>" + (item.trade||"-") + "</td>";
                 else if (colKey === "type") {
-                    var displayType = item.type || "-";
-                    if (displayType.toLowerCase() === 'clash') {
-                        displayType = '간섭';
-                    } else if (displayType.toLowerCase() === 'single') {
-                        displayType = '단독';
-                    } else if (displayType.toLowerCase() === 'compare') {
-                        displayType = '비교';
-                    } else if (displayType.toLowerCase() === 'coordination') {
-                        displayType = '협업';
-                    } else if (displayType.toLowerCase() === 'design') {
-                        displayType = '설계 변경';
+                    // typePath 우선 → type 순으로 유형 텍스트 추출 (건화 > 접두어 제거)
+                    var rawType = item.typePath || item.type_path || item.typeFullName || item.type || '-';
+                    if (typeof rawType === 'object' && rawType) {
+                        rawType = rawType.name || rawType.text || rawType.title || '-';
                     }
-                    trHtml = trHtml + "<td style='" + tdStyle + "'>" + displayType + "</td>";
+                    var displayType = String(rawType).replace(/^건화\s*>\s*/i, '').trim() || '-';
+                    trHtml = trHtml + "<td style='" + tdStyle + "' title='" + displayType + "'>" + displayType + "</td>";
                 }
                 else if (colKey === "desc") trHtml = trHtml + "<td style='" + tdStyle + " max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='" + (item.description||item.desc||"") + "'>" + (item.description||item.desc||"-") + "</td>";
                 else if (colKey === "date") trHtml = trHtml + "<td style='" + tdStyle + "'>" + dateStr + "</td>";
@@ -6319,7 +6339,32 @@ window.bindIssueItemClickEvents = function() {
         if (key === 'displayId') value = issue.displayId || issue.issueNumber || issue.dbId || issue.id;
         else if (key === 'title') value = issue.title;
         else if (key === 'status') value = issue.status;
-        else if (key === 'type') value = issue.typePath || issue.type;
+        else if (key === 'type') {
+            var rawType = issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || '-';
+            if (typeof rawType === 'object' && rawType) {
+                rawType = rawType.name || rawType.text || rawType.title || rawType.typePath || '-';
+            }
+            var cleaned = String(rawType)
+                .replace(/^건화\s*>\s*/i, '')
+                .replace(/^이슈\s*>\s*/i, '')
+                .replace(/^issue\s*>\s*/i, '')
+                .trim();
+
+            if (cleaned === '이슈' || cleaned === 'Issue' || cleaned === '' || cleaned === '-') {
+                var cat = String(issue.category || '').trim();
+                if (cat && cat !== '이슈' && cat !== 'Issue') {
+                    cleaned = cat;
+                } else {
+                    var tLabel = issueTypeLabel(issue);
+                    if (tLabel && tLabel !== 'FORMA') {
+                        cleaned = tLabel;
+                    } else {
+                        cleaned = '기타';
+                    }
+                }
+            }
+            value = cleaned;
+        }
         else if (key === 'assignee') value = issue.assignee;
         else if (key === 'dueDate') value = fmtDate(issue.dueDate || issue.endDate || issue.duedate);
         else if (key === 'startDate') value = fmtDate(issue.startDate || issue.startdate);
@@ -6365,8 +6410,19 @@ window.bindIssueItemClickEvents = function() {
         if (!window.activeIssueColumns.length) window.activeIssueColumns = DEFAULTS.slice();
     }
 
+    function isGunhwaIssueClient(issue) {
+        if (!issue) return false;
+        try {
+            var fullStr = JSON.stringify(issue).normalize('NFC').toLowerCase();
+            if (fullStr.indexOf('건화') > -1 || fullStr.indexOf('\uac74\ud654') > -1) return true;
+        } catch (e) {}
+        return false;
+    }
+
     async function fetchFormaIssues(force) {
-        if (!force && formaCache.issues.length && Date.now() - formaCache.ts < 60000) return formaCache.issues;
+        if (!force && window._gangbukFormaSSOT && window._gangbukFormaSSOT.length && Date.now() - formaCache.ts < 60000) {
+            return window._gangbukFormaSSOT;
+        }
         var resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
         if (!resp.ok) {
             var body = await resp.json().catch(function() { return {}; });
@@ -6375,9 +6431,10 @@ window.bindIssueItemClickEvents = function() {
         var json = await resp.json();
         var issues = Array.isArray(json.data) ? json.data : [];
         issues = issues.filter(function(issue) {
-            return String(issue.typePath || issue.type || '').indexOf('건화') === -1;
+            return !isGunhwaIssueClient(issue);
         });
         formaCache = { issues: issues, ts: Date.now(), error: null };
+        window._gangbukFormaSSOT = issues;
         window._gangbukFormaCache = issues;
         window.currentIssueList = issues;
         window.currentFilteredIssues = issues.slice();
@@ -6403,12 +6460,34 @@ window.bindIssueItemClickEvents = function() {
         var allBtn = document.getElementById('sub-tab-all');
         if (!allBtn || !allBtn.parentElement) return;
         var container = allBtn.parentElement;
-        container.innerHTML = [
-            '<button id="sub-tab-all" class="issue-sub-btn active" data-issue-filter="all" style="background:#334155;color:white;border:1px solid #475569;padding:8px 20px;border-radius:4px;font-weight:bold;cursor:pointer;">전체이슈</button>',
-            '<button id="sub-tab-design" class="issue-sub-btn" data-issue-filter="design" style="background:transparent;color:#94a3b8;border:1px solid transparent;padding:8px 20px;border-radius:4px;cursor:pointer;">설계 이슈</button>',
-            '<button id="sub-tab-clash" class="issue-sub-btn" data-issue-filter="clash" style="background:transparent;color:#94a3b8;border:1px solid transparent;padding:8px 20px;border-radius:4px;cursor:pointer;">간섭 이슈</button>',
-            '<button id="sub-tab-update" class="issue-sub-btn" data-issue-filter="update" style="background:transparent;color:#94a3b8;border:1px solid transparent;padding:8px 20px;border-radius:4px;cursor:pointer;">업데이트</button>'
-        ].join('');
+
+        // 이미 동적 탭이 생성된 경우 → 현재 필터 기준으로 active만 동기화하고 재생성 안 함
+        if (container.querySelector('[data-issue-filter]')) {
+            var cur = window.currentIssueFilter || 'all';
+            var inactiveS = 'background:transparent;color:#94a3b8;border:1px solid transparent;padding:8px 20px;border-radius:4px;cursor:pointer;font-weight:normal;';
+            var activeS   = 'background:#334155;color:white;border:1px solid #475569;padding:8px 20px;border-radius:4px;font-weight:bold;cursor:pointer;';
+            container.querySelectorAll('[data-issue-filter]').forEach(function(btn) {
+                btn.style.cssText = btn.getAttribute('data-issue-filter') === cur ? activeS : inactiveS;
+                btn.classList.toggle('active', btn.getAttribute('data-issue-filter') === cur);
+            });
+            return;
+        }
+
+        // 최초 1회 생성 (현재 필터 상태 반영)
+        var cur = window.currentIssueFilter || 'all';
+        var tabs = [
+            { id: 'sub-tab-all',    filter: 'all',    label: '전체이슈' },
+            { id: 'sub-tab-design', filter: 'design', label: '설계 이슈' },
+            { id: 'sub-tab-clash',  filter: 'clash',  label: '간섭 이슈' },
+            { id: 'sub-tab-update', filter: 'update', label: '업데이트' }
+        ];
+        container.innerHTML = tabs.map(function(t) {
+            var isActive = t.filter === cur;
+            var s = isActive
+                ? 'background:#334155;color:white;border:1px solid #475569;padding:8px 20px;border-radius:4px;font-weight:bold;cursor:pointer;'
+                : 'background:transparent;color:#94a3b8;border:1px solid transparent;padding:8px 20px;border-radius:4px;cursor:pointer;';
+            return '<button id="' + t.id + '" class="issue-sub-btn' + (isActive ? ' active' : '') + '" data-issue-filter="' + t.filter + '" style="' + s + '">' + t.label + '</button>';
+        }).join('');
         container.querySelectorAll('[data-issue-filter]').forEach(function(btn) {
             btn.onclick = function() { window.filterIssues(btn.getAttribute('data-issue-filter')); };
         });
@@ -6425,18 +6504,38 @@ window.bindIssueItemClickEvents = function() {
     }
 
     function issueTypeLabel(issue) {
-        var typeText = String(issue.typePath || issue.type || issue.category || '').toLowerCase();
+        if (!issue) return 'FORMA';
+        var typeText = [
+            issue.typePath,
+            issue.type,
+            issue.category,
+            issue.title,
+            issue.description,
+            issue.desc
+        ].map(function(v) {
+            if (!v) return '';
+            if (typeof v === 'object') return v.name || v.text || v.title || '';
+            return String(v);
+        }).join(' ').toLowerCase();
+
         if (typeText.indexOf('업데이트') > -1 || typeText.indexOf('update') > -1) return '업데이트';
-        if (typeText.indexOf('간섭') > -1 || typeText.indexOf('clash') > -1 || typeText.indexOf('collision') > -1) return '간섭';
+        if (typeText.indexOf('간섭') > -1 || typeText.indexOf('clash') > -1 || typeText.indexOf('collision') > -1) return '간섭이슈';
         if (typeText.indexOf('설계') > -1 || typeText.indexOf('design') > -1) return '설계이슈';
-        return field(issue, 'type') || '-';
+        if (typeText.indexOf('품질') > -1 || typeText.indexOf('quality') > -1) return '품질이슈';
+        if (typeText.indexOf('안전') > -1 || typeText.indexOf('safety') > -1) return '안전이슈';
+        if (issue._source === 'cctv' || issue.type === 'CCTV 관제') return '현장관제';
+        if (issue.isComparison || issue._type === 'compare' || String(issue.id || '').indexOf('COMP-') === 0) return '비교';
+        return 'FORMA';
     }
 
     function issueTypeBadgeStyle(label) {
         if (label === '업데이트') return 'background:#f59e0b;color:#111827;';
-        if (label === '간섭') return 'background:#ef4444;color:#fff;';
-        if (label === '설계이슈') return 'background:#2563eb;color:#fff;';
-        return 'background:#64748b;color:#fff;';
+        if (label === '간섭이슈' || label === '간섭') return 'background:#ef4444;color:#fff;';
+        if (label === '설계이슈' || label === '설계') return 'background:#2563eb;color:#fff;';
+        if (label === '품질이슈') return 'background:#10b981;color:#fff;';
+        if (label === '안전이슈') return 'background:#8b5cf6;color:#fff;';
+        if (label === '현장관제') return 'background:#06b6d4;color:#fff;';
+        return 'background:#0284c7;color:#fff;';
     }
 
     function renderHeader() {
@@ -6772,6 +6871,10 @@ window.bindIssueItemClickEvents = function() {
         installColumns();
         ensureIssueTypeTabs();
         renderHeader();
+        // ── [영구 고정] 이 버전이 유일한 실제 렌더러입니다.
+        // 다른 IIFE·구버전에서 window.renderIssueTable을 덮어써도
+        // _formaFinalRenderIssueTable은 항상 이 함수를 가리킵니다.
+        window._formaFinalRenderIssueTable = window.renderIssueTable;
         var body = document.getElementById('issue-table-body');
         if (!body) return;
         if (!useExisting) body.innerHTML = '<tr><td colspan="' + (window.activeIssueColumns.length + 1) + '" style="padding:36px;text-align:center;color:#94a3b8;">Forma 이슈를 불러오는 중입니다.</td></tr>';
@@ -6785,8 +6888,12 @@ window.bindIssueItemClickEvents = function() {
                 return;
             }
         }
-        issues = issues.filter(function(issue) {
-            return matchesIssueTypeFilter(issue, window.currentIssueFilter || 'all');
+        if (Array.isArray(issues) && issues.length) {
+            window._gangbukFormaSSOT = issues.filter(function(issue) { return !isGunhwaIssueClient(issue); });
+            window._gangbukFormaCache = window._gangbukFormaSSOT;
+        }
+        issues = (window._gangbukFormaSSOT || issues).filter(function(issue) {
+            return !isGunhwaIssueClient(issue) && matchesIssueTypeFilter(issue, window.currentIssueFilter || 'all');
         });
         window.currentFilteredIssues = issues.slice();
         if (!issues.length) {

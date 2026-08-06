@@ -105,6 +105,44 @@ export function getActiveViewer() {
     return window.viewer || window.cctvViewer;
 }
 
+// Z축 -90도 자동 회전 대상 구조물 폴더 지정 (02 신설구조물 하위 5개 시설)
+const AUTO_ROTATE_TARGETS = [
+    '01 착수정',
+    '02 응집침전지',
+    '03 급속여과지',
+    '04 후오존접촉지',
+    '05 활성탄흡착지',
+    '착수정',
+    '응집침전지',
+    '급속여과지',
+    '후오존접촉지',
+    '활성탄흡착지'
+];
+
+function isTargetAutoRotateFolder(pathArray) {
+    const pathStr = pathArray.join('/');
+    return AUTO_ROTATE_TARGETS.some(target => pathStr.includes(target));
+}
+
+function autoRegisterRotationStates(node, parentPaths = []) {
+    if (!node) return;
+    const currentName = node.folderName || node.name || '';
+    const currentPath = [...parentPaths, currentName];
+    const isAutoRotate = isTargetAutoRotateFolder(currentPath);
+
+    if (Array.isArray(node.files)) {
+        node.files.forEach(file => {
+            if (file && file.urn && isAutoRotate) {
+                rotationState[file.urn] = true;
+            }
+        });
+    }
+
+    if (Array.isArray(node.children)) {
+        node.children.forEach(child => autoRegisterRotationStates(child, currentPath));
+    }
+}
+
 /**
  * 🌐 [Backend API] '01 Revit (<강북정수장 증설공사 BIM 용역>)' 계층형 폴더 및 파일 트리 정보 가져오기
  */
@@ -123,6 +161,7 @@ export async function fetchGlobalRvtModels(force = false) {
 
     window._globalRvtModelsCache = data;
     window._globalRvtModelsCacheAt = Date.now();
+    autoRegisterRotationStates(data);
     return data;
 }
 /**
@@ -148,13 +187,14 @@ export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = [], 
     popup.style.left = '20px';
     popup.style.zIndex = '999999';
     popup.style.display = 'flex';
-    listEl.innerHTML = '<div style="padding:12px; color:#94a3b8; font-size:12px;">Autodesk Docs ?? ??? ???? ????.</div>';
+    listEl.innerHTML = '<div style="padding:12px; color:#94a3b8; font-size:12px;">Autodesk Docs 폴더 목록을 불러오는 중입니다...</div>';
 
     let rvtTree = null;
     try {
         rvtTree = window._globalRvtModelsCache || await fetchGlobalRvtModels();
+        autoRegisterRotationStates(rvtTree);
     } catch (err) {
-        listEl.innerHTML = `<div style="padding:12px; color:#fca5a5; background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.25); border-radius:6px; font-size:12px; line-height:1.45;"><b>?? Autodesk Docs ?? ??? ???? ?????.</b><br>${err.message}</div>`;
+        listEl.innerHTML = `<div style="padding:12px; color:#fca5a5; background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.25); border-radius:6px; font-size:12px; line-height:1.45;"><b>Autodesk Docs 목록을 불러오지 못했습니다.</b><br>${err.message}</div>`;
         return;
     }
 
@@ -165,12 +205,12 @@ export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = [], 
             if (subElem) listEl.appendChild(subElem);
         });
     } else {
-        listEl.innerHTML = '<div style="padding:12px; color:#94a3b8; font-size:12px;">??? Revit ??? ????.</div>';
+        listEl.innerHTML = '<div style="padding:12px; color:#94a3b8; font-size:12px;">표시할 Revit 모델이 없습니다.</div>';
     }
 }
 
 /**
- * ?? ???(C ??, A ??, M ??, E ??, AM ????, S ??) ?? ? ??
+ * 주요 공종(C 토목, A 건축, M 기계, E 전기, AM 건축설비, S 구조) 분류 및 색상
  */
 export function getTradeInfo(fileName) {
     const name = (fileName || '').toUpperCase();
@@ -204,8 +244,12 @@ export function getTradeInfo(fileName) {
 /**
  * 🌐 계층형 폴더 노드 및 파일 토글 스위치 DOM 생성 함수 (재귀지원 & 폴더 토글)
  */
-function renderTreeFolderNode(folderNode, mainUrn) {
+function renderTreeFolderNode(folderNode, mainUrn, parentFolders = []) {
     if (!folderNode) return null;
+    const folderName = folderNode.folderName || folderNode.name || '폴더';
+    const currentPath = [...parentFolders, folderName];
+    const isAutoRotateFolder = isTargetAutoRotateFolder(currentPath);
+
     const details = document.createElement('details');
     details.open = true; // 기본 100% 펼침 상태
     details.setAttribute('open', '');
@@ -216,13 +260,10 @@ function renderTreeFolderNode(folderNode, mainUrn) {
     summary.innerHTML = `
         <span style="display:flex; align-items:center; gap:6px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
             <i class="fas fa-folder-open" style="color:#f59e0b; flex-shrink:0;"></i>
-            <span>${folderNode.folderName || folderNode.name || '폴더'}</span>
+            <span>${folderName}</span>
         </span>
-        <!-- 폴더 제어 버튼 그룹 (-90도 전체 회전 & 전체 ON/OFF 스위치) -->
+        <!-- 폴더 제어 버튼 그룹 (전체 ON/OFF 스위치) -->
         <div style="display:flex; align-items:center; gap:8px;" onclick="event.stopPropagation();">
-            <label style="display:inline-flex; align-items:center; gap:3px; font-size:0.68rem; color:#94a3b8; cursor:pointer;" title="폴더 하위 전체 Z축 -90도 회전 일괄 적용">
-                <input type="checkbox" class="folder-rotate-cb" style="accent-color:#38bdf8; cursor:pointer; width:11px; height:11px;"> -90°
-            </label>
             <label style="position:relative;display:inline-flex;align-items:center;cursor:pointer;flex-shrink:0;" title="폴더 하위 전체 ON/OFF">
                 <input type="checkbox" class="folder-vis-toggle-cb" style="opacity:0;width:0;height:0;position:absolute;">
                 <span class="fvt-track" style="width:28px;height:14px;background:#334155;border-radius:28px;display:block;transition:background 0.2s;position:relative;">
@@ -233,36 +274,44 @@ function renderTreeFolderNode(folderNode, mainUrn) {
     `;
     details.appendChild(summary);
 
-    const folderRotateCb = summary.querySelector('.folder-rotate-cb');
     const folderCb = summary.querySelector('.folder-vis-toggle-cb');
     const folderTrack = summary.querySelector('.fvt-track');
     const folderThumb = summary.querySelector('.fvt-thumb');
 
-    // ⚡ 폴더 하위 일괄 -90도 회전 체크박스 이벤트
-    if (folderRotateCb) {
-        folderRotateCb.onchange = () => {
-            const isRotateOn = folderRotateCb.checked;
-            const childRotateCbs = details.querySelectorAll('.rotate-cb');
-            childRotateCbs.forEach(cb => {
-                cb.checked = isRotateOn;
-                cb.dispatchEvent(new Event('change'));
-            });
-        };
-    }
+    // ⚡ 폴더 스위치 UI 갱신 헬퍼
+    const syncFolderSwitchUI = (isFolderOn) => {
+        folderCb.checked = isFolderOn;
+        folderTrack.style.background = isFolderOn ? '#38bdf8' : '#334155';
+        folderThumb.style.left = isFolderOn ? '16px' : '2px';
+    };
+
+    // ⚡ 하위 파일들의 켜짐 상태를 기반으로 폴더 스위치 자동 조절
+    const updateFolderStateFromChildren = () => {
+        const childFileCbs = Array.from(contentDiv.querySelectorAll('.vis-toggle-cb'));
+        if (childFileCbs.length > 0) {
+            const allChecked = childFileCbs.every(cb => cb.checked);
+            syncFolderSwitchUI(allChecked);
+        }
+    };
+
+    // ⚡ 하위 자식 노드 변경 시 이벤트 수신
+    details.addEventListener('child-vis-changed', () => {
+        updateFolderStateFromChildren();
+    });
 
     // ⚡ 폴더 토글 변경 시 하위 파일 스위치들 일괄 ON/OFF 실행
     folderCb.onchange = () => {
         const isFolderOn = folderCb.checked;
-        folderTrack.style.background = isFolderOn ? '#38bdf8' : '#334155';
-        folderThumb.style.left = isFolderOn ? '16px' : '2px';
+        syncFolderSwitchUI(isFolderOn);
 
-        const childCbs = details.querySelectorAll('.vis-toggle-cb');
+        const childCbs = contentDiv.querySelectorAll('.vis-toggle-cb');
         childCbs.forEach(cb => {
             if (cb.checked !== isFolderOn) {
                 cb.checked = isFolderOn;
                 cb.dispatchEvent(new Event('change'));
             }
         });
+        details.dispatchEvent(new CustomEvent('child-vis-changed', { bubbles: true }));
     };
 
     const contentDiv = document.createElement('div');
@@ -271,7 +320,7 @@ function renderTreeFolderNode(folderNode, mainUrn) {
     // 1. 하위 폴더 노드 (Subfolders) 재귀 렌더링
     if (Array.isArray(folderNode.children) && folderNode.children.length > 0) {
         folderNode.children.forEach(subChild => {
-            const childElem = renderTreeFolderNode(subChild, mainUrn);
+            const childElem = renderTreeFolderNode(subChild, mainUrn, currentPath);
             if (childElem) contentDiv.appendChild(childElem);
         });
     }
@@ -286,12 +335,20 @@ function renderTreeFolderNode(folderNode, mainUrn) {
             const trade = getTradeInfo(file.name);
             const normFileUrn = normalizeUrnValue(file.urn);
 
+            // 해당 파일이 회전 대상 5개 폴더 하위에 속한 경우 rotationState 자동 적용
+            if (isAutoRotateFolder) {
+                rotationState[file.urn] = true;
+            }
+
             // 🎯 사용자가 직접 열고 있는 메인 모델 파일인지 판별 (오직 이 경우에만 [활성] 뱃지)
             const isMainModel = !!(normFileUrn && normMainUrn && normFileUrn === normMainUrn);
             if (isMainModel) {
                 const activeViewer = getActiveViewer();
                 if (activeViewer && activeViewer.model) {
                     loadedModels[file.urn] = activeViewer.model;
+                    if (isRotationEnabled(file.urn)) {
+                        applyModelRotation(activeViewer, file.urn, true);
+                    }
                 }
             }
             
@@ -310,10 +367,6 @@ function renderTreeFolderNode(folderNode, mainUrn) {
                     ${file.name}
                 </span>
                 ${isMainModel ? '<span style="font-size:0.62rem; color:#38bdf8; background:rgba(56,189,248,0.22); border:1px solid rgba(56,189,248,0.6); padding:1px 5px; border-radius:4px; font-weight:bold; flex-shrink:0;">활성</span>' : ''}
-                <!-- -90° 회전 옵션 체크박스 -->
-                <label style="display:inline-flex; align-items:center; gap:3px; font-size:0.68rem; color:#94a3b8; cursor:pointer;" title="Z축 -90도 회전 주입">
-                    <input type="checkbox" class="rotate-cb" data-urn="${file.urn}" style="accent-color:#38bdf8; cursor:pointer; width:11px; height:11px;"> -90°
-                </label>
                 <!-- ON / OFF 토글 스위치 -->
                 <label style="position:relative;display:inline-flex;align-items:center;cursor:pointer;flex-shrink:0;">
                     <input type="checkbox" class="vis-toggle-cb" data-urn="${file.urn}" data-name="${file.name}" ${isCheckedOn ? 'checked' : ''} style="opacity:0;width:0;height:0;position:absolute;">
@@ -323,27 +376,18 @@ function renderTreeFolderNode(folderNode, mainUrn) {
                 </label>
             `;
             const cb = row.querySelector('.vis-toggle-cb');
-            const rotateCb = row.querySelector('.rotate-cb');
             const track = row.querySelector('.vt-track');
             const thumb = row.querySelector('.vt-thumb');
-
-            if (rotateCb) {
-                rotateCb.checked = isRotationEnabled(file.urn);
-                rotateCb.onchange = () => {
-                    rotationState[file.urn] = rotateCb.checked;
-                    const targetViewer = getActiveViewer();
-                    const applied = applyModelRotation(targetViewer, file.urn, rotateCb.checked);
-                    if (!applied && (getLoadedModelByUrn(file.urn) || getMainViewerModelByUrn(targetViewer, file.urn))) {
-                        console.warn('[ModelVisibility] model exists, but rotation could not be applied:', file.name);
-                    }
-                };
-            }
 
             // ⚡ 토글 스위치 변경 시 실제 ON/OFF 제어 연결부
             cb.onchange = async () => {
                 const isOn = cb.checked;
                 track.style.background = isOn ? '#38bdf8' : '#334155';
                 thumb.style.left = isOn ? '17px' : '2px';
+
+                // 상위 폴더 스위치 상태 동기화 및 부모 트리로 이벤트 전파
+                updateFolderStateFromChildren();
+                details.dispatchEvent(new CustomEvent('child-vis-changed', { bubbles: true }));
 
                 const targetViewer = getActiveViewer();
                 if (!targetViewer) {
@@ -363,6 +407,12 @@ function renderTreeFolderNode(folderNode, mainUrn) {
     }
 
     details.appendChild(contentDiv);
+
+    // 초기 렌더링 완료 후 하위 파일 켜짐 상태에 따라 폴더 스위치 초기 상태 자동 동기화
+    setTimeout(() => {
+        updateFolderStateFromChildren();
+    }, 0);
+
     return details;
 }
 

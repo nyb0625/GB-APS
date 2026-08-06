@@ -95,6 +95,17 @@ const UTIC_CCTV_CHANNELS = [
         modelName: '강북_구조물_신설_07_정수지_C',
         modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLmxWN1cwcnduUnNpTnNJOWFaaF9jR2c_dmVyc2lvbj05',
         img: '/img/lapse/lapse_3.jpg'
+    },
+    {
+        id: 'cctv_pohang_duho',
+        name: '포항 두호동',
+        title: '포항 두호동',
+        streamType: 'kb',
+        cctvIp: '9988',
+        pageUrl: 'https://www.utic.go.kr/jsp/map/openDataCctvStream.jsp?key=4ydVvgYFUHonR2Q0ZysY7MM1MQ5xJ84pwAr3jVMY&cctvid=L933071&cctvName=%25ED%258F%25AC%25ED%2595%25AD%2520%25EB%2591%2590%25ED%2598%25B8%25EB%258F%2599&kind=KB&cctvip=9988&cctvch=undefined&id=undefined&cctvpasswd=undefined&cctvport=undefined',
+        modelName: '강북_구조물_신설_02_응집침전지_C',
+        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLk1EYVFnc1N6UVBheVJHaU53dGl3cUE_dmVyc2lvbj0y',
+        img: '/img/lapse/lapse_1.jpg'
     }
 ];
 
@@ -106,7 +117,7 @@ async function resolveKbStreamUrl(cctvIp) {
         const apiUrl = `https://www.utic.go.kr/map/getGyeonggiCctvUrl.do?cctvIp=${cctvIp}`;
         const resp = await axiosTls.get(apiUrl, {
             headers: SPOOF_HEADERS,
-            timeout: 4000
+            timeout: 5000
         });
         const raw = String(resp.data || '').trim();
         if (!raw || raw === 'null') return null;
@@ -115,6 +126,24 @@ async function resolveKbStreamUrl(cctvIp) {
         if (resolved.startsWith('//')) {
             resolved = 'https:' + resolved;
         }
+
+        if (resolved.includes('cctvRequest')) {
+            try {
+                const redirResp = await axiosTls.get(resolved, {
+                    headers: SPOOF_HEADERS,
+                    maxRedirects: 5,
+                    timeout: 5000,
+                    validateStatus: status => status < 400
+                });
+                const finalUrl = redirResp.request?.res?.responseUrl || redirResp.config?.url;
+                if (finalUrl && finalUrl.includes('.m3u8')) return finalUrl;
+            } catch (redirErr) {
+                if (redirErr.response && redirErr.response.headers && redirErr.response.headers.location) {
+                    return redirErr.response.headers.location;
+                }
+            }
+        }
+
         return resolved;
     } catch (e) {
         console.warn(`[KB CCTV] resolveKbStreamUrl(${cctvIp}) failed:`, e.message);
@@ -285,14 +314,24 @@ router.use('/proxy/:protocol/:host', async (req, res) => {
  */
 router.get('/live', async (req, res) => {
     try {
-        const channels = UTIC_CCTV_CHANNELS.map((ch, idx) => ({
-            id: ch.id,
-            title: ch.name,
-            streamUrl: ch.streamUrl || '',
-            format: 'HLS',
-            modelName: ch.modelName || '',
-            modelUrn: ch.modelUrn || '',
-            img: ch.img || `/img/lapse/lapse_${(idx % 3) + 1}.jpg`
+        const channels = await Promise.all(UTIC_CCTV_CHANNELS.map(async (ch, idx) => {
+            let streamUrl = ch.streamUrl || '';
+            if (ch.streamType === 'kb' && ch.cctvIp) {
+                const resolved = await resolveKbStreamUrl(ch.cctvIp);
+                if (resolved) streamUrl = resolved;
+            } else if (ch.streamType === 'utic_page' && ch.pageUrl) {
+                const resolved = await resolveUticPageStreamUrl(ch.pageUrl);
+                if (resolved) streamUrl = resolved;
+            }
+            return {
+                id: ch.id,
+                title: ch.name,
+                streamUrl: streamUrl,
+                format: 'HLS',
+                modelName: ch.modelName || '',
+                modelUrn: ch.modelUrn || '',
+                img: ch.img || `/img/lapse/lapse_${(idx % 3) + 1}.jpg`
+            };
         }));
 
         return res.json({

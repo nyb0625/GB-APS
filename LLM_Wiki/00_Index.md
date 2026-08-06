@@ -27,6 +27,7 @@ APS(Autodesk Platform Services) 정수장 모니터링 시스템의 핵심 아�
 - [[Resolve_Workflow]]: 이슈 '종료' 시점 조치 캡처 추가 발화 및 백그라운드 대기 워크플로우
 - [[UI_Layout_Filters]]: 메인 테이블 헤더 순서 커스터마이징 및 다중 열 필터링 적용 원리
 - [[PDF_Export]]: 인쇄 최적화 HTML 보고서 기반 PDF 변환 및 중복 캡처 페이지 침범 방지 기법
+- [[4D_Phasing_Simulation_and_Issue_SSOT_Integration]]: 4D 시공 시뮬레이션 UI, LocalStorage 영구 보존, 전역 이슈 SSOT 통제 및 CCTV URN 해소 명세
 
 ## 🛠️ 30. 트러블슈팅 및 극복 기록 (Troubleshooting)
 

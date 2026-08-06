@@ -1303,11 +1303,19 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             fetchFormaIssues(projectId, containerId, token, limit)
         ]);
         const enrichedIssues = await enrichFormaIssuesWithDetails(rawIssues, projectId, containerId, token);
+        const isGunhwaIssueServer = (issue) => {
+            if (!issue) return false;
+            try {
+                const fullStr = JSON.stringify(issue).normalize('NFC').toLowerCase();
+                return fullStr.includes('건화') || fullStr.includes('\uac74\ud654');
+            } catch (e) {
+                return false;
+            }
+        };
+
         const normalized = enrichedIssues
             .map(issue => normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap))
-            .filter(issue => !String(issue.typePath || issue.type || '').includes('\uAC74\uD654'))
-            .filter(issue => !String(issue.typePath || issue.type || '').includes('건화'))
-            .filter(issue => !String(issue.typePath || issue.type || '').includes('건화'));
+            .filter(issue => !isGunhwaIssueServer(issue));
         const placementDebug = debugPlacement
             ? enrichedIssues
                 .map((issue, index) => buildPlacementDebug(issue, normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap)))
