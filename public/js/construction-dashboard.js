@@ -555,6 +555,7 @@ function renderStructureIssueList(issues, emptyMessage) {
 
     const rows = sorted.map(issue => {
         const issueKey = getIssueKey(issue);
+        const rawId = issue.id || issue.displayId || issue.dbId || issueKey;
         const groupKey = getStatusGroup(issue);
         const group = STATUS_GROUPS[groupKey] || STATUS_GROUPS.created;
         const desc = getIssueDescription(issue);
@@ -567,6 +568,9 @@ function renderStructureIssueList(issues, emptyMessage) {
                 <td>${escapeHtml(formatShortDate(getIssueStart(issue)))}</td>
                 <td>${escapeHtml(formatShortDate(getIssueEnd(issue, getIssueStart(issue))))}</td>
                 <td>${escapeHtml(getIssueAssignee(issue))}</td>
+                <td>
+                    <button class="btn-view-3d" data-issue-id="${escapeHtml(rawId)}" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: transparent; border: 1px solid #4dc4ff; color: #4dc4ff; border-radius: 4px;">🔍 3D 뷰어로 위치 보기</button>
+                </td>
             </tr>
         `;
     }).join('');
@@ -578,10 +582,11 @@ function renderStructureIssueList(issues, emptyMessage) {
                     <th style="width:96px;">ID</th>
                     <th>제목</th>
                     <th style="width:92px;">상태</th>
-                    <th style="width:150px;">유형</th>
+                    <th style="width:130px;">유형</th>
                     <th style="width:92px;">시작일</th>
                     <th style="width:92px;">마감일</th>
-                    <th style="width:110px;">담당자</th>
+                    <th style="width:90px;">담당자</th>
+                    <th style="width:140px;">3D 위치</th>
                 </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -591,18 +596,68 @@ function renderStructureIssueList(issues, emptyMessage) {
 
 function bindStructureIssueListEvents(container, issues) {
     if (!container) return;
-    const localMap = new Map();
     issues.forEach(issue => {
         const key = getIssueKey(issue);
         if (key) {
-            localMap.set(key, issue);
             dashboardIssueRegistry.set(key, issue);
         }
     });
-    container.querySelectorAll('.bim-structure-issue-row').forEach(row => {
-        row.addEventListener('click', () => {
+
+    if (container.dataset.structureIssueEventsBound) {
+        return;
+    }
+    container.dataset.structureIssueEventsBound = 'true';
+
+    container.addEventListener('click', (event) => {
+        const btn3d = event.target.closest('.btn-view-3d');
+        if (btn3d) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const targetIssueId = btn3d.getAttribute('data-issue-id');
+            console.log("🚀 3D 뷰어 이동 트리거 - 이슈 ID: ", targetIssueId);
+
+            // ── 이슈 객체 탐색: 행의 data-issue-key → registry 순으로 조회 ──
+            const row = btn3d.closest('.bim-structure-issue-row');
+            const rowKey = row ? row.getAttribute('data-issue-key') : null;
+            const issue = (rowKey && dashboardIssueRegistry.get(rowKey))
+                || (targetIssueId && dashboardIssueRegistry.get(targetIssueId));
+
+            if (!issue) {
+                console.warn('[btn-view-3d] 이슈 객체를 찾을 수 없습니다. ID:', targetIssueId);
+                return;
+            }
+
+            // ── 월간 이슈 모달 및 이슈 상세 모달 닫기 ──
+            const modal = container.closest('.bim-timeline-modal') || document.getElementById('bim-timeline-modal');
+            if (modal) {
+                modal.style.display = 'none';
+                modal.setAttribute('aria-hidden', 'true');
+            }
+            const detailModal = document.getElementById('forma-issue-detail-modal');
+            if (detailModal && detailModal.parentNode) {
+                detailModal.parentNode.removeChild(detailModal);
+            }
+
+            // ── URN 비동기 해석 후 focusIssueOnViewer 단 1회 호출 (중복 팝업 방지 및 URN 유실 방지) ──
+            (async () => {
+                let targetUrn = '';
+                if (typeof window.resolveFormaIssueViewerUrn === 'function') {
+                    targetUrn = await window.resolveFormaIssueViewerUrn(issue);
+                }
+                if (typeof window.focusIssueOnViewer === 'function') {
+                    window.focusIssueOnViewer(issue, targetUrn);
+                } else if (typeof window.openFormaIssueDetail === 'function') {
+                    window.openFormaIssueDetail(issue);
+                }
+            })();
+            return;
+        }
+
+        const row = event.target.closest('.bim-structure-issue-row');
+        if (row && !event.target.closest('button, a, input, select')) {
             const key = row.getAttribute('data-issue-key') || '';
-            const issue = localMap.get(key) || dashboardIssueRegistry.get(key);
+            const issue = dashboardIssueRegistry.get(key);
             if (!issue) return;
             if (typeof window.openFormaIssueDetail === 'function') {
                 window.openFormaIssueDetail(issue);
@@ -610,7 +665,7 @@ function bindStructureIssueListEvents(container, issues) {
                 console.warn('[Construction BIM Dashboard] openFormaIssueDetail is not available.');
                 alert('이슈 상세 정보 모듈을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
             }
-        });
+        }
     });
 }
 

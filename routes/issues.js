@@ -1220,13 +1220,16 @@ function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new 
     const comments = pick(issue, ['comments', 'attributes.comments'], []);
     const id = issue.id || attrs.id || issue.issueId || issue.displayId || attrs.displayId;
     const displayId = issue.displayId || attrs.displayId || issue.issueNumber || attrs.identifier || id;
+    const linkedDocDetails = (issue.linkedDocuments && issue.linkedDocuments[0] && issue.linkedDocuments[0].details) || {};
+    const objectId = linkedDocDetails.objectId || pick(issue, ['objectId', 'elementId'], null);
 
     return {
         _source: 'forma',
         _type: 'forma',
         id,
         displayId,
-        dbId: displayId,
+        objectId,
+        dbId: objectId || displayId,
         title: pick(issue, ['title', 'attributes.title', 'name', 'attributes.name'], '제목 없음'),
         status: normalizeStatus(pick(issue, ['status', 'attributes.status', 'state', 'attributes.state'], '생성')),
         type: typePath,
@@ -1558,4 +1561,30 @@ router.post('/api/issues/export-pdf', pdfRateLimit, asyncHandler(async (req, res
     }
 }));
 
+
+
+async function getGangbukIssuesCache() {
+    try {
+        for (const [key, cached] of formaIssuesCache.entries()) {
+            if (cached && cached.value && Array.isArray(cached.value.data) && cached.value.data.length > 0) {
+                return cached.value.data;
+            }
+        }
+        const dataPath = path.join(__dirname, '..', 'data', 'issues.json');
+        if (fs.existsSync(dataPath)) {
+            const data = fs.readFileSync(dataPath, 'utf8');
+            const parsed = JSON.parse(data || '[]');
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed;
+            }
+        }
+    } catch (err) {
+        console.warn('[Issues] getGangbukIssuesCache error:', err.message);
+    }
+    return [];
+}
+
+router.getGangbukIssuesCache = getGangbukIssuesCache;
 module.exports = router;
+module.exports.getGangbukIssuesCache = getGangbukIssuesCache;
+

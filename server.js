@@ -65,6 +65,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/diff', diffRouter);
 app.use('/api/models', require('./routes/models.js'));
 app.use('/api/ai', require('./routes/ai.js'));
+app.use('/api/chatbot', require('./routes/chatbot.js'));
 app.use('/api/hubs', require('./routes/hubs.js'));
 app.use('/api/cctv', require('./routes/cctv.js'));
 app.use(require('./routes/issues.js'));

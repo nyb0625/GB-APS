@@ -475,6 +475,7 @@ function forceUpdateModelUI(viewer, index) {
 
 // ── Versions Loading ────────────────────────────────────────────────────────
 export async function loadVersions(urnA, urnB) {
+    if (typeof window !== 'undefined') window.loadVersions = loadVersions;
     await initSplitViewers();
     if (!viewers[0] || !viewers[1]) {
         console.warn('[Viewer] Cannot load models because split viewers are not ready.');

@@ -3391,8 +3391,12 @@ window.renderIssueMarkers = function(issuesArray) {
         // 비교 이슈 제외 (이미지 기반 비교 타입은 핀 안 표시)
         if (issue._type === 'compare' || issue.type === 'compare' || issueIdStr.indexOf('COMP-') === 0) continue;
 
-        // position 없으면 마커 불가
-        if (!issue.position || issue.position.x === undefined) continue;
+        // position 없으면 마커 불가 (Forma point / linkedDocuments details.position 포함)
+        var pos = issue.position || issue.point ||
+                  (issue.linkedDocuments && issue.linkedDocuments[0] && issue.linkedDocuments[0].details && issue.linkedDocuments[0].details.position) ||
+                  (issue.rawFormaIssue && issue.rawFormaIssue.linkedDocuments && issue.rawFormaIssue.linkedDocuments[0] && issue.rawFormaIssue.linkedDocuments[0].details && issue.rawFormaIssue.linkedDocuments[0].details.position);
+        if (!pos || pos.x === undefined) continue;
+        if (!issue.position) issue.position = pos;
 
         // URN 필터: 둘 다 있을 때만 비교
         var issueUrn = issue.urn || issue.modelUrn || '';
@@ -3402,9 +3406,9 @@ window.renderIssueMarkers = function(issuesArray) {
         var marker = document.createElement('div');
         marker.className = 'custom-issue-pushpin';
         marker.setAttribute('data-issue-id', issueIdStr);
-        marker.setAttribute('data-x', issue.position.x);
-        marker.setAttribute('data-y', issue.position.y);
-        marker.setAttribute('data-z', issue.position.z);
+        marker.setAttribute('data-x', pos.x);
+        marker.setAttribute('data-y', pos.y);
+        marker.setAttribute('data-z', pos.z);
         marker.title = (issue.title || '이슈') + ' [클릭하여 상세 보기]';
 
         // 상태별 핀 색상
@@ -4439,17 +4443,60 @@ function initRegularModelIssueButton() {
 
 // 글로벌 런칭 바인딩
 setTimeout(initRegularModelIssueButton, 1000);
-window.addEventListener('load', initRegularModelIssueButton);
+function normalizeModelNameForDetail(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/^urn:/, '')
+        .replace(/\s*\(?v\d+\)?\s*$/i, '')
+        .replace(/\s*\(v\d+\)\s*/gi, '')
+        .replace(/\.(rvt|nwc|dwg|ifc)\b/gi, '')
+        .replace(/[\s_\-()[\]{}<>.,]/g, '')
+        .trim();
+}
+
+function normalizeViewerUrnForDetail(value) {
+    var str = String(value || '').trim();
+    if (!str || str === '-') return '';
+    if (str.indexOf('dm.lineage') > -1) return '';
+    var body = str.replace(/^urn:/i, '');
+    if (body.indexOf('dm.lineage') > -1) return '';
+    if (str.indexOf('urn:adsk.') === 0 || body.indexOf('adsk.') === 0) {
+        var raw = str.indexOf('urn:') === 0 ? str : 'urn:' + str;
+        return btoa(raw).replace(/=/g, '');
+    }
+    if (/^[A-Za-z0-9+/=_-]+$/.test(body) && body.length > 20) return body;
+    return '';
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // [배치 클릭 → 3D 뷰어 이동 엔진 v4]
-// 데드락 해결형: 뷰어가 없으면 loadIntoViewer로 엔진을 먼저 깨운 뒤 Polling으로 낚아챔
-// 뷰어가 이미 있으면 URN 비교 후 동일 모델 즉시 줌 / 다른 모델 교체 로드
 // ──────────────────────────────────────────────────────────────────────────
-window.focusIssueOnViewer = function(dbId, targetUrn) {
+window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
     // ── 공통 헬퍼 ────────────────────────────────────────────────────────────
-    var numericId    = parseInt(dbId, 10);
+    var issueObj     = (typeof targetIssueOrId === 'object' && targetIssueOrId !== null) ? targetIssueOrId : null;
+
+    // 🚨 [핵심] targetIssueOrId가 객체가 아닌 ID 문자열(예: "32312", "37", GUID)일 경우 전역 이슈 목록에서 이슈 객체 자동 탐색
+    if (!issueObj && targetIssueOrId) {
+        var searchKey = String(targetIssueOrId).trim();
+        if (typeof dashboardIssueRegistry !== 'undefined' && dashboardIssueRegistry && typeof dashboardIssueRegistry.get === 'function') {
+            issueObj = dashboardIssueRegistry.get(searchKey) || null;
+        }
+        if (!issueObj) {
+            var candidateList = (window.currentIssueList || []).concat(window._gangbukFormaSSOT || []);
+            for (var ci = 0; ci < candidateList.length; ci++) {
+                var item = candidateList[ci];
+                if (!item) continue;
+                if (String(item.id) === searchKey || String(item.displayId) === searchKey || String(item.dbId) === searchKey || String(item.objectId) === searchKey) {
+                    issueObj = item;
+                    break;
+                }
+            }
+        }
+    }
+
+    var dbIdStr      = issueObj ? (issueObj.objectId || issueObj.dbId || issueObj.displayId || issueObj.id || '') : String(targetIssueOrId || '');
+    var numericId    = parseInt(dbIdStr, 10);
     var hasNumericId = !isNaN(numericId) && numericId > 0;
     var normalizeUrn = function(u) { return String(u || '').replace(/^urn:/i, '').trim(); };
     var toViewerUrn = function(u) {
@@ -4467,9 +4514,272 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
         }
         return '';
     };
+    if (!targetUrn && issueObj && typeof extractPastVersionUrnFromIssue === 'function') {
+        targetUrn = extractPastVersionUrnFromIssue(issueObj);
+    }
     targetUrn = toViewerUrn(targetUrn);
 
-    console.log('[focusIssueOnViewer] 호출 — dbId:', dbId, '| targetUrn:', targetUrn);
+    console.log('[focusIssueOnViewer] 호출 — targetIssueOrId:', targetIssueOrId, '| issueObj 찾음:', !!issueObj, '| targetUrn:', targetUrn);
+
+    // ── Forma 3D 위치 및 뷰포트 데이터 정밀 파서 ─────────────────────────────
+    function extractForma3DLocationData(issueObj) {
+        var result = {
+            objectId: null,
+            externalId: null,
+            position: null,
+            viewerState: null,
+            globalOffset: null
+        };
+
+        if (!issueObj) return result;
+        var raw = issueObj.rawFormaIssue || issueObj.rawDetailIssue || issueObj;
+
+        // 1. linkedDocuments[].details 정밀 파싱 (Forma/ACC 공식 규격)
+        var docs = raw.linkedDocuments || issueObj.linkedDocuments || [];
+        if (Array.isArray(docs)) {
+            for (var i = 0; i < docs.length; i++) {
+                var doc = docs[i];
+                var details = doc && doc.details;
+                if (details) {
+                    if (details.objectId && !result.objectId) {
+                        result.objectId = parseInt(details.objectId, 10);
+                    }
+                    if (details.externalId && !result.externalId) {
+                        result.externalId = details.externalId;
+                    }
+                    if (details.position && !result.position) {
+                        result.position = details.position;
+                    }
+                    if (details.viewerState && !result.viewerState) {
+                        result.viewerState = details.viewerState;
+                    }
+                    if (details.globalOffset && !result.globalOffset) {
+                        result.globalOffset = details.globalOffset;
+                    }
+                }
+            }
+        }
+
+        // 2. 대체 필드 파싱 (displayId/id와 같은 이슈 식별자는 제외하고 실제 3D dbId만 수용)
+        if (!result.objectId) {
+            var cand = issueObj.objectId || raw.objectId || issueObj.elementId || raw.elementId;
+            if (cand && String(cand) !== String(issueObj.displayId) && String(cand) !== String(issueObj.id)) {
+                result.objectId = parseInt(cand, 10);
+            }
+        }
+
+        if (!result.externalId) {
+            result.externalId = issueObj.externalId || raw.externalId || (raw.attributes && raw.attributes.externalId);
+        }
+
+        if (!result.position) {
+            result.position = issueObj.point || issueObj.position || raw.point || raw.position ||
+                              (raw.attributes && raw.attributes.pushpinAttributes && raw.attributes.pushpinAttributes.location);
+        }
+
+        if (!result.viewerState && raw.viewerState) {
+            result.viewerState = raw.viewerState;
+        }
+
+        return result;
+    }
+
+    // ── 스마트 카메라 줌인 & 하이라이트 헬퍼 ──────────────────────────────────
+    function applySmartIssueFocus(v) {
+        if (!v || !v.model) return;
+        try { window.currentlyActiveViewerModelUrn = v.model.getData().urn || (typeof v.model.getSeedUrn === 'function' ? v.model.getSeedUrn() : ''); } catch(e) {}
+
+        var loc = extractForma3DLocationData(issueObj);
+        console.log('[applySmartIssueFocus] 파싱된 Forma 3D 위치 정보:', loc);
+
+        var safeHighlightAndZoom = function(dbIds) {
+            try {
+                if (!Array.isArray(dbIds)) dbIds = [dbIds];
+                dbIds = dbIds.map(function(id) { return parseInt(id, 10); }).filter(function(id) { return !isNaN(id) && id > 0; });
+                if (!dbIds.length) return false;
+
+                if (typeof v.clearSelection === 'function') v.clearSelection();
+                if (typeof v.select === 'function') v.select(dbIds);
+                if (typeof v.fitToView === 'function') v.fitToView(dbIds);
+
+                // 오렌지/레드 하이라이트 색상 적용 (RGBA: 1.0, 0.3, 0.0, 0.85) 및 GPU 셰이더 즉시 강제 갱신
+                if (typeof v.setThemingColor === 'function' && typeof THREE !== 'undefined' && v.model) {
+                    var color = new THREE.Vector4(1.0, 0.3, 0.0, 0.85);
+                    dbIds.forEach(function(id) {
+                        try { v.setThemingColor(id, color, v.model); } catch(e) {}
+                    });
+                    if (v.impl && typeof v.impl.invalidate === 'function') {
+                        v.impl.invalidate(true, true, true);
+                    }
+                }
+                return true;
+            } catch(e) {
+                console.warn('[applySmartIssueFocus] safeHighlightAndZoom 오류:', e);
+                return false;
+            }
+        };
+
+        var createTargetIssuePushpinMarker = function(issueDataObj, posData, activeV) {
+            if (!issueDataObj || !activeV || !activeV.container || !posData) return;
+            var issueIdStr = String(issueDataObj.displayId || issueDataObj.id || '').trim();
+            var markerId = 'marker-pushpin-target-' + (issueDataObj.id || issueDataObj.displayId);
+
+            var existing = document.getElementById(markerId);
+            if (existing) {
+                existing.setAttribute('data-x', posData.x);
+                existing.setAttribute('data-y', posData.y);
+                existing.setAttribute('data-z', posData.z);
+                if (window.updateIssueMarkersPosition) window.updateIssueMarkersPosition();
+                return;
+            }
+
+            var marker = document.createElement('div');
+            marker.id = markerId;
+            marker.className = 'custom-issue-pushpin active-target-marker';
+            marker.setAttribute('data-issue-id', issueIdStr);
+            marker.setAttribute('data-x', posData.x);
+            marker.setAttribute('data-y', posData.y);
+            marker.setAttribute('data-z', posData.z);
+            marker.title = '#' + issueIdStr + ' ' + (issueDataObj.title || '이슈') + ' [클릭하여 상세 보기]';
+
+            var pinColor = '#ef4444';
+            var pinSt = (issueDataObj.status || '').trim();
+            if (pinSt === '조치완료' || pinSt === '완료') pinColor = '#10b981';
+            else if (pinSt === '반려') pinColor = '#6b7280';
+            else if (pinSt === '지연') pinColor = '#f59e0b';
+
+            var pinShortId = String(issueDataObj.displayId || issueIdStr.slice(-2) || '!');
+
+            marker.style.cssText = 'position:absolute;width:32px;height:38px;cursor:pointer;z-index:99999;transform:translate(-50%,-100%);filter:drop-shadow(0 4px 8px rgba(0,0,0,0.6));transition:transform 0.2s ease;';
+            marker.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 34" width="32" height="38">'
+                + '<path d="M14 1C7.9 1 3 5.9 3 12c0 8.5 11 21 11 21s11-12.5 11-21C25 5.9 20.1 1 14 1z" fill="' + pinColor + '" stroke="white" stroke-width="2"/>'
+                + '<text x="14" y="13.5" text-anchor="middle" dominant-baseline="central" fill="white" font-size="10" font-weight="bold" font-family="Arial,sans-serif">' + pinShortId + '</text>'
+                + '</svg>';
+
+            marker.onclick = function(e) {
+                e.stopPropagation();
+                if (typeof window.openFormaIssueDetail === 'function') {
+                    window.openFormaIssueDetail(issueDataObj);
+                }
+            };
+
+            activeV.container.appendChild(marker);
+            if (!window.issueMarkersDOMList) window.issueMarkersDOMList = [];
+            window.issueMarkersDOMList.push(marker);
+
+            if (typeof window.updateIssueMarkersPosition === 'function') {
+                window.updateIssueMarkersPosition();
+            }
+            console.log('[createTargetIssuePushpinMarker] 3D 이슈 핀 마커 DOM 렌더링 완료:', markerId, posData);
+        };
+
+        var executeFocusSteps = function() {
+            // 📌 3D 공간상 타겟 이슈 핀 마커 DOM 렌더링
+            try {
+                if (issueObj && loc.position) {
+                    var mPos = loc.position;
+                    if (loc.globalOffset && typeof loc.globalOffset.x === 'number') {
+                        mPos = {
+                            x: loc.position.x + loc.globalOffset.x,
+                            y: loc.position.y + loc.globalOffset.y,
+                            z: loc.position.z + loc.globalOffset.z
+                        };
+                    }
+                    createTargetIssuePushpinMarker(issueObj, mPos, v);
+                }
+            } catch(e) { console.warn('[applySmartIssueFocus] 핀 마커 생성 오류:', e); }
+
+            // 1순위: viewerState 카메라 복원 (Forma에서 이슈 저장 당시 카메라 시점 100% 복원)
+            if (loc.viewerState && typeof v.restoreState === 'function') {
+                try {
+                    v.restoreState(loc.viewerState);
+                    console.log('[applySmartIssueFocus] Forma viewerState 3D 카메라 뷰포트 복원 성공!');
+                } catch(e) {
+                    console.warn('[applySmartIssueFocus] viewerState 복원 오류:', e);
+                }
+            }
+
+            // 2순위: 3D Element objectId (예: 32312) 포커싱 & 하이라이트
+            if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
+                safeHighlightAndZoom([loc.objectId]);
+                console.log('[applySmartIssueFocus] 3D Element objectId(' + loc.objectId + ') 기반 줌인 & 하이라이트 성공!');
+                return;
+            }
+
+            // 3순위: Revit External GUID (예: "880d0135-...") ↔ dbId 역매핑
+            if (loc.externalId && typeof v.model.getExternalIdMapping === 'function') {
+                v.model.getExternalIdMapping(function(mapping) {
+                    var matchedDbId = mapping[loc.externalId];
+                    if (matchedDbId) {
+                        safeHighlightAndZoom([matchedDbId]);
+                        console.log('[applySmartIssueFocus] ExternalId(' + loc.externalId + ') → dbId(' + matchedDbId + ') 줌인/색상 변경 성공');
+                    }
+                });
+                if (loc.viewerState) return;
+            }
+
+            // 4순위: 3D 공간 좌표 (position: {x, y, z}) 카메라 조준
+            if (loc.position && typeof loc.position.x === 'number' && typeof loc.position.y === 'number' && typeof loc.position.z === 'number') {
+                try {
+                    if (v.navigation && typeof v.navigation.setView === 'function') {
+                        var px = loc.position.x;
+                        var py = loc.position.y;
+                        var pz = loc.position.z;
+                        if (loc.globalOffset && typeof loc.globalOffset.x === 'number') {
+                            px += loc.globalOffset.x;
+                            py += loc.globalOffset.y;
+                            pz += loc.globalOffset.z;
+                        }
+                        var targetVector = (typeof THREE !== 'undefined') ? new THREE.Vector3(px, py, pz) : { x: px, y: py, z: pz };
+                        var eyeVector = (typeof THREE !== 'undefined') ? new THREE.Vector3(px + 12, py + 12, pz + 8) : targetVector;
+                        v.navigation.setView(eyeVector, targetVector);
+                        console.log('[applySmartIssueFocus] 3D 좌표 (x:' + px.toFixed(2) + ', y:' + py.toFixed(2) + ', z:' + pz.toFixed(2) + ') 카메라 조준 성공!');
+                        return;
+                    }
+                } catch(e) { console.warn('[applySmartIssueFocus] 3D 좌표 이동 오류:', e); }
+            }
+
+            // 5순위: 구조물/위치 키워드 (예: '역세척펌프동', '제수밸브실2', '급속여과지') 3D 노드 검색 & 줌인 (Fallback)
+            if (issueObj) {
+                var keywords = [
+                    issueObj.structureName,
+                    issueObj.location,
+                    issueObj.placementName,
+                    issueObj.placement,
+                    issueObj.title
+                ].filter(Boolean);
+
+                for (var i = 0; i < keywords.length; i++) {
+                    var kw = String(keywords[i]).replace(/\s*\([^)]*\)/g, '').trim();
+                    if (kw.length >= 2 && typeof v.search === 'function') {
+                        console.log('[applySmartIssueFocus] 3D 모델 위치 키워드 검색 시도:', kw);
+                        v.search(kw, function(foundDbIds) {
+                            if (foundDbIds && foundDbIds.length > 0) {
+                                safeHighlightAndZoom(foundDbIds);
+                                console.log('[applySmartIssueFocus] 키워드(' + kw + ') 3D 객체 ' + foundDbIds.length + '개 줌인 & 하이라이트 성공!');
+                            }
+                        }, function(err) {
+                            console.warn('[applySmartIssueFocus] 검색 중 오류:', err);
+                        });
+                        break;
+                    }
+                }
+            }
+        };
+
+        // 🚨 [핵심] 3D 모델의 getObjectTree(객체 구조) 비동기 수신 후 포커싱 실행 (getInstanceTree Deprecation 경고 해결)
+        if (v.model && typeof v.model.getObjectTree === 'function') {
+            v.model.getObjectTree(function(tree) {
+                console.log('[applySmartIssueFocus] getObjectTree 3D 객체 트리 수신 완료 → 줌인 & 시점 복원 실행');
+                executeFocusSteps();
+            }, function(err) {
+                console.warn('[applySmartIssueFocus] getObjectTree 콜백 오류, 직행:', err);
+                executeFocusSteps();
+            });
+        } else {
+            executeFocusSteps();
+        }
+    }
 
     // ── (A) 뷰어가 없을 때 ─ GEOMETRY_LOADED 대기 후 줌인 ─────────────────────
     function waitForViewerCreationAndZoom() {
@@ -4482,19 +4792,14 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
             if (v) {
                 clearInterval(checkInterval);
                 console.log('[focusIssueOnViewer] 뷰어 엔진 생성 확인 (' + attempts + '회) — GEOMETRY_LOADED 대기');
-                if (!hasNumericId) return;
                 var fired = false;
                 var onLoaded = function() {
                     if (fired) return;
                     fired = true;
                     try { v.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onLoaded); } catch(e) {}
-                    console.log('[focusIssueOnViewer] GEOMETRY_LOADED → fitToView dbId:', numericId);
+                    console.log('[focusIssueOnViewer] GEOMETRY_LOADED → applySmartIssueFocus 실행');
                     setTimeout(function() {
-                        try {
-                            if (typeof v.clearSelection === 'function') v.clearSelection();
-                            v.select(numericId);
-                            v.fitToView([numericId]);
-                        } catch(e) { console.warn('[focusIssueOnViewer] fitToView 오류:', e); }
+                        applySmartIssueFocus(v);
                     }, 300);
                 };
                 v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onLoaded);
@@ -4503,6 +4808,149 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
                 console.error('[focusIssueOnViewer] loadIntoViewer 호출 후 5초 내 뷰어 생성 실패.');
             }
         }, 100);
+    }
+
+    function extractIssueVersionsUrns(issue) {
+        if (!issue) return { createdUrn: '', prevUrn: '', createdVer: 5, prevVer: 4 };
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue;
+        var docs = raw.linkedDocuments || issue.linkedDocuments || [];
+
+        if (Array.isArray(docs) && docs.length > 0) {
+            for (var i = 0; i < docs.length; i++) {
+                var doc = docs[i];
+                if (!doc) continue;
+                var urnStr = doc.urn || (doc.details && doc.details.urn) || '';
+                var verNum = parseInt(doc.createdAtVersion || (doc.details && doc.details.createdAtVersion), 10);
+                if (isNaN(verNum) || verNum < 1) verNum = 5;
+
+                var prevVerNum = verNum > 1 ? (verNum - 1) : 1;
+
+                if (urnStr && urnStr.indexOf('dm.lineage:') > -1) {
+                    var match = urnStr.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+                    if (match && match[1]) {
+                        var createdRaw = 'urn:adsk.wipprod:fs.file:vf.' + match[1] + '?version=' + verNum;
+                        var prevRaw    = 'urn:adsk.wipprod:fs.file:vf.' + match[1] + '?version=' + prevVerNum;
+                        return {
+                            createdUrn: btoa(createdRaw).replace(/=/g, ''),
+                            prevUrn:    btoa(prevRaw).replace(/=/g, ''),
+                            createdVer: verNum,
+                            prevVer:    prevVerNum
+                        };
+                    }
+                }
+                if (urnStr && (urnStr.indexOf('fs.file') > -1 || urnStr.indexOf('urn:adsk.') === 0)) {
+                    var rawUrn = urnStr.indexOf('urn:') === 0 ? urnStr : 'urn:' + urnStr;
+                    var baseRaw = rawUrn.replace(/[?&]version=\d+/i, '');
+                    var createdRaw2 = baseRaw + '?version=' + verNum;
+                    var prevRaw2    = baseRaw + '?version=' + prevVerNum;
+                    return {
+                        createdUrn: btoa(createdRaw2).replace(/=/g, ''),
+                        prevUrn:    btoa(prevRaw2).replace(/=/g, ''),
+                        createdVer: verNum,
+                        prevVer:    prevVerNum
+                    };
+                }
+            }
+        }
+        return { createdUrn: '', prevUrn: '', createdVer: 5, prevVer: 4 };
+    }
+
+    // 🚨 [프리미엄 커스텀 모달] 이슈 작성 당시 모델 버전 ↔ 직전 작성 버전 선택 팝업
+    function showVersionMismatchModal(options) {
+        options = options || {};
+        if (window._isMismatchModalOpen) {
+            console.log('[showVersionMismatchModal] 팝업 모달이 이미 활성화되어 있어 중복 생성을 방지합니다.');
+            return;
+        }
+        window._isMismatchModalOpen = true;
+
+        var existing = document.getElementById('bim-version-mismatch-modal');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+        var modal = document.createElement('div');
+        modal.id = 'bim-version-mismatch-modal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);z-index:9999999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s ease;';
+
+        var card = document.createElement('div');
+        card.style.cssText = 'width:440px;max-width:90vw;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:16px;padding:28px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.6);color:#f8fafc;font-family:Inter,-apple-system,sans-serif;transform:scale(0.95);transition:transform 0.2s ease;';
+
+        card.innerHTML =
+            '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+          + '<div style="width:42px;height:42px;border-radius:12px;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);display:flex;align-items:center;justify-content:center;color:#38bdf8;font-size:20px;">'
+          + '<i class="fas fa-layer-group"></i>'
+          + '</div>'
+          + '<div>'
+          + '<h3 style="margin:0;font-size:18px;font-weight:700;color:#fff;">이슈 모델 버전 비교 선택</h3>'
+          + '<span style="font-size:12px;color:#94a3b8;">BIM 이슈 생애주기 버전 탐색</span>'
+          + '</div>'
+          + '</div>'
+          + '<div style="background:#0f172a;border-radius:12px;padding:14px;margin-bottom:20px;font-size:13px;line-height:1.6;border:1px solid rgba(255,255,255,0.05);">'
+          + '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
+          + '<span style="color:#94a3b8;">이슈 작성 당시 버전:</span>'
+          + '<span style="color:#38bdf8;font-weight:700;">' + (options.createdVersionText || '작성 당시 버전') + '</span>'
+          + '</div>'
+          + '<div style="display:flex;justify-content:space-between;margin-bottom:10px;">'
+          + '<span style="color:#94a3b8;">이슈 작성 직전 버전:</span>'
+          + '<span style="color:#f59e0b;font-weight:700;">' + (options.prevVersionText || '직전 작성 버전') + '</span>'
+          + '</div>'
+          + '<p style="margin:0;color:#cbd5e1;font-size:12.5px;">선택하신 이슈가 작성되었던 당시 모델 버전 또는 변경사항 비교를 위한 직전 작성 버전 모델 중 이동할 버전을 선택해 주세요.</p>'
+          + '</div>'
+          + '<div style="display:flex;flex-direction:column;gap:10px;">'
+          + '<button id="btn-keep-current-version" style="width:100%;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:700;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 12px rgba(2,132,199,0.3);transition:all 0.2s;">'
+          + '<i class="fas fa-bolt"></i><span>⚡ 작성 당시 버전 모델로 이동 (' + (options.createdVersionText || '작성 당시') + ')</span>'
+          + '</button>'
+          + '<button id="btn-load-past-version" style="width:100%;padding:11px;border-radius:10px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:#fef3c7;font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;">'
+          + '<i class="fas fa-history"></i><span>🚀 직전 작성 버전 불러오기 (' + (options.prevVersionText || '직전 작성') + ')</span>'
+          + '</button>'
+          + '<button id="btn-split-compare-versions" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(168,85,247,0.4);background:linear-gradient(135deg,rgba(168,85,247,0.25),rgba(147,51,234,0.35));color:#f3e8ff;font-weight:700;font-size:13.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 14px rgba(168,85,247,0.25);transition:all 0.2s;">'
+          + '<i class="fas fa-columns" style="color:#c084fc;"></i><span>🔀 작성 당시 vs 직전 버전 분할 화면 동시 비교</span>'
+          + '</button>'
+          + '</div>';
+
+        modal.appendChild(card);
+        document.body.appendChild(modal);
+
+        requestAnimationFrame(function() {
+            modal.style.opacity = '1';
+            card.style.transform = 'scale(1)';
+        });
+
+        var closeModal = function() {
+            window._isMismatchModalOpen = false;
+            modal.style.opacity = '0';
+            card.style.transform = 'scale(0.95)';
+            setTimeout(function() {
+                if (modal.parentNode) modal.parentNode.removeChild(modal);
+            }, 200);
+        };
+
+        document.getElementById('btn-load-past-version').onclick = function(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            closeModal();
+            if (typeof options.onConfirmLoadPast === 'function') {
+                var cb = options.onConfirmLoadPast;
+                options.onConfirmLoadPast = null;
+                cb();
+            }
+        };
+        document.getElementById('btn-keep-current-version').onclick = function(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            closeModal();
+            if (typeof options.onCancelKeepCurrent === 'function') {
+                var cb = options.onCancelKeepCurrent;
+                options.onCancelKeepCurrent = null;
+                cb();
+            }
+        };
+        document.getElementById('btn-split-compare-versions').onclick = function(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            closeModal();
+            if (typeof options.onConfirmSplitCompare === 'function') {
+                var cb = options.onConfirmSplitCompare;
+                options.onConfirmSplitCompare = null;
+                cb();
+            }
+        };
     }
 
     // ── (B) 뷰어가 이미 있을 때 ─ URN 비교 후 로드 or 즉시 줌인 ──────────────
@@ -4520,97 +4968,289 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
         }
 
         var needLoad = targetUrn && (normalizeUrn(targetUrn) !== normalizeUrn(currentUrn));
-        console.log('[focusIssueOnViewer] currentUrn:', currentUrn, '| needLoad:', needLoad);
+        console.log('[focusIssueOnViewer] currentUrn:', currentUrn, '| targetUrn:', targetUrn, '| needLoad:', needLoad);
 
         if (needLoad) {
-            // 다른 모델 → GEOMETRY_LOADED 일회성 리스너 먼저 등록 후 로드
-            console.log('[focusIssueOnViewer] 모델 교체 로드 시작:', targetUrn);
-            if (hasNumericId) {
-                var fired = false;
-                var handler = function() {
-                    if (fired) return;
-                    fired = true;
-                    try { v.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, handler); } catch(e) {}
-                    console.log('[focusIssueOnViewer] GEOMETRY_LOADED → fitToView dbId:', numericId);
+            var verInfo = extractIssueVersionsUrns(issueObj);
+            console.log('[focusIssueOnViewer] 모델 버전 불일치 감지 → 커스텀 모달 팝업 출현:', verInfo);
+            showVersionMismatchModal({
+                createdVersionText: 'v' + verInfo.createdVer + ' (작성 당시)',
+                prevVersionText: 'v' + verInfo.prevVer + ' (직전 작성)',
+                onConfirmLoadPast: function() {
+                    console.log('[focusIssueOnViewer] 직전 작성 버전 모델 교체 로드 승인 → v' + verInfo.prevVer);
+                    if (typeof window.switchTab === 'function') window.switchTab('project');
                     setTimeout(function() {
-                        try {
-                            if (typeof v.clearSelection === 'function') v.clearSelection();
-                            v.select(numericId);
-                            v.fitToView([numericId]);
-                        } catch(e) { console.warn('[focusIssueOnViewer] fitToView 오류:', e); }
+                        if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                            window.explorer.loadIntoViewer(verInfo.prevUrn, 'BIM Model (직전 작성 버전 v' + verInfo.prevVer + ')');
+                            waitForViewerCreationAndZoom();
+                        }
+                    }, 300);
+                },
+                onCancelKeepCurrent: function() {
+                    console.log('[focusIssueOnViewer] 작성 당시 버전 모델 교체 로드 승인 → v' + verInfo.createdVer);
+                    if (typeof window.switchTab === 'function') window.switchTab('project');
+                    setTimeout(function() {
+                        if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                            window.explorer.loadIntoViewer(verInfo.createdUrn, 'BIM Model (작성 당시 버전 v' + verInfo.createdVer + ')');
+                            waitForViewerCreationAndZoom();
+                        }
+                    }, 300);
+                },
+                onConfirmSplitCompare: function() {
+                    console.log('[focusIssueOnViewer] 🔀 작성 당시(v' + verInfo.createdVer + ') vs 직전(v' + verInfo.prevVer + ') 분할 화면 동시 비교 승인');
+                    if (typeof window.switchTab === 'function') window.switchTab('compare');
+                    setTimeout(function() {
+                        var runLoad = function(fn) {
+                            if (typeof fn === 'function') fn(verInfo.prevUrn, verInfo.createdUrn);
+                        };
+                        if (typeof window.loadVersions === 'function') {
+                            runLoad(window.loadVersions);
+                        } else {
+                            import('./comparison.js').then(function(mod) { runLoad(mod.loadVersions); }).catch(function(e){ console.error(e); });
+                        }
+                    }, 300);
+                }
+            });
+            return;
+        } else {
+            console.log('[focusIssueOnViewer] 동일 모델 — 즉시 applySmartIssueFocus 실행');
+            if (v.model) {
+                applySmartIssueFocus(v);
+            } else {
+                var fired2 = false;
+                var h2 = function() {
+                    if (fired2) return; fired2 = true;
+                    try { v.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2); } catch(e) {}
+                    setTimeout(function() {
+                        applySmartIssueFocus(v);
                     }, 300);
                 };
-                v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, handler);
-            }
-
-            // 로드 트리거: 로컬 드롭다운 → ACC explorer → viewer.js 직접
-            var loadTriggered = false;
-            var modelDropdown = document.getElementById('models');
-            if (modelDropdown) {
-                for (var i = 0; i < modelDropdown.options.length; i++) {
-                    if (normalizeUrn(modelDropdown.options[i].value) === normalizeUrn(targetUrn)) {
-                        modelDropdown.value = modelDropdown.options[i].value;
-                        if (typeof window.onModelSelected === 'function') {
-                            window.onModelSelected(modelDropdown.options[i].value);
-                            loadTriggered = true;
-                        }
-                        break;
-                    }
-                }
-            }
-            if (!loadTriggered && window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
-                var urnName = 'BIM Model';
-                try {
-                    var cache = JSON.parse(localStorage.getItem('aps_model_urn_cache') || '{}');
-                    for (var k in cache) {
-                        if (normalizeUrn(cache[k]) === normalizeUrn(targetUrn)) { urnName = k; break; }
-                    }
-                } catch(e) {}
-                console.log('[focusIssueOnViewer] ACC explorer.loadIntoViewer:', targetUrn, urnName);
-                window.explorer.loadIntoViewer(targetUrn, urnName);
-                loadTriggered = true;
-            }
-            if (!loadTriggered) {
-                import('./viewer.js?v=20260804-main-rotate-fix1').then(function(mod) {
-                    if (typeof mod.loadModel === 'function') mod.loadModel(v, targetUrn);
-                }).catch(function(e) { console.error('[focusIssueOnViewer] viewer.js import 실패:', e); });
-            }
-
-        } else {
-            // 동일 모델 or URN 없음 → 즉시 줌인
-            console.log('[focusIssueOnViewer] 동일 모델 — 즉시 fitToView');
-            if (!hasNumericId) { console.log('[focusIssueOnViewer] 숫자 dbId 없음 — 탭 전환만 완료'); return; }
-            if (v.model) {
-                try {
-                    if (typeof v.clearSelection === 'function') v.clearSelection();
-                    v.select(numericId);
-                    v.fitToView([numericId]);
-                    console.log('[focusIssueOnViewer] 즉시 fitToView 완료. dbId:', numericId);
-                } catch(e) { console.warn('[focusIssueOnViewer] fitToView 오류:', e); }
-            } else {
-                // 뷰어는 있지만 모델 미로드 → GEOMETRY_LOADED 대기
-                if (hasNumericId) {
-                    var fired2 = false;
-                    var h2 = function() {
-                        if (fired2) return; fired2 = true;
-                        try { v.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2); } catch(e) {}
-                        setTimeout(function() {
-                            try { if (typeof v.clearSelection === 'function') v.clearSelection(); v.select(numericId); v.fitToView([numericId]); } catch(e) {}
-                        }, 300);
-                    };
-                    v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2);
-                }
+                v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2);
             }
         }
     }
 
+    window.openDualVersionViewersModal = function(prevUrn, createdUrn, prevVer, createdVer, targetIssueObj) {
+        var existing = document.getElementById('dual-version-viewer-modal');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+        var modal = document.createElement('div');
+        modal.id = 'dual-version-viewer-modal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0f172a;z-index:9999999;display:flex;flex-direction:column;font-family:Inter,-apple-system,sans-serif;';
+
+        modal.innerHTML =
+            '<div style="height:56px;background:#1e293b;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:space-between;padding:0 24px;color:#fff;">'
+          + '<div style="display:flex;align-items:center;gap:12px;">'
+          + '<div style="width:36px;height:36px;border-radius:10px;background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);display:flex;align-items:center;justify-content:center;color:#c084fc;font-size:16px;">'
+          + '<i class="fas fa-columns"></i>'
+          + '</div>'
+          + '<div>'
+          + '<h4 style="margin:0;font-size:15px;font-weight:700;">Dual 3D Viewer — 2개 버전 나란히 동시 보기</h4>'
+          + '<span style="font-size:11.5px;color:#94a3b8;">이슈 작성 직전 버전 (v' + (prevVer||'4') + ') vs 작성 당시 버전 (v' + (createdVer||'5') + ')</span>'
+          + '</div>'
+          + '</div>'
+          + '<button id="btn-close-dual-modal" style="padding:8px 18px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.08);color:#f1f5f9;font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all 0.2s;">'
+          + '<i class="fas fa-times"></i><span>닫기</span>'
+          + '</button>'
+          + '</div>'
+          + '<div style="flex:1;display:flex;width:100%;height:calc(100vh - 56px);position:relative;background:#ffffff;">'
+          + '<div style="flex:1;position:relative;border-right:2px solid #cbd5e1;background:#ffffff;">'
+          + '<div style="position:absolute;top:14px;left:14px;z-index:10;background:rgba(15,23,42,0.85);backdrop-filter:blur(8px);border:1px solid rgba(245,158,11,0.4);padding:8px 14px;border-radius:8px;color:#fef3c7;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">'
+          + '<i class="fas fa-history" style="color:#f59e0b;"></i><span>👈 직전 작성 버전 (v' + (prevVer||'4') + ')</span>'
+          + '</div>'
+          + '<div id="dual-viewer-left" style="width:100%;height:100%;position:relative;background:#ffffff;"></div>'
+          + '</div>'
+          + '<div style="flex:1;position:relative;background:#ffffff;">'
+          + '<div style="position:absolute;top:14px;left:14px;z-index:10;background:rgba(15,23,42,0.85);backdrop-filter:blur(8px);border:1px solid rgba(56,189,248,0.4);padding:8px 14px;border-radius:8px;color:#e0f2fe;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">'
+          + '<i class="fas fa-bolt" style="color:#38bdf8;"></i><span>👉 작성 당시 버전 (v' + (createdVer||'5') + ')</span>'
+          + '</div>'
+          + '<div id="dual-viewer-right" style="width:100%;height:100%;position:relative;background:#ffffff;"></div>'
+          + '</div>'
+          + '</div>';
+
+        document.body.appendChild(modal);
+
+        document.getElementById('btn-close-dual-modal').onclick = function() {
+            if (window.dualViewerA) { try { window.dualViewerA.finish(); } catch(e){} window.dualViewerA = null; }
+            if (window.dualViewerB) { try { window.dualViewerB.finish(); } catch(e){} window.dualViewerB = null; }
+            if (modal.parentNode) modal.parentNode.removeChild(modal);
+        };
+
+        var getToken = function(cb) {
+            fetch('/api/auth/token').then(function(r){ return r.json(); }).then(function(d){ cb(d.access_token, d.expires_in); }).catch(function(){ cb('', 0); });
+        };
+
+        Autodesk.Viewing.Initializer({ env: 'AutodeskProduction', getAccessToken: getToken }, function() {
+            var cA = document.getElementById('dual-viewer-left');
+            var cB = document.getElementById('dual-viewer-right');
+
+            var vA = new Autodesk.Viewing.GuiViewer3D(cA);
+            vA.start();
+            window.dualViewerA = vA;
+
+            var vB = new Autodesk.Viewing.GuiViewer3D(cB);
+            vB.start();
+            window.dualViewerB = vB;
+
+            // 흰색 배경 유지 헬퍼
+            var applyWhiteBg = function(vObj) {
+                if (!vObj) return;
+                try {
+                    if (typeof vObj.setLightPreset === 'function') vObj.setLightPreset(0);
+                    if (typeof vObj.setBackgroundColor === 'function') {
+                        vObj.setBackgroundColor(255, 255, 255, 255, 255, 255);
+                    }
+                } catch(e) {}
+            };
+
+            // 지오메트리 로드 완료 시 배경 흰색 설정 & 이슈 위치 카메라 정밀 줌인
+            var setupViewerFocusAndWhiteBg = function(vObj) {
+                var onGeo = function() {
+                    try { vObj.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeo); } catch(e) {}
+                    applyWhiteBg(vObj);
+                    setTimeout(function() {
+                        applyWhiteBg(vObj);
+                        if (targetIssueObj && typeof extractForma3DLocationData === 'function') {
+                            var loc = extractForma3DLocationData(targetIssueObj);
+                            console.log('[DualViewer] 파싱된 이슈 3D 시점 위치로 정밀 카메라 줌인:', loc);
+                            if (loc) {
+                                if (loc.viewport && loc.viewport.eye && loc.viewport.target) {
+                                    try {
+                                        var eye = loc.viewport.eye;
+                                        var target = loc.viewport.target;
+                                        var up = loc.viewport.up || [0, 0, 1];
+                                        if (typeof vObj.setViewFromArray === 'function') {
+                                            vObj.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                                        }
+                                    } catch(e) {}
+                                } else if (loc.position) {
+                                    try {
+                                        var p = loc.position;
+                                        if (typeof THREE !== 'undefined' && typeof vObj.setViewFromArray === 'function') {
+                                            vObj.setViewFromArray([p.x + 10, p.y - 10, p.z + 10, p.x, p.y, p.z, 0, 0, 1]);
+                                        }
+                                    } catch(e) {}
+                                }
+                                if (loc.objectId && loc.objectId > 0) {
+                                    try {
+                                        var dbId = parseInt(loc.objectId, 10);
+                                        if (typeof vObj.select === 'function') vObj.select([dbId]);
+                                        if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
+                                    } catch(e) {}
+                                }
+                            }
+                        }
+                    }, 400);
+                };
+                vObj.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeo);
+            };
+
+            setupViewerFocusAndWhiteBg(vA);
+            setupViewerFocusAndWhiteBg(vB);
+
+            var loadDocInto = function(vObj, urnVal) {
+                if (!urnVal) return;
+                var rawUrn = urnVal.indexOf('urn:') === 0 ? urnVal : 'urn:' + urnVal;
+                if (urnVal.indexOf('urn:') !== 0 && !/^[A-Za-z0-9+/=_-]+$/.test(urnVal)) {
+                    try { rawUrn = 'urn:' + atob(urnVal); } catch(e) {}
+                }
+                Autodesk.Viewing.Document.load(rawUrn, function(doc) {
+                    var defaultGeometry = doc.getRoot().getDefaultGeometry();
+                    if (defaultGeometry) {
+                        vObj.loadDocumentNode(doc, defaultGeometry).then(function() {
+                            applyWhiteBg(vObj);
+                        });
+                    }
+                }, function(errCode) {
+                    console.error('[DualViewer] Document.load error:', errCode);
+                });
+            };
+
+            loadDocInto(vA, prevUrn);
+            loadDocInto(vB, createdUrn);
+
+            var syncing = false;
+            var syncCam = function(src, dst) {
+                if (syncing) return;
+                syncing = true;
+                try {
+                    var st = src.getState({ viewport: true });
+                    dst.restoreState(st, null, true);
+                } catch(e) {}
+                syncing = false;
+            };
+
+            vA.addEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, function() { syncCam(vA, vB); });
+            vB.addEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, function() { syncCam(vB, vA); });
+        });
+    };
+
     // ── 메인 진입점 ─────────────────────────────────────────────────────────
-    // 1. 프로젝트 탭으로 즉시 전환
+    // 1. 현재 뷰어에 로드된 모델 URN 수집 (버전 차이 감지용)
+    var currentViewer = window.NOP_VIEWER ||
+                       window.myGlobalViewer ||
+                       window.viewer ||
+                       (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
+
+    var currentUrn = '';
+    if (currentViewer && currentViewer.model) {
+        try {
+            currentUrn = currentViewer.model.getData().urn || (typeof currentViewer.model.getSeedUrn === 'function' ? currentViewer.model.getSeedUrn() : '');
+        } catch(e) {}
+    }
+    if (!currentUrn) {
+        currentUrn = window.currentlyActiveViewerModelUrn || (window.explorer && window.explorer.currentUrn) || '';
+    }
+    if (!currentUrn) {
+        try {
+            var cache = JSON.parse(localStorage.getItem('aps_model_urn_cache') || '{}');
+            var keys = Object.keys(cache);
+            if (keys.length > 0) currentUrn = cache[keys[0]] || '';
+        } catch(e) {}
+    }
+
+    var isVersionMismatch = targetUrn && currentUrn && (normalizeUrn(targetUrn) !== normalizeUrn(currentUrn));
+    console.log('[focusIssueOnViewer] 메인 진입점 — targetUrn:', targetUrn, '| currentUrn:', currentUrn, '| isVersionMismatch:', isVersionMismatch);
+
+    // 2. 버전 차이 감지 시 탭 이동 전에 프리미엄 커스텀 모달 팝업 출현!
+    if (isVersionMismatch) {
+        var verInfoMain = extractIssueVersionsUrns(issueObj);
+        showVersionMismatchModal({
+            createdVersionText: 'v' + verInfoMain.createdVer + ' (작성 당시)',
+            prevVersionText: 'v' + verInfoMain.prevVer + ' (직전 작성)',
+            onConfirmLoadPast: function() {
+                console.log('[focusIssueOnViewer] 직전 작성 버전 모델 교체 로드 승인 → v' + verInfoMain.prevVer);
+                if (typeof window.switchTab === 'function') window.switchTab('project');
+                setTimeout(function() {
+                    if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                        window.explorer.loadIntoViewer(verInfoMain.prevUrn, 'BIM Model (직전 작성 버전 v' + verInfoMain.prevVer + ')');
+                        waitForViewerCreationAndZoom();
+                    }
+                }, 300);
+            },
+            onCancelKeepCurrent: function() {
+                console.log('[focusIssueOnViewer] 작성 당시 버전 모델 교체 로드 승인 → v' + verInfoMain.createdVer);
+                if (typeof window.switchTab === 'function') window.switchTab('project');
+                setTimeout(function() {
+                    if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                        window.explorer.loadIntoViewer(verInfoMain.createdUrn, 'BIM Model (작성 당시 버전 v' + verInfoMain.createdVer + ')');
+                        waitForViewerCreationAndZoom();
+                    }
+                }, 300);
+            },
+            onConfirmSplitCompare: function() {
+                console.log('[focusIssueOnViewer] 🔀 작성 당시(v' + verInfoMain.createdVer + ') vs 직전(v' + verInfoMain.prevVer + ') Dual 3D Viewer 런칭!');
+                window.openDualVersionViewersModal(verInfoMain.prevUrn, verInfoMain.createdUrn, verInfoMain.prevVer, verInfoMain.createdVer, issueObj);
+            }
+        });
+        return;
+    }
+
+    // 3. 동일 모델일 경우 기존 흐름대로 탭 이동 후 줌인 진행
     if (typeof window.switchTab === 'function') {
         window.switchTab('project');
     }
 
-    // 2. 300ms 대기 후 뷰어 존재 여부 판단 → 분기
     setTimeout(function() {
         var activeViewer = window.NOP_VIEWER ||
                            window.myGlobalViewer ||
@@ -4620,7 +5260,7 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
         console.log('[focusIssueOnViewer] 300ms 후 뷰어 체크 — activeViewer:', !!activeViewer);
 
         if (!activeViewer) {
-            // 🚨 핵심: 뷰어가 없으면 대기하지 않고 loadIntoViewer로 엔진을 먼저 강제 깨움
+            // 🚨 뷰어가 없으면 loadIntoViewer로 엔진을 먼저 강제 깨움
             if (targetUrn && window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                 var urnName = 'BIM Model';
                 try {
@@ -4631,13 +5271,10 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
                 } catch(e) {}
                 console.log('[focusIssueOnViewer] 뷰어 없음 → loadIntoViewer로 엔진 강제 초기화:', targetUrn, urnName);
                 window.explorer.loadIntoViewer(targetUrn, urnName);
-                waitForViewerCreationAndZoom(); // 엔진 깨어나길 기다렸다가 줌인
+                waitForViewerCreationAndZoom();
             } else if (!targetUrn) {
-                // URN 없고 뷰어도 없음 → 탭 전환만
                 console.warn('[focusIssueOnViewer] targetUrn 없고 뷰어도 없음 — 탭 전환만 완료.');
             } else {
-                // explorer.loadIntoViewer도 없음 → 최후 수단
-                console.warn('[focusIssueOnViewer] explorer.loadIntoViewer 없음 — viewer.js 직접 import 시도');
                 import('./viewer.js?v=20260804-main-rotate-fix1').then(function(mod) {
                     if (!mod.initViewer || !mod.loadModel) return;
                     var container = document.getElementById('preview');
@@ -4649,10 +5286,9 @@ window.focusIssueOnViewer = function(dbId, targetUrn) {
                             waitForViewerCreationAndZoom();
                         });
                     });
-                }).catch(function(e) { console.error('[focusIssueOnViewer] viewer.js import 실패:', e); });
+                });
             }
         } else {
-            // 뷰어가 이미 있음 → URN 비교 후 정상 로드/줌
             executeLoadAndFocus(activeViewer);
         }
     }, 300);
@@ -6734,7 +7370,37 @@ window.bindIssueItemClickEvents = function() {
         return '';
     }
 
+    function extractPastVersionUrnFromIssue(issue) {
+        if (!issue) return '';
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue;
+        var docs = raw.linkedDocuments || issue.linkedDocuments || [];
+        if (Array.isArray(docs) && docs.length > 0) {
+            for (var i = 0; i < docs.length; i++) {
+                var doc = docs[i];
+                if (!doc) continue;
+                var urnStr = doc.urn || (doc.details && doc.details.urn) || '';
+                var verNum = doc.createdAtVersion || (doc.details && doc.details.createdAtVersion);
+
+                if (urnStr && urnStr.indexOf('dm.lineage:') > -1) {
+                    var match = urnStr.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+                    if (match && match[1]) {
+                        var versionIdStr = verNum ? '?version=' + verNum : '';
+                        var rawVersionUrn = 'urn:adsk.wipprod:fs.file:vf.' + match[1] + versionIdStr;
+                        return btoa(rawVersionUrn).replace(/=/g, '');
+                    }
+                }
+                if (urnStr && (urnStr.indexOf('fs.file') > -1 || urnStr.indexOf('urn:adsk.') === 0)) {
+                    return btoa(urnStr.indexOf('urn:') === 0 ? urnStr : 'urn:' + urnStr).replace(/=/g, '');
+                }
+            }
+        }
+        return '';
+    }
+
     async function resolveFormaIssueViewerUrn(issue) {
+        var pastUrn = extractPastVersionUrnFromIssue(issue);
+        if (pastUrn) return pastUrn;
+
         var direct = issue.placementUrn || issue.linkedDocumentUrn || issue.documentUrn ||
             issue.urn || issue.modelUrn || issue.fileUrn || issue.targetUrn || issue.seedURN ||
             findIssueValueDeep(issue.rawFormaIssue || issue, ['placementUrn', 'linkedDocumentUrn', 'documentUrn', 'urn', 'modelUrn', 'fileUrn', 'targetUrn', 'seedURN', 'versionId', 'viewableUrn']);
@@ -6753,6 +7419,7 @@ window.bindIssueItemClickEvents = function() {
 
         return normalizeViewerUrnForDetail(await resolveUrnFromGangbukModelTree(placementName));
     }
+    window.resolveFormaIssueViewerUrn = resolveFormaIssueViewerUrn;
 
     function openDetail(issue) {
         var old = document.getElementById('forma-issue-detail-modal');
@@ -6832,7 +7499,7 @@ window.bindIssueItemClickEvents = function() {
             }
             closeFormaIssueDetail();
             if (typeof window.focusIssueOnViewer === 'function') {
-                window.focusIssueOnViewer(dbId, urn);
+                window.focusIssueOnViewer(issue, urn);
                 return;
             }
             if (typeof window.switchTab === 'function') window.switchTab('project');

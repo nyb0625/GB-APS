@@ -1,6 +1,6 @@
 /**
  * ai-panel.js — AI Chat and Action Mapping Client (ES6 Module)
- * v3.0 — 메인 이슈탭 실시간 데이터 연동 + 이슈 질문 지능형 분기
+ * v4.0 — 메인 이슈탭 실시간 데이터 연동 + 이슈 질문 지능형 분기 + 뷰어 브릿지 연동
  */
 
 import { 
@@ -8,7 +8,10 @@ import {
     setNodesColor, 
     isolateNodes, 
     resetViewerOverrides,
-    getModelMetadata 
+    getModelMetadata,
+    searchAndGetBulkProperties,
+    setElementColorByName,
+    getViewerInstance
 } from './viewer.js';
 
 let chatHistory = [];
@@ -77,131 +80,211 @@ export async function initAiPanel() {
 // 🔍 이슈 관련 질문 여부 판별
 // ─────────────────────────────────────────────────────────────────
 function isIssueRelatedQuery(text) {
+    const lower = text.toLowerCase();
+
+    // ── 1순위: '이슈'가 명시적으로 포함되면 즉시 이슈 쿼리로 판별
+    if (lower.includes('이슈')) return true;
+
+    // ── 2순위: 이슈 전용 고유 키워드 (BIM 조회와 겹치지 않는 단어들만)
+    const issueOnlyKeywords = [
+        '결함', '하자', '반려', '협의', '보류', '지연', '초안',
+        '공종', '담당자', '구조물별', '월간 이슈', '이슈 현황',
+        '단독 이슈', '비교 이슈',
+        'open 이슈', 'closed 이슈',
+    ];
+    if (issueOnlyKeywords.some(kw => lower.includes(kw))) return true;
+
+    // ── 3순위: 시설명(정수장 고유 구조물) + 상태/집계 단어가 함께 있을 때만
+    const facilityKeywords = [
+        '응집침전지', '침전지', '착수정', '여과지', '정수지', '저류조',
+        '배수지', '가압장', '약품동',
+    ];
+    const issueStatusKeywords = [
+        '현황', '요약', '집계', '통계', '분포', '건수', '보고',
+        '완료', '진행', '검토', '목록', '리스트',
+    ];
+    const hasFacility = facilityKeywords.some(kw => lower.includes(kw));
+    const hasStatus   = issueStatusKeywords.some(kw => lower.includes(kw));
+    if (hasFacility && hasStatus) return true;
+
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 🤖 [Viewer Bridge] 의도 파악 (Intent Classification)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * 모델 특성(체적·면적·수량) 조회 의도 여부 판별
+ */
+function isModelPropertyQuery(text) {
     const keywords = [
-        '이슈', '문제', '결함', '하자', '단독', '비교', '공종', '구조물', '담당자',
-        '상태', '요약', '몇개', '몇 개', '개수', '보고', '현황', '목록',
-        '총 몇', '얼마나', '어떤', '어느', '집계', '분포', '통계',
-        '응집침전지', '침전지', '정수', '여과', '저류', '펌프', '배수',
-        '토목', '기계', '전기', '계장', '건축',
-        'open', 'closed', '완료', '진행', '검토', '보류'
+        '체적', '볼륨', 'volume', '면적', 'area', '수량', '길이', '개수',
+        '몇 개', '몇개', '얼마나', '재료', 'material', '특성', '속성',
+        '모델', 'bim', '부재', '슬래브', '벽', '기둥', '보', '계단', '지붕',
+        '콘크리트', '철근', '강재', '창문', '문', '바닥', '천장'
     ];
     const lower = text.toLowerCase();
+    // 이슈 키워드가 있으면 모델 조회가 아님
+    if (isIssueRelatedQuery(text) && !lower.includes('bim') && !lower.includes('모델')) return false;
     return keywords.some(kw => lower.includes(kw.toLowerCase()));
+}
+
+/**
+ * 모델 색상 제어 의도 여부 판별
+ */
+function isModelColorControlQuery(text) {
+    const colorActions = ['색', '색상', '칠', '하이라이트', '표시', '강조', '변경', '바꿔', '바꿔줘', '칠해'];
+    const colorNames   = ['빨간', '파란', '초록', '노란', '주황', '하늘', '분홍', '흰', '회색', 'red', 'blue', 'green', 'yellow', 'orange', 'cyan', 'white', 'gray'];
+    const lower = text.toLowerCase();
+    const hasAction = colorActions.some(kw => lower.includes(kw));
+    const hasColor  = colorNames.some(kw => lower.includes(kw));
+    return hasAction || hasColor;
+}
+
+/**
+ * 쿼리에서 BIM 부재명 키워드 추출 (예: '슬래브의 체적' → '슬래브')
+ */
+function extractElementKeyword(text) {
+    const elementPatterns = [
+        '슬래브', 'slab', '벽체', '벽', 'wall', '기둥', 'column', '보', 'beam',
+        '계단', 'stair', '지붕', 'roof', '바닥', 'floor', '문', 'door', '창문', 'window',
+        '파이프', 'pipe', '덕트', 'duct', '콘크리트', 'concrete'
+    ];
+    const lower = text.toLowerCase();
+    const found = elementPatterns.find(kw => lower.includes(kw.toLowerCase()));
+    return found || null;
+}
+
+/**
+ * 쿼리에서 색상 키워드 추출
+ */
+function extractColorKeyword(text) {
+    const colorMap = {
+        '빨간': 'red', '빨강': 'red', '빨간색': 'red', 'red': 'red',
+        '파란': 'blue', '파랑': 'blue', '파란색': 'blue', 'blue': 'blue',
+        '초록': 'green', '초록색': 'green', 'green': 'green',
+        '노란': 'yellow', '노랑': 'yellow', '노란색': 'yellow', 'yellow': 'yellow',
+        '주황': 'orange', '주황색': 'orange', 'orange': 'orange',
+        '하늘': 'cyan', '하늘색': 'cyan', 'cyan': 'cyan',
+        '분홍': 'magenta', '분홍색': 'magenta', 'magenta': 'magenta',
+        '흰': 'white', '흰색': 'white', 'white': 'white',
+        '회': 'gray', '회색': 'gray', 'gray': 'gray'
+    };
+    const lower = text.toLowerCase();
+    const entry = Object.entries(colorMap).find(([k]) => lower.includes(k));
+    return entry ? entry[1] : 'cyan';
 }
 
 // ─────────────────────────────────────────────────────────────────
 // 📊 메인 이슈탭 실시간 데이터 수집 및 컨텍스트 문자열 생성
 // ─────────────────────────────────────────────────────────────────
 function getIssueContext() {
-    // 1) window.currentIssueList를 단일 진실 소스로 우선 사용
-    let allIssues = [];
+    let rawList = [];
 
+    // 1) '월간 이슈 현황' 탭 및 메인 캐시 소스 전수 수집
+    if (Array.isArray(window._constructionIssueCache) && window._constructionIssueCache.length > 0) {
+        rawList = rawList.concat(window._constructionIssueCache);
+    }
+    if (Array.isArray(window._gangbukFormaCache) && window._gangbukFormaCache.length > 0) {
+        rawList = rawList.concat(window._gangbukFormaCache);
+    }
+    if (window.formaCache && Array.isArray(window.formaCache.issues) && window.formaCache.issues.length > 0) {
+        rawList = rawList.concat(window.formaCache.issues);
+    }
     if (Array.isArray(window.currentIssueList) && window.currentIssueList.length > 0) {
-        allIssues = window.currentIssueList;
-    } else {
-        // fallback: LocalStorage 3개 키 병합 + 중복 제거
-        let l1 = [], l2 = [], l3 = [];
-        try { l1 = JSON.parse(localStorage.getItem('aps_project_issues')      || '[]'); } catch(e) {}
-        try { l2 = JSON.parse(localStorage.getItem('my_saved_issues')         || '[]'); } catch(e) {}
-        try { l3 = JSON.parse(localStorage.getItem('my_saved_compare_issues') || '[]'); } catch(e) {}
-        const raw = l1.concat(l2).concat(l3);
-        const seen = {};
-        raw.forEach(item => {
-            if (item && item.id && !seen[item.id]) {
-                seen[item.id] = true;
-                allIssues.push(item);
-            }
-        });
+        rawList = rawList.concat(window.currentIssueList);
+    }
+    if (Array.isArray(window.currentFilteredIssues) && window.currentFilteredIssues.length > 0) {
+        rawList = rawList.concat(window.currentFilteredIssues);
     }
 
-    // 2) 단독/비교 분류
-    const isCompare = item =>
-        String(item.id || '').startsWith('COMP-') ||
-        item._type === 'compare' ||
-        item.type  === 'compare';
+    // fallback: LocalStorage 3개 키 병합
+    let l1 = [], l2 = [], l3 = [];
+    try { l1 = JSON.parse(localStorage.getItem('aps_project_issues')      || '[]'); } catch(e) {}
+    try { l2 = JSON.parse(localStorage.getItem('my_saved_issues')         || '[]'); } catch(e) {}
+    try { l3 = JSON.parse(localStorage.getItem('my_saved_compare_issues') || '[]'); } catch(e) {}
+    rawList = rawList.concat(l1).concat(l2).concat(l3);
 
-    const singleIssues  = allIssues.filter(i => i && !isCompare(i));
-    const compareIssues = allIssues.filter(i => i &&  isCompare(i));
-
-    // 3) 구조물별 집계
-    const byStructure = {};
-    allIssues.forEach(item => {
-        const s = (item.structure || '미지정').trim();
-        if (!byStructure[s]) byStructure[s] = { single: 0, compare: 0 };
-        if (isCompare(item)) byStructure[s].compare++;
-        else                  byStructure[s].single++;
+    // 중복 제거 (ID 또는 Title+Structure)
+    const allIssues = [];
+    const seen = new Set();
+    rawList.forEach(item => {
+        if (!item) return;
+        const key = item.id || (String(item.title || '') + '|' + String(item.structure || item.location || ''));
+        if (key && !seen.has(key)) {
+            seen.add(key);
+            allIssues.push(item);
+        }
     });
 
-    // 4) 공종별 집계
-    const byTrade = {};
-    allIssues.forEach(item => {
-        const t = (item.trade || '미지정').trim();
-        if (!byTrade[t]) byTrade[t] = 0;
-        byTrade[t]++;
+    if (allIssues.length === 0) {
+        return '=== [월간 이슈 현황 탭 실시간 데이터] ===\n[정량적 통계 요약본]: 현재 등록된 월간 이슈 데이터가 0건입니다.\n=================================';
+    }
+
+    // 2) 상태별 KPI 집계 (생성, 검토, 지연, 종료)
+    const totals = allIssues.reduce((acc, issue) => {
+        acc.total += 1;
+        const rawStatus = String(issue.status || issue.statusName || issue.state || 'open').toLowerCase().replace(/[s_-]+/g, '');
+        if (rawStatus.includes('closed') || rawStatus.includes('종료') || rawStatus.includes('완료') || rawStatus.includes('close')) {
+            acc.closed += 1;
+        } else if (rawStatus.includes('delay') || rawStatus.includes('지연') || rawStatus.includes('late') || rawStatus.includes('overdue')) {
+            acc.delayed += 1;
+        } else if (rawStatus.includes('review') || rawStatus.includes('검토') || rawStatus.includes('answer')) {
+            acc.review += 1;
+        } else {
+            acc.created += 1;
+        }
+        return acc;
+    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+
+    const completionRate = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+
+    // 3) 구조물(위치)별 정량 그룹핑
+    const groupedByLocation = allIssues.reduce((acc, item) => {
+        let loc = item.structure || item.location || item.locationName || item.locationDetails || '';
+        if (!loc && item.customAttributes) {
+            const attrs = Array.isArray(item.customAttributes) ? item.customAttributes : Object.values(item.customAttributes);
+            const found = attrs.find(a => /위치|구조물|location/i.test(a.title || a.name || ''));
+            if (found) loc = found.value || found.text || '';
+        }
+        loc = String(loc || '미지정 구조물').trim();
+
+        if (!acc[loc]) {
+            acc[loc] = { total: 0, created: 0, review: 0, delayed: 0, closed: 0, items: [] };
+        }
+
+        acc[loc].total += 1;
+        const rawStatus = String(item.status || item.statusName || 'open').toLowerCase().replace(/[s_-]+/g, '');
+        if (rawStatus.includes('closed') || rawStatus.includes('종료') || rawStatus.includes('완료')) acc[loc].closed += 1;
+        else if (rawStatus.includes('delay') || rawStatus.includes('지연')) acc[loc].delayed += 1;
+        else if (rawStatus.includes('review') || rawStatus.includes('검토')) acc[loc].review += 1;
+        else acc[loc].created += 1;
+
+        acc[loc].items.push(item);
+        return acc;
+    }, {});
+
+    const locationSummaryParts = Object.entries(groupedByLocation).map(([loc, data]) => {
+        const details = [];
+        if (data.created > 0) details.push(`생성 ${data.created}`);
+        if (data.review > 0) details.push(`검토 ${data.review}`);
+        if (data.delayed > 0) details.push(`지연 ${data.delayed}`);
+        if (data.closed > 0) details.push(`종료 ${data.closed}`);
+        return `[${loc}: 총 ${data.total}건 (${details.join(', ') || 'N/A'})]`;
     });
 
-    // 5) 상태별 집계
-    const byStatus = {};
-    allIssues.forEach(item => {
-        const s = (item.status || '미지정').trim();
-        if (!byStatus[s]) byStatus[s] = 0;
-        byStatus[s]++;
-    });
+    const locationSummaryText = locationSummaryParts.join(', ');
 
-    // 6) 담당자별 집계
-    const byAssignee = {};
-    allIssues.forEach(item => {
-        const a = (item.assignee || '미지정').trim();
-        if (!byAssignee[a]) byAssignee[a] = 0;
-        byAssignee[a]++;
-    });
-
-    // 7) 단독 이슈 상세 목록 (최대 80개)
-    const singleDetail = singleIssues.slice(0, 80).map((item, i) =>
-        `  ${i + 1}. [${item.title || '제목 없음'}] | 구조물: ${item.structure || '-'} | 공종: ${item.trade || '-'} | 상태: ${item.status || '-'} | 담당자: ${item.assignee || '-'} | 날짜: ${item.date || item.startDate || '-'} | 내용: ${(item.description || item.desc || '').substring(0, 60)}`
+    const detailList = allIssues.slice(0, 80).map((item, i) =>
+        `  ${i + 1}. [${item.title || '제목 없음'}] | 구조물/위치: ${item.structure || item.location || '-'} | 상태: ${item.status || '-'} | 담당자: ${item.assignee || '-'} | 날짜: ${item.date || item.startDate || '-'}`
     ).join('\n');
 
-    // 8) 비교 이슈 상세 목록 (최대 80개)
-    const compareDetail = compareIssues.slice(0, 80).map((item, i) =>
-        `  ${i + 1}. [${item.title || '제목 없음'}] | 구조물: ${item.structure || '-'} | 공종: ${item.trade || '-'} | 상태: ${item.status || '-'} | 담당자: ${item.assignee || '-'} | 날짜: ${item.date || '-'} | 검토: ${(item.reviewContent || item.reviewDesc || '').substring(0, 40)} | 변경: ${(item.changeContent || item.changeDesc || '').substring(0, 40)}`
-    ).join('\n');
-
-    // 9) 컨텍스트 문자열 조립
-    let ctx = '=== 메인 이슈탭 실시간 데이터 ===\n';
-    ctx += `■ 전체 이슈: ${allIssues.length}개\n`;
-    ctx += `  - 단독 이슈: ${singleIssues.length}개\n`;
-    ctx += `  - 비교 이슈: ${compareIssues.length}개\n\n`;
-
-    ctx += '■ 구조물별 현황:\n';
-    Object.entries(byStructure).forEach(([k, v]) => {
-        ctx += `  · ${k}: 단독 ${v.single}개 / 비교 ${v.compare}개\n`;
-    });
-
-    ctx += '\n■ 공종별 현황:\n';
-    Object.entries(byTrade).forEach(([k, v]) => {
-        ctx += `  · ${k}: ${v}개\n`;
-    });
-
-    ctx += '\n■ 상태별 현황:\n';
-    Object.entries(byStatus).forEach(([k, v]) => {
-        ctx += `  · ${k}: ${v}개\n`;
-    });
-
-    ctx += '\n■ 담당자별 현황:\n';
-    Object.entries(byAssignee).forEach(([k, v]) => {
-        ctx += `  · ${k}: ${v}개\n`;
-    });
-
-    if (singleIssues.length > 0) {
-        ctx += `\n■ 단독 이슈 상세 목록 (${Math.min(singleIssues.length, 80)}/${singleIssues.length}개):\n`;
-        ctx += singleDetail + '\n';
-    }
-
-    if (compareIssues.length > 0) {
-        ctx += `\n■ 비교 이슈 상세 목록 (${Math.min(compareIssues.length, 80)}/${compareIssues.length}개):\n`;
-        ctx += compareDetail + '\n';
-    }
-
+    let ctx = '=== [월간 이슈 현황 탭 실시간 데이터] ===\n';
+    ctx += `■ 전체 이슈 KPI: 총 ${totals.total}건 (생성 ${totals.created}건, 검토 ${totals.review}건, 지연 ${totals.delayed}건, 종료 ${totals.closed}건 / 완료율 ${completionRate}%)\n`;
+    ctx += `■ [구조물별 월간 이슈 진행 현황]:\n${locationSummaryText}\n\n`;
+    ctx += `■ 개별 이슈 상세 리스트 (${Math.min(allIssues.length, 80)}/${allIssues.length}개):\n`;
+    ctx += detailList + '\n';
     ctx += '=================================';
     return ctx;
 }
@@ -498,6 +581,36 @@ async function submitChatMessage(messageText) {
         }
     }
 
+    // ── [기능 A] 🎨 뷰어 색상 제어 쿼리 — LLM 없이 즉시 처리 ─────────────────
+    const isColorCtrl = isModelColorControlQuery(lq);
+    const elementKw   = extractElementKeyword(lq);
+    if (isColorCtrl && elementKw) {
+        console.log('[Viewer Bridge] 색상 제어 명령 감지:', elementKw);
+        toggleLoading(true);
+        const colorKw = extractColorKeyword(lq);
+        const colorResult = await setElementColorByName(elementKw, colorKw);
+        toggleLoading(false);
+        if (colorResult.success) {
+            appendMessage('assistant', colorResult.message);
+            chatHistory.push({ role: 'assistant', content: colorResult.message });
+        } else {
+            // 색상 제어 실패 시에도 LLM에게 계속 진행
+            addSystemMessage(`⚠️ 뷰어 색상 제어 실패: ${colorResult.message}`);
+        }
+        if (colorResult.success) return; // 완전히 처리됨
+    }
+
+    // ── [기능 B] 🔬 뷰어 모델 특성 조회 — 실시간 데이터 추출 후 LLM에 주입 ─────
+    let viewerPropertyContext = null;
+    const isModelQuery = isModelPropertyQuery(lq);
+    if (isModelQuery && elementKw) {
+        console.log('[Viewer Bridge] 모델 특성 조회 감지:', elementKw);
+        addSystemMessage(`🔍 뷰어에서 '${elementKw}' 부재 특성을 실시간으로 추출하는 중...`);
+        const propResult = await searchAndGetBulkProperties(elementKw);
+        viewerPropertyContext = propResult.contextText;
+        console.log('[Viewer Bridge] 추출 완료:', viewerPropertyContext);
+    }
+
     // ── [기능 2] BIM 모델 컨텍스트 ────────────────────────────────
     let bimContext = 'No active model metadata.';
     if (modelMetadata) {
@@ -532,55 +645,70 @@ async function submitChatMessage(messageText) {
             console.warn('[Smart AI Agent] llm_wiki.md 로드 실패:', e);
         }
 
-        // system 메시지 구성
-        const systemMessages = [
-            {
-                role: 'system',
-                content: [
-                    '당신은 강북정수장 APS 웹 시스템에 탑재된 AI 엔지니어링 챗봇입니다.',
-                    '도면 비교 분석, 이슈 관리, 구조물 정보 및 토목/기계 공종에 대해 정확하고 신뢰성 있는 전문 답변을 한국어로 제공하세요.',
-                    '이슈 관련 질문에는 반드시 제공된 "메인 이슈탭 실시간 데이터"를 기반으로 정확한 수치와 목록을 답변하세요.',
-                    '추측이나 가정 없이 데이터에 있는 사실만 답변하세요.',
-                    '',
-                    '사용 가능한 뷰어 제어 액션 태그:',
-                    '[ACTION:SELECT, TARGET:카테고리명] — 해당 객체 선택',
-                    '[ACTION:THEME, TARGET:카테고리명, COLOR:색상] — 색상 강조',
-                    '[ACTION:RESET_VIEWER] — 뷰어 초기화',
-                    '[ACTION:COUNT, TARGET:카테고리명] — 객체 수 조회',
-                    '',
-                    '현재 BIM 모델 컨텍스트:',
-                    bimContext
-                ].join('\n')
-            }
-        ];
+        // system 메시지 구성 (단일 시스템 메시지 통합)
+        let systemPromptText = [
+            '당신은 강북정수장 APS 웹 시스템에 탑재된 AI 엔지니어링 챗봇입니다.',
+            '도면 비교 분석, 이슈 관리, 구조물 정보 및 토목/기계 공종에 대해 정확하고 신뢰성 있는 전문 답변을 한국어로 제공하세요.',
+            '🎯 [이슈 답변 핵심 지침 - 정량적 데이터 중심]',
+            '사용자가 이슈 요약, 현황, 통계, 목록 관련 질문을 하면, 반드시 서술이나 단순 나열에 앞서 **[구조물별 건수]**, **[공종별 건수]**, **[상태별 건수]**의 정량적 수치 통계를 첫 번째 단락에 가장 먼저 제시하세요.',
+            '예시: "응집침전지 N건, 여과지 N건 / 토목 N건, 기계 N건 / 진행 중 N건, 지연 N건"',
+            '수치는 무조건 주입된 실시간 데이터의 정확한 건수로만 수치화하고 절대 지어내지 마세요.',
+            '',
+            '사용 가능한 뷰어 제어 액션 태그:',
+            '[ACTION:SELECT, TARGET:카테고리명] — 해당 객체 선택',
+            '[ACTION:THEME, TARGET:카테고리명, COLOR:색상] — 색상 강조',
+            '[ACTION:RESET_VIEWER] — 뷰어 초기화',
+            '[ACTION:COUNT, TARGET:카테고리명] — 객체 수 조회',
+            '',
+            '현재 BIM 모델 컨텍스트:',
+            bimContext
+        ].join('\n');
 
-        // 가이드 내용이 있으면 시스템 규칙 및 가이드 본문 주입
         if (guideContent) {
-            systemMessages.push({
-                role: 'system',
-                content: [
-                    '🎯 [사용자 가이드라인 규칙]',
-                    '사용자가 플랫폼의 특정 기능(간트 차트 추가법, CCTV 동기화 방법, 이슈 배치 클릭 이동 등)에 대해 질문하면, 반드시 아래에 제공되는 [강북정수장 APS AI 플랫폼 가이드] 내용을 기준으로 친절하게 설명서처럼 답변하세요.',
-                    '',
-                    '# 강북정수장 APS AI 플랫폼 가이드 (llm_wiki.md):',
-                    guideContent
-                ].join('\n')
-            });
+            systemPromptText += '\n\n' + [
+                '🎯 [사용자 가이드라인 규칙 (llm_wiki.md)]',
+                guideContent
+            ].join('\n');
         }
 
-        // 이슈 컨텍스트가 있으면 system 메시지로 추가
+        let finalUserContent = cleanQuery;
+
+        // 뷰어 실시간 특성 데이터 주입 (모델 조회 쿼리인 경우)
+        if (viewerPropertyContext) {
+            finalUserContent = [
+                `[실시간 BIM 뷰어 데이터]`,
+                viewerPropertyContext,
+                ``,
+                `[사용자 질문]`,
+                cleanQuery,
+                ``,
+                `위 실시간 뷰어 데이터를 기반으로, 부재 개수·체적·면적 등의 수치를 구체적으로 언급하며 정확하게 답변하세요.`
+            ].join('\n');
+        }
+
+        // 이슈 컨텍스트 주입 (이슈 쿼리인 경우)
         if (issueContext) {
-            systemMessages.push({
-                role: 'system',
-                content: issueContext
-            });
+            finalUserContent = [
+                `[실시간 메인 이슈 탭 데이터 컨텍스트]`,
+                issueContext,
+                ``,
+                `[사용자 질문]`,
+                cleanQuery,
+                ``,
+                `🚨 [지침: 정량적 데이터 기반 필수 답변 규칙]`,
+                `이슈 요약이나 현황 질문 시, 주입된 데이터의 실시간 숫자를 기반으로 아래와 같이 **[구조물별 건수]**, **[공종별 건수]**, **[상태별 건수]**를 첫 번째 단락에 가장 먼저 정량적으로 수치화하여 답변하세요:`,
+                `• **구조물별 현황**: [구조물명] N건 (단독 X건, 비교 Y건)`,
+                `• **공종별 현황**: [공종명] N건`,
+                `• **상태별 현황**: [상태명] N건`,
+                `데이터에 명시된 수치만 토대로 답변하고, 숫자를 임의 추측하거나 지어내지 마세요.`
+            ].join('\n');
         }
 
         const ollamaMessages = [
-            ...systemMessages,
-            ...chatHistory.slice(0, -1)
+            { role: 'system', content: systemPromptText },
+            ...chatHistory.slice(0, -1),
+            { role: 'user', content: finalUserContent }
         ];
-        ollamaMessages.push({ role: 'user', content: cleanQuery });
 
         const response = await fetch(OLLAMA_ENDPOINT, {
             method: 'POST',
@@ -618,7 +746,7 @@ async function submitChatMessage(messageText) {
         console.error('[Smart AI Agent] Ollama 연동 실패:', err.message);
         toggleLoading(false);
         appendMessage('assistant',
-            `❌ 로컬 LLM(Ollama) 서버에 연결할 수 없습니다.\n터미널에서 'ollama run gemma4:e2b' 가 구동 중인지 확인하세요.\n\n오류 상세: ${err.message}`
+            `❌ 연결 실패\n(로컬 LLM 서버 http://localhost:11434 연결 불가: ${err.message})`
         );
     }
 }

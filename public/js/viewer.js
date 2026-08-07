@@ -492,3 +492,170 @@ export async function scanGlobalProjectModels(hubId, projectId, rootFolderId) {
     }
     return null;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// 🤖 [Chatbot-to-Viewer Bridge] — 챗봇 연동 뷰어 브릿지 함수
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * 현재 활성화된 APS 뷰어 인스턴스를 반환하는 브릿지 함수.
+ * window.viewer → window.NOP_VIEWER → window.viewerLeft 순서로 탐색.
+ */
+export function getViewerInstance() {
+    return window.viewer || window.NOP_VIEWER || window.viewerLeft || window._viewer || null;
+}
+
+/**
+ * 부재명으로 뷰어 내 객체를 검색하고, 대상 객체의 특성 창 데이터를 추출한다.
+ * @param {string} elementName - 검색할 부재명 (예: '슬래브', '벽체', 'Walls')
+ * @param {string[]} propFilter - 추출할 특성 이름 목록 (기본: Volume, Area, Length, Material, Name)
+ * @returns {Promise<{count: number, contextText: string, dbIds: number[], rawProperties: object[]}>}
+ */
+export function searchAndGetBulkProperties(elementName, propFilter = ['Volume', 'Area', 'Length', 'Material', 'Name', 'Category']) {
+    return new Promise((resolve) => {
+        const viewer = getViewerInstance();
+        if (!viewer || !viewer.model) {
+            resolve({ count: 0, contextText: `현재 뷰어에 로드된 모델이 없거나 초기화 중입니다.`, dbIds: [], rawProperties: [] });
+            return;
+        }
+
+        // 1단계: viewer.search()로 부재명에 해당하는 dbId 목록 확보
+        viewer.search(elementName, (dbIds) => {
+            if (!dbIds || dbIds.length === 0) {
+                resolve({
+                    count: 0,
+                    contextText: `현재 뷰어에 로드된 모델에서 '${elementName}' 부재를 찾을 수 없습니다.`,
+                    dbIds: [],
+                    rawProperties: []
+                });
+                return;
+            }
+
+            // 2단계: getBulkProperties()로 각 객체의 Volume, Area, Material 등 추출
+            viewer.model.getBulkProperties(dbIds, { propFilter }, (results) => {
+                let totalVolume = 0;
+                let totalArea = 0;
+                let totalLength = 0;
+                const materials = new Set();
+
+                results.forEach(result => {
+                    (result.properties || []).forEach(p => {
+                        const name = (p.attributeName || p.displayName || '').toLowerCase();
+                        const val = parseFloat(String(p.displayValue || '').replace(/[^0-9.]/g, '')) || 0;
+                        if (name.includes('volume') || name === '부피' || name === '체적') totalVolume += val;
+                        if (name.includes('area') || name === '면적') totalArea += val;
+                        if (name.includes('length') || name === '길이') totalLength += val;
+                        if (name.includes('material') || name === '재료') materials.add(String(p.displayValue).trim());
+                    });
+                });
+
+                // 3단계: 컨텍스트 텍스트 조립
+                let contextText = `현재 뷰어에 로드된 '${elementName}' 부재는 총 ${dbIds.length}개입니다.`;
+                if (totalVolume > 0) contextText += ` 체적 합계: ${totalVolume.toFixed(3)} m³.`;
+                if (totalArea > 0) contextText += ` 면적 합계: ${totalArea.toFixed(3)} m².`;
+                if (totalLength > 0) contextText += ` 길이 합계: ${totalLength.toFixed(3)} m.`;
+                if (materials.size > 0) contextText += ` 사용 재료: ${[...materials].join(', ')}.`;
+
+                resolve({
+                    count: dbIds.length,
+                    contextText,
+                    dbIds,
+                    rawProperties: results
+                });
+            }, () => {
+                resolve({
+                    count: dbIds.length,
+                    contextText: `현재 뷰어에 로드된 '${elementName}' 부재는 총 ${dbIds.length}개입니다. (상세 특성 추출 실패)`,
+                    dbIds,
+                    rawProperties: []
+                });
+            });
+        }, (err) => {
+            resolve({
+                count: 0,
+                contextText: `뷰어에서 '${elementName}' 검색 중 오류가 발생했습니다: ${err}`,
+                dbIds: [],
+                rawProperties: []
+            });
+        }, ['Name', 'Category']);
+    });
+}
+
+/**
+ * 부재명으로 뷰어 내 객체를 검색하고, 해당 객체의 색상을 즉시 변경한다.
+ * @param {string} elementName - 색상을 변경할 부재명 (예: '벽체', '슬래브')
+ * @param {string} colorName - 색상명 (예: 'yellow', 'blue', 'red', 'green', 'orange', 'cyan')
+ * @returns {Promise<{success: boolean, count: number, message: string}>}
+ */
+export function setElementColorByName(elementName, colorName) {
+    return new Promise((resolve) => {
+        const viewer = getViewerInstance();
+        if (!viewer || !viewer.model) {
+            resolve({ success: false, count: 0, message: '현재 뷰어에 로드된 모델이 없습니다.' });
+            return;
+        }
+
+        viewer.search(elementName, (dbIds) => {
+            if (!dbIds || dbIds.length === 0) {
+                resolve({ success: false, count: 0, message: `'${elementName}' 부재를 뷰어에서 찾을 수 없습니다.` });
+                return;
+            }
+
+            // 색상명 → THREE.Vector4 변환
+            const colorMap = {
+                red: { r: 1.0, g: 0.0, b: 0.0 },   빨간색: { r: 1.0, g: 0.0, b: 0.0 },
+                blue: { r: 0.0, g: 0.0, b: 1.0 },   파란색: { r: 0.0, g: 0.0, b: 1.0 },
+                green: { r: 0.0, g: 0.8, b: 0.0 },  초록색: { r: 0.0, g: 0.8, b: 0.0 },
+                yellow: { r: 1.0, g: 1.0, b: 0.0 }, 노란색: { r: 1.0, g: 1.0, b: 0.0 },
+                orange: { r: 1.0, g: 0.5, b: 0.0 }, 주황색: { r: 1.0, g: 0.5, b: 0.0 },
+                cyan: { r: 0.0, g: 1.0, b: 1.0 },   하늘색: { r: 0.0, g: 0.8, b: 1.0 },
+                magenta: { r: 1.0, g: 0.0, b: 1.0 }, 분홍색: { r: 1.0, g: 0.4, b: 0.6 },
+                white: { r: 1.0, g: 1.0, b: 1.0 },  흰색: { r: 1.0, g: 1.0, b: 1.0 },
+                gray: { r: 0.5, g: 0.5, b: 0.5 },   회색: { r: 0.5, g: 0.5, b: 0.5 },
+            };
+
+            const rgb = colorMap[colorName] || colorMap[colorName.toLowerCase()] || { r: 0.0, g: 1.0, b: 1.0 };
+            const vec4 = new window.THREE.Vector4(rgb.r, rgb.g, rgb.b, 0.8);
+
+            dbIds.forEach(dbId => {
+                viewer.setThemingColor(dbId, vec4, viewer.model, true);
+            });
+            viewer.impl.invalidate(true, true, true);
+
+            resolve({
+                success: true,
+                count: dbIds.length,
+                message: `✅ '${elementName}' 부재 ${dbIds.length}개의 색상을 ${colorName}으로 변경했습니다.`
+            });
+        }, (err) => {
+            resolve({ success: false, count: 0, message: `'${elementName}' 검색 중 오류: ${err}` });
+        }, ['Name', 'Category']);
+    });
+}
+
+/**
+ * 🚨 [FEATURE INTEGRATION] 이슈 URN과 현재 뷰어 모델 URN 버전 비교
+ * @param {string} issueUrn - 이슈 데이터 구조에서 추출한 문서 URN
+ * @returns {{ isMatch: boolean, currentUrn: string, issueUrn: string }}
+ */
+export function compareViewerModelVersion(issueUrn) {
+    const v = window.viewer || window.NOP_VIEWER || window.myGlobalViewer;
+    if (!v || !v.model) return { isMatch: true, currentUrn: '', issueUrn };
+
+    let currentUrn = '';
+    try {
+        currentUrn = v.model.getData().urn || (typeof v.model.getSeedUrn === 'function' ? v.model.getSeedUrn() : '');
+    } catch (e) {}
+
+    const clean = u => String(u || '').replace(/^urn:/i, '').replace(/=/g, '').trim();
+    const cleanIssue = clean(issueUrn);
+    const cleanCurrent = clean(currentUrn);
+
+    const isMatch = !cleanIssue || !cleanCurrent || cleanIssue === cleanCurrent;
+    return { isMatch, currentUrn, issueUrn };
+}
+
+if (typeof window !== 'undefined') {
+    window.compareViewerModelVersion = compareViewerModelVersion;
+}
+

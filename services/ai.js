@@ -58,48 +58,26 @@ function isSocialTalk(message) {
     return socialKeywords.some(keyword => message.includes(keyword));
 }
 
-// ── 공통 디스패처 ─────────────────────────────────────────────
-async function callAI(messages, systemPrompt = SYSTEM_PROMPT, options = {}) {
-    const provider = getProvider();
-    console.log(`[AI] Provider=${provider.name} messages=${messages.length}`);
-    try {
-        return await provider.chat({ messages, systemPrompt, options });
-    } catch (err) {
-        console.error(`[AI:${provider.name}] error:`, err.response?.data || err.message);
-        throw err;
-    }
+// ── 공통 디스패처 ──────────────────────────�// 3. 데이터 경량화 (Token Optimization)
+function optimizeIssueData(issues) {
+    if (!Array.isArray(issues)) return [];
+    return issues.map(issue => ({
+        id: issue.displayId || issue.id || issue.dbId || '',
+        title: issue.title || issue.name || '제목 없음',
+        description: issue.description || issue.desc || issue.details || issue.comment || '',
+        status: issue.status || issue.issueStatus || 'open',
+        location: issue.location || issue.structure || issue.zone || issue.building || '',
+        assignedTo: issue.assignedTo || issue.assignee || issue.author || issue.owner || '',
+        type: issue.type || issue.category || issue.issueType || '',
+        date: issue.createdDate || issue.createdAt || issue.date || issue.날짜 || ''
+    }));
 }
 
-// ── Public API ────────────────────────────────────────────────
-
-async function analyzeModel({ modelData, question, context }) {
-    const userMessage = [
-        '## BIM Model Data',
-        modelData ? JSON.stringify(modelData, null, 2) : 'No model data provided',
-        '',
-        '## Additional Context',
-        context || 'None',
-        '',
-        '## Question',
-        question,
-    ].join('\n');
-    return callAI([{ role: 'user', content: userMessage }]);
-}
-
-async function summarizeElements({ elements, urn }) {
-    const userMessage = [
-        'Please analyze and summarize the following BIM model elements.',
-        `Model URN: ${urn || 'unknown'}`,
-        '',
-        'Selected Elements:',
-        JSON.stringify(elements, null, 2),
-        '',
-        'Provide:',
-        '1. A brief summary of the selection',
-        '2. Key properties and their values',
-        '3. Any notable observations',
-    ].join('\n');
-    return callAI([{ role: 'user', content: userMessage }]);
+function detectIssueKeywords(message) {
+    if (!message || typeof message !== 'string') return false;
+    const keywords = ['이슈', '문제', 'issue', '현황', '불량', '하자', '간섭', '결함', '상태', '요약'];
+    const lower = message.toLowerCase();
+    return keywords.some(k => lower.includes(k));
 }
 
 async function chat({ messages, systemContext, issues }) {
@@ -110,33 +88,35 @@ async function chat({ messages, systemContext, issues }) {
         finalSystemPrompt += SOCIAL_BYPASS_APPEND;
     }
 
+    const isIssueQuery = detectIssueKeywords(lastUserMessage);
+
     try {
         if (lastUserMessage && !lastUserMessage.startsWith('[')) {
             const knowledge = await HarnessBrain.searchKnowledge(lastUserMessage);
             
-            // Front에서 받은 이슈가 있으면 사용, 없으면 Mock 데이터 사용
+            // Front에서 받은 이슈가 있으면 사용, 없으면 Mock/Backend 데이터 사용
             let issuesToUse = (issues && Array.isArray(issues) && issues.length > 0) 
                 ? issues 
                 : await HarnessBrain.getProjectIssues('PROJ-123', 'MOCK_TOKEN');
 
-            // 날짜 데이터 매핑
-            issuesToUse = issuesToUse.map(issue => {
-                const dateVal = issue.createdDate || issue.createdAt || issue.date || issue.날짜 || "(날짜 미상)";
-                return {
-                    ...issue,
-                    date: dateVal,
-                    createdDate: dateVal,
-                    날짜: dateVal
-                };
-            });
+            const compactIssues = optimizeIssueData(issuesToUse);
 
-            console.log("🚨 [Back] LLM으로 넘어갈 <ISSUE_DATA>:");
-            console.log(JSON.stringify(issuesToUse, null, 2));
+            if (isIssueQuery) {
+                const issueRagHeader = `\n\n[실시간 현장 이슈 RAG 컨텍스트 - 지침 엄격 준수]\n` +
+                    `너는 현장 관제 플랫폼의 AI 어시스턴트야. 사용자가 현장 이슈에 대해 물어봤어. 다음은 현재 연동된 실시간 이슈 데이터(JSON)야:\n` +
+                    `${JSON.stringify(compactIssues, null, 2)}\n` +
+                    `반드시 이 데이터에 기반해서만 답변하고, 데이터에 없는 내용은 절대 지어내지 말고 '현재 등록된 정보가 없습니다'라고 대답해.\n`;
+                
+                finalSystemPrompt = issueRagHeader + finalSystemPrompt;
+            }
+
+            console.log("🚨 [Back] LLM으로 넘어갈 경량화 <ISSUE_DATA>:");
+            console.log(JSON.stringify(compactIssues, null, 2));
 
             finalSystemPrompt = await HarnessBrain.enrichSystemPrompt(
                 finalSystemPrompt,
                 systemContext,
-                issuesToUse
+                compactIssues
             );
 
             // Context Overriding
@@ -154,11 +134,10 @@ async function chat({ messages, systemContext, issues }) {
     // 이슈 추출 및 출력 필수 규칙 추가
     const issueDateRules = `
 [이슈 데이터 추출 및 출력 필수 규칙]
-1. 날짜 데이터 강제 매핑: <ISSUE_DATA>의 각 항목에 기재된 createdDate 또는 date 값을 반드시 확인하고, 결과 출력 시 이슈 제목 옆 괄호 안에 해당 날짜를 정확하게 기입할 것.
-2. 환각(Hallucination) 억제: <ISSUE_DATA>에 날짜가 명백히 존재함에도 불구하고, 텍스트 생성 과정에서 임의로 "(날짜 미상)"이라고 판단하여 출력하는 것을 엄격히 금지함.
+1. 정량적 데이터(수치) 우선 서술: 이슈 요약/현황 질문 시, 서술에 앞서 반드시 [구조물별 건수](예: 응집침전지 N건), [공종별 건수](예: 토목 N건), [상태별 건수] 등 건수 수치를 첫 번째 단락에 가장 먼저 명확히 요약하여 출력할 것.
+2. 날짜 데이터 강제 매핑: <ISSUE_DATA>의 각 항목에 기재된 createdDate 또는 date 값을 반드시 확인하고, 결과 출력 시 이슈 제목 옆 괄호 안에 해당 날짜를 정확하게 기입할 것.
+3. 환각(Hallucination) 억제: <ISSUE_DATA>에 날짜/건수가 명백히 존재함에도 불구하고, 텍스트 생성 과정에서 임의로 판단하거나 숫자를 지어내지 말 것.
    - 올바른 출력 예시: 1. B1층 옹벽 배관 간섭 발생 (2026-05-27)
-   - 금지된 출력 예시: 1. B1층 옹벽 배관 간섭 발생 (날짜 미상)
-3. 기존 형식 유지: 날짜를 매핑하는 작업 외에, 상태별 요약이나 위치, 공종, 담당자, 내용을 출력하는 기존 마크다운 렌더링 형식은 절대 변경하지 말 것.
 `;
     finalSystemPrompt += issueDateRules;
 
@@ -183,6 +162,19 @@ async function chat({ messages, systemContext, issues }) {
     finalSystemPrompt += ACTION_TAGS_RULE;
 
     return callAI(messages, finalSystemPrompt);
+}
+
+
+
+
+async function analyzeModel({ modelData, question, context }) {
+    const messages = [{ role: 'user', content: `[BIM 모델 분석 요청]\n컨텍스트: ${context || ''}\n질문: ${question}\n모델 데이터:\n${JSON.stringify(modelData || {}, null, 2)}` }];
+    return chat({ messages, systemContext: context, issues: null });
+}
+
+async function summarizeElements({ elements, urn }) {
+    const messages = [{ role: 'user', content: `[BIM 객체 요약 요청]\nURN: ${urn || 'N/A'}\n선택된 객체 수: ${elements.length}개\n객체 목록:\n${JSON.stringify(elements, null, 2)}` }];
+    return chat({ messages, systemContext: `URN: ${urn}`, issues: null });
 }
 
 module.exports = { analyzeModel, summarizeElements, chat };
