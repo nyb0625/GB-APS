@@ -4471,7 +4471,69 @@ function normalizeViewerUrnForDetail(value) {
 // ──────────────────────────────────────────────────────────────────────────
 // [배치 클릭 → 3D 뷰어 이동 엔진 v4]
 // ──────────────────────────────────────────────────────────────────────────
+window.closeIssueViewerPopups = function() {
+    [
+        'forma-issue-detail-modal',
+        'dynamic-standalone-issue-modal',
+        'issue-popup',
+        'issue-detail-popup',
+        'monthly-issue-modal',
+        'monthly-issue-list-modal',
+        'monthly-issues-popup'
+    ].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    document.querySelectorAll('.modal-backdrop').forEach(function(el) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    var timelineModal = document.getElementById('bim-timeline-modal');
+    if (timelineModal) {
+        timelineModal.style.display = 'none';
+        timelineModal.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('modal-open');
+};
+
+window.showIssueViewerLoading = function(message, detail) {
+    var overlay = document.getElementById('issue-viewer-loading-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'issue-viewer-loading-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999998;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.58);backdrop-filter:blur(4px);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;transition:opacity .18s ease;pointer-events:auto;';
+        overlay.innerHTML =
+            '<div style="min-width:280px;max-width:88vw;padding:22px 24px;border-radius:14px;background:rgba(15,23,42,.94);border:1px solid rgba(125,211,252,.28);box-shadow:0 24px 64px rgba(0,0,0,.42);color:#e0f2fe;text-align:center;">'
+          + '<div style="width:48px;height:48px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(125,211,252,.22);border-top-color:#38bdf8;animation:issueViewerSpin .85s linear infinite;"></div>'
+          + '<div id="issue-viewer-loading-title" style="font-size:15px;font-weight:900;letter-spacing:0;color:#f8fafc;">3D 모델 로딩 중</div>'
+          + '<div id="issue-viewer-loading-detail" style="margin-top:7px;font-size:12px;line-height:1.5;color:#bae6fd;">모델 버전을 준비하고 있습니다.</div>'
+          + '</div>';
+        document.body.appendChild(overlay);
+        if (!document.getElementById('issue-viewer-loading-style')) {
+            var style = document.createElement('style');
+            style.id = 'issue-viewer-loading-style';
+            style.textContent = '@keyframes issueViewerSpin{to{transform:rotate(360deg)}}';
+            document.head.appendChild(style);
+        }
+    }
+    var titleEl = document.getElementById('issue-viewer-loading-title');
+    var detailEl = document.getElementById('issue-viewer-loading-detail');
+    if (titleEl) titleEl.textContent = message || '3D 모델 로딩 중';
+    if (detailEl) detailEl.textContent = detail || '모델 버전을 준비하고 있습니다.';
+    overlay.style.display = 'flex';
+    requestAnimationFrame(function() { overlay.style.opacity = '1'; });
+};
+
+window.hideIssueViewerLoading = function() {
+    var overlay = document.getElementById('issue-viewer-loading-overlay');
+    if (!overlay) return;
+    overlay.style.opacity = '0';
+    setTimeout(function() {
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }, 180);
+};
+
 window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
+    if (typeof window.closeIssueViewerPopups === 'function') window.closeIssueViewerPopups();
 
     // ── 공통 헬퍼 ────────────────────────────────────────────────────────────
     var issueObj     = (typeof targetIssueOrId === 'object' && targetIssueOrId !== null) ? targetIssueOrId : null;
@@ -4498,16 +4560,64 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
     var dbIdStr      = issueObj ? (issueObj.objectId || issueObj.dbId || issueObj.displayId || issueObj.id || '') : String(targetIssueOrId || '');
     var numericId    = parseInt(dbIdStr, 10);
     var hasNumericId = !isNaN(numericId) && numericId > 0;
-    var normalizeUrn = function(u) { return String(u || '').replace(/^urn:/i, '').trim(); };
+    var normalizeUrn = function(u) { return String(u || '').replace(/^urn:/i, '').replace(/=/g, '').trim(); };
+    var encodeRawUrn = function(raw) {
+        if (!raw) return '';
+        return btoa(String(raw).indexOf('urn:') === 0 ? String(raw) : 'urn:' + String(raw)).replace(/=/g, '');
+    };
+    var findDeepValue = function(source, keys) {
+        var wanted = {};
+        keys.forEach(function(key) { wanted[String(key).toLowerCase()] = true; });
+        var seen = [];
+        function walk(value) {
+            if (!value || typeof value !== 'object') return '';
+            if (seen.indexOf(value) > -1) return '';
+            seen.push(value);
+            if (Array.isArray(value)) {
+                for (var i = 0; i < value.length; i++) {
+                    var arrFound = walk(value[i]);
+                    if (arrFound) return arrFound;
+                }
+                return '';
+            }
+            for (var key in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+                var val = value[key];
+                if (wanted[String(key).toLowerCase()] && val != null && String(val).trim() !== '') {
+                    if (typeof val === 'object') {
+                        var lowerKey = String(key).toLowerCase();
+                        if (lowerKey === 'viewerstate' || lowerKey === 'viewstate' || lowerKey === 'viewport' || lowerKey === 'viewpoint' || lowerKey === 'position' || lowerKey === 'location3d' || lowerKey === 'worldposition' || lowerKey === 'pushpinposition') {
+                            return val;
+                        }
+                        return val.urn || val.versionUrn || val.tipVersionUrn || val.versionId || val.viewerUrn || val.viewableUrn || val.seedURN || '';
+                    }
+                    return val;
+                }
+            }
+            for (var key2 in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key2)) continue;
+                var found = walk(value[key2]);
+                if (found) return found;
+            }
+            return '';
+        }
+        return walk(source);
+    };
     var toViewerUrn = function(u) {
         var str = String(u || '').trim();
         if (!str || str === '-') return '';
-        if (str.indexOf('dm.lineage') > -1) return '';
+        if (str.indexOf('dm.lineage') > -1) {
+            var lineageMatch = str.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+            var versionMatch = str.match(/[?&]version=(\d+)/i);
+            if (lineageMatch && lineageMatch[1] && versionMatch && versionMatch[1]) {
+                return encodeRawUrn('urn:adsk.wipprod:fs.file:vf.' + lineageMatch[1] + '?version=' + versionMatch[1]);
+            }
+            return '';
+        }
         var body = str.replace(/^urn:/i, '');
         if (body.indexOf('dm.lineage') > -1) return '';
         if (str.indexOf('urn:adsk.') === 0 || body.indexOf('adsk.') === 0) {
-            var raw = str.indexOf('urn:') === 0 ? str : 'urn:' + str;
-            return btoa(raw).replace(/=/g, '');
+            return encodeRawUrn(str);
         }
         if (/^[A-Za-z0-9+/=_-]+$/.test(body) && body.length > 20) {
             return body;
@@ -4516,6 +4626,12 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
     };
     if (!targetUrn && issueObj && typeof extractPastVersionUrnFromIssue === 'function') {
         targetUrn = extractPastVersionUrnFromIssue(issueObj);
+    }
+    if (!targetUrn && issueObj) {
+        var rawIssueForUrn = issueObj.rawFormaIssue || issueObj.rawDetailIssue || issueObj;
+        targetUrn = issueObj.placementUrn || issueObj.linkedDocumentUrn || issueObj.documentUrn ||
+            issueObj.urn || issueObj.modelUrn || issueObj.fileUrn || issueObj.targetUrn || issueObj.seedURN ||
+            findDeepValue(rawIssueForUrn, ['tipVersionUrn', 'versionUrn', 'viewerUrn', 'viewableUrn', 'versionId', 'seedURN', 'placementUrn', 'documentUrn']);
     }
     targetUrn = toViewerUrn(targetUrn);
 
@@ -4528,6 +4644,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             externalId: null,
             position: null,
             viewerState: null,
+            viewport: null,
             globalOffset: null
         };
 
@@ -4535,11 +4652,13 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
         var raw = issueObj.rawFormaIssue || issueObj.rawDetailIssue || issueObj;
 
         // 1. linkedDocuments[].details 정밀 파싱 (Forma/ACC 공식 규격)
-        var docs = raw.linkedDocuments || issueObj.linkedDocuments || [];
+        var docs = []
+            .concat(raw.linkedDocuments || issueObj.linkedDocuments || [])
+            .concat(raw.placements || issueObj.placements || []);
         if (Array.isArray(docs)) {
             for (var i = 0; i < docs.length; i++) {
                 var doc = docs[i];
-                var details = doc && doc.details;
+                var details = doc && (doc.details || doc.viewable || doc.viewer || doc);
                 if (details) {
                     if (details.objectId && !result.objectId) {
                         result.objectId = parseInt(details.objectId, 10);
@@ -4552,6 +4671,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     }
                     if (details.viewerState && !result.viewerState) {
                         result.viewerState = details.viewerState;
+                    }
+                    if ((details.viewport || details.viewpoint) && !result.viewport) {
+                        result.viewport = details.viewport || details.viewpoint;
                     }
                     if (details.globalOffset && !result.globalOffset) {
                         result.globalOffset = details.globalOffset;
@@ -4574,11 +4696,18 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
         if (!result.position) {
             result.position = issueObj.point || issueObj.position || raw.point || raw.position ||
-                              (raw.attributes && raw.attributes.pushpinAttributes && raw.attributes.pushpinAttributes.location);
+                              (raw.attributes && raw.attributes.pushpinAttributes && raw.attributes.pushpinAttributes.location) ||
+                              findDeepValue(raw, ['position', 'location3D', 'worldPosition', 'pushpinPosition']);
         }
 
         if (!result.viewerState && raw.viewerState) {
             result.viewerState = raw.viewerState;
+        }
+        if (!result.viewerState) {
+            result.viewerState = findDeepValue(raw, ['viewerState', 'viewState']);
+        }
+        if (!result.viewport) {
+            result.viewport = findDeepValue(raw, ['viewport', 'viewpoint']);
         }
 
         return result;
@@ -4601,6 +4730,11 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 if (typeof v.clearSelection === 'function') v.clearSelection();
                 if (typeof v.select === 'function') v.select(dbIds);
                 if (typeof v.fitToView === 'function') v.fitToView(dbIds);
+                setTimeout(function() {
+                    try {
+                        if (typeof v.fitToView === 'function') v.fitToView(dbIds);
+                    } catch(e) {}
+                }, 250);
 
                 // 오렌지/레드 하이라이트 색상 적용 (RGBA: 1.0, 0.3, 0.0, 0.85) 및 GPU 셰이더 즉시 강제 갱신
                 if (typeof v.setThemingColor === 'function' && typeof THREE !== 'undefined' && v.model) {
@@ -4615,6 +4749,32 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 return true;
             } catch(e) {
                 console.warn('[applySmartIssueFocus] safeHighlightAndZoom 오류:', e);
+                return false;
+            }
+        };
+
+        var applyPositionCamera = function(pos) {
+            if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number' || typeof pos.z !== 'number') return false;
+            try {
+                var px = pos.x;
+                var py = pos.y;
+                var pz = pos.z;
+                if (loc.globalOffset && typeof loc.globalOffset.x === 'number') {
+                    px += loc.globalOffset.x;
+                    py += loc.globalOffset.y;
+                    pz += loc.globalOffset.z;
+                }
+                var targetVector = (typeof THREE !== 'undefined') ? new THREE.Vector3(px, py, pz) : { x: px, y: py, z: pz };
+                var eyeVector = (typeof THREE !== 'undefined') ? new THREE.Vector3(px + 10, py - 10, pz + 8) : { x: px + 10, y: py - 10, z: pz + 8 };
+                if (v.navigation && typeof v.navigation.setView === 'function') {
+                    v.navigation.setView(eyeVector, targetVector);
+                } else if (typeof v.setViewFromArray === 'function') {
+                    v.setViewFromArray([eyeVector.x, eyeVector.y, eyeVector.z, targetVector.x, targetVector.y, targetVector.z, 0, 0, 1]);
+                }
+                if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
+                return true;
+            } catch(e) {
+                console.warn('[applySmartIssueFocus] position camera error:', e);
                 return false;
             }
         };
@@ -4701,6 +4861,21 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
             // 2순위: 3D Element objectId (예: 32312) 포커싱 & 하이라이트
             if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
+                if (!loc.viewerState && loc.viewport && loc.viewport.eye && loc.viewport.target) {
+                    try {
+                        var eye = loc.viewport.eye;
+                        var target = loc.viewport.target;
+                        var up = loc.viewport.up || [0, 0, 1];
+                        if (typeof v.setViewFromArray === 'function') {
+                            v.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                        } else if (v.navigation && typeof v.navigation.setView === 'function' && typeof THREE !== 'undefined') {
+                            v.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
+                        }
+                        if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
+                    } catch(e) {
+                        console.warn('[applySmartIssueFocus] viewport apply error:', e);
+                    }
+                }
                 safeHighlightAndZoom([loc.objectId]);
                 console.log('[applySmartIssueFocus] 3D Element objectId(' + loc.objectId + ') 기반 줌인 & 하이라이트 성공!');
                 return;
@@ -4792,6 +4967,15 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             if (v) {
                 clearInterval(checkInterval);
                 console.log('[focusIssueOnViewer] 뷰어 엔진 생성 확인 (' + attempts + '회) — GEOMETRY_LOADED 대기');
+                if (v.model) {
+                    setTimeout(function() {
+                        applySmartIssueFocus(v);
+                        if (typeof window.hideIssueViewerLoading === 'function') {
+                            setTimeout(function() { window.hideIssueViewerLoading(); }, 450);
+                        }
+                    }, 300);
+                    return;
+                }
                 var fired = false;
                 var onLoaded = function() {
                     if (fired) return;
@@ -4800,12 +4984,16 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     console.log('[focusIssueOnViewer] GEOMETRY_LOADED → applySmartIssueFocus 실행');
                     setTimeout(function() {
                         applySmartIssueFocus(v);
+                        if (typeof window.hideIssueViewerLoading === 'function') {
+                            setTimeout(function() { window.hideIssueViewerLoading(); }, 450);
+                        }
                     }, 300);
                 };
                 v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onLoaded);
             } else if (attempts >= maxAttempts) {
                 clearInterval(checkInterval);
                 console.error('[focusIssueOnViewer] loadIntoViewer 호출 후 5초 내 뷰어 생성 실패.');
+                if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
             }
         }, 100);
     }
@@ -4813,14 +5001,23 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
     function extractIssueVersionsUrns(issue) {
         if (!issue) return { createdUrn: '', prevUrn: '', createdVer: 5, prevVer: 4 };
         var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue;
-        var docs = raw.linkedDocuments || issue.linkedDocuments || [];
+        var docs = []
+            .concat(raw.linkedDocuments || issue.linkedDocuments || [])
+            .concat(raw.placements || issue.placements || []);
 
         if (Array.isArray(docs) && docs.length > 0) {
             for (var i = 0; i < docs.length; i++) {
                 var doc = docs[i];
                 if (!doc) continue;
-                var urnStr = doc.urn || (doc.details && doc.details.urn) || '';
-                var verNum = parseInt(doc.createdAtVersion || (doc.details && doc.details.createdAtVersion), 10);
+                var details = doc.details || doc.viewable || doc.viewer || doc;
+                var urnStr = doc.versionUrn || doc.tipVersionUrn || doc.viewerUrn || doc.viewableUrn || doc.urn ||
+                    (details && (details.versionUrn || details.tipVersionUrn || details.viewerUrn || details.viewableUrn || details.versionId || details.urn)) || '';
+                var verNum = parseInt(
+                    doc.createdAtVersion || doc.version || doc.versionNumber ||
+                    (details && (details.createdAtVersion || details.version || details.versionNumber)) ||
+                    (String(urnStr).match(/[?&]version=(\d+)/i) || [])[1],
+                    10
+                );
                 if (isNaN(verNum) || verNum < 1) verNum = 5;
 
                 var prevVerNum = verNum > 1 ? (verNum - 1) : 1;
@@ -4852,10 +5049,368 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 }
             }
         }
+        var fallbackUrn = issue.placementUrn || issue.linkedDocumentUrn || issue.documentUrn || issue.urn || issue.modelUrn || issue.fileUrn || issue.targetUrn ||
+            findDeepValue(raw, ['tipVersionUrn', 'versionUrn', 'viewerUrn', 'viewableUrn', 'versionId', 'documentUrn']);
+        var fallbackVer = parseInt(String(issue.placementVersion || issue.version || fallbackUrn || '').match(/\d+/), 10);
+        if (fallbackUrn) {
+            var normalizedFallbackUrn = String(fallbackUrn);
+            if (normalizedFallbackUrn.indexOf('urn:') !== 0 && normalizedFallbackUrn.indexOf('fs.file') === -1 && /^[A-Za-z0-9+/=_-]+$/.test(normalizedFallbackUrn)) {
+                try {
+                    var decodedFallbackUrn = atob(normalizedFallbackUrn.replace(/-/g, '+').replace(/_/g, '/'));
+                    if (decodedFallbackUrn && decodedFallbackUrn.indexOf('urn:') === 0) normalizedFallbackUrn = decodedFallbackUrn;
+                } catch(e) {}
+            }
+            if (isNaN(fallbackVer) || fallbackVer < 1) fallbackVer = parseInt((normalizedFallbackUrn.match(/[?&]version=(\d+)/i) || [])[1], 10) || 5;
+            var fallbackPrev = fallbackVer > 1 ? fallbackVer - 1 : 1;
+            if (normalizedFallbackUrn.indexOf('dm.lineage:') > -1) {
+                var fallbackMatch = normalizedFallbackUrn.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+                if (fallbackMatch && fallbackMatch[1]) {
+                    return {
+                        createdUrn: encodeRawUrn('urn:adsk.wipprod:fs.file:vf.' + fallbackMatch[1] + '?version=' + fallbackVer),
+                        prevUrn: encodeRawUrn('urn:adsk.wipprod:fs.file:vf.' + fallbackMatch[1] + '?version=' + fallbackPrev),
+                        createdVer: fallbackVer,
+                        prevVer: fallbackPrev
+                    };
+                }
+            }
+            if (normalizedFallbackUrn.indexOf('fs.file') > -1 || normalizedFallbackUrn.indexOf('urn:adsk.') === 0) {
+                var fallbackRaw = normalizedFallbackUrn.indexOf('urn:') === 0 ? normalizedFallbackUrn : 'urn:' + normalizedFallbackUrn;
+                var fallbackBase = fallbackRaw.replace(/[?&]version=\d+/i, '');
+                return {
+                    createdUrn: encodeRawUrn(fallbackBase + '?version=' + fallbackVer),
+                    prevUrn: encodeRawUrn(fallbackBase + '?version=' + fallbackPrev),
+                    createdVer: fallbackVer,
+                    prevVer: fallbackPrev
+                };
+            }
+        }
         return { createdUrn: '', prevUrn: '', createdVer: 5, prevVer: 4 };
     }
 
     // 🚨 [프리미엄 커스텀 모달] 이슈 작성 당시 모델 버전 ↔ 직전 작성 버전 선택 팝업
+    function getIssueTextValue(issue, key) {
+        if (!issue) return '';
+        if (typeof field === 'function') {
+            var fieldValue = field(issue, key);
+            if (fieldValue && fieldValue !== '-') return String(fieldValue);
+        }
+        if (key === 'desc') return String(issue.description || issue.desc || '');
+        if (key === 'result') return String(issue.result || issue.outcome || issue.resolutionResult || '');
+        return String(issue[key] || '');
+    }
+
+    function getViewerIssueTypeMode(issue) {
+        if (!issue) return 'other';
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue;
+        var values = [
+            issue.typePath, issue.type_path, issue.typeFullName, issue.type, issue.category, issue.issueType,
+            raw.typePath, raw.type_path, raw.typeFullName, raw.type, raw.category, raw.issueType
+        ];
+        var text = values.map(function(value) {
+            if (!value) return '';
+            if (typeof value === 'object') return value.name || value.text || value.title || value.typePath || '';
+            return String(value);
+        }).join(' ').toLowerCase();
+        if (text.indexOf('\uc5c5\ub370\uc774\ud2b8') > -1 || text.indexOf('update') > -1) return 'update';
+        if (text.indexOf('\uac04\uc12d') > -1 || text.indexOf('clash') > -1) return 'clashDesign';
+        if (text.indexOf('\uc124\uacc4') > -1 || text.indexOf('design') > -1) return 'clashDesign';
+        return 'other';
+    }
+
+    function isViewerIssueClosed(issue) {
+        var statusText = getIssueTextValue(issue, 'status').toLowerCase();
+        return statusText.indexOf('\uc885\ub8cc') > -1 ||
+            statusText.indexOf('\uc644\ub8cc') > -1 ||
+            statusText.indexOf('closed') > -1 ||
+            statusText.indexOf('done') > -1 ||
+            statusText.indexOf('complete') > -1;
+    }
+
+    function getPlacementModelName(issue) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue);
+        return getIssueTextValue(issue, 'placement') || issue.placementName || issue.file || issue.fileName ||
+            findDeepValue(raw, ['placement', 'placementName', 'fileName', 'snapshotFileName', 'uploadFileName', 'name', 'displayName']) || '';
+    }
+
+    function replacePlacementDiscipline(placementName, disciplineCode) {
+        var name = String(placementName || '').trim();
+        var code = String(disciplineCode || '').trim().toUpperCase();
+        if (!name || !code) return name;
+        var extMatch = name.match(/(\.[A-Za-z0-9]+)$/);
+        var ext = extMatch ? extMatch[1] : '';
+        var base = ext ? name.slice(0, -ext.length) : name;
+        var nextBase = base.replace(/_[A-Za-z]{1,4}$/, '_' + code);
+        if (nextBase === base) nextBase = base + '_' + code;
+        return nextBase + ext;
+    }
+
+    function normalizeIssueModelName(value) {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/^urn:/, '')
+            .replace(/\s*\(?v\d+\)?\s*$/i, '')
+            .replace(/\s*\(v\d+\)\s*/gi, '')
+            .replace(/\.(rvt|nwc|dwg|ifc)\b/gi, '')
+            .replace(/[\s_\-()[\]{}<>.,]/g, '')
+            .trim();
+    }
+
+    function getIssueModelDisciplineSuffix(value) {
+        var name = String(value || '').trim();
+        if (!name) return '';
+        name = name.replace(/\.(rvt|nwc|dwg|ifc)\b/gi, '');
+        var match = name.match(/_([A-Za-z]{1,4})$/);
+        return match && match[1] ? match[1].toUpperCase() : '';
+    }
+
+    function collectIssueModelTreeFiles(node, out) {
+        out = out || [];
+        if (!node || typeof node !== 'object') return out;
+        if (Array.isArray(node)) {
+            node.forEach(function(child) { collectIssueModelTreeFiles(child, out); });
+            return out;
+        }
+        if (Array.isArray(node.files)) {
+            node.files.forEach(function(file) {
+                if (file && (file.urn || file.versionId) && file.name) out.push(file);
+            });
+        }
+        if (Array.isArray(node.children)) {
+            node.children.forEach(function(child) { collectIssueModelTreeFiles(child, out); });
+        }
+        if ((node.urn || node.versionId) && node.name) out.push(node);
+        return out;
+    }
+
+    async function resolveIssueModelUrnFromTree(fileName) {
+        var target = normalizeIssueModelName(fileName);
+        var targetSuffix = getIssueModelDisciplineSuffix(fileName);
+        if (!target) return '';
+        try {
+            var resp = await fetch('/api/models/tree', { credentials: 'same-origin' });
+            if (!resp.ok) return '';
+            var tree = await resp.json();
+            var files = collectIssueModelTreeFiles(tree, []);
+            var best = null;
+            for (var i = 0; i < files.length; i++) {
+                var file = files[i];
+                var fileNameText = file.name || file.displayName || file.title;
+                var key = normalizeIssueModelName(fileNameText);
+                var fileSuffix = getIssueModelDisciplineSuffix(fileNameText);
+                if (!key) continue;
+                if (key === target) {
+                    best = file;
+                    break;
+                }
+                if (targetSuffix && fileSuffix && targetSuffix !== fileSuffix) {
+                    continue;
+                }
+                if (targetSuffix && !fileSuffix) {
+                    continue;
+                }
+                if (!best && (key.indexOf(target) > -1 || target.indexOf(key) > -1)) {
+                    best = file;
+                }
+            }
+            if (best) {
+                var urn = best.urn || best.versionId || '';
+                if (typeof window.updateUrnCache === 'function') window.updateUrnCache(best.name || fileName, urn);
+                console.log('[IssueVersionResolver] model tree matched:', fileName, '=>', best.name, urn);
+                return urn;
+            }
+            console.warn('[IssueVersionResolver] model tree no match:', fileName, 'target:', target, 'files:', files.length);
+        } catch (err) {
+            console.warn('[IssueVersionResolver] model tree search failed:', err);
+        }
+        return '';
+    }
+
+    function parseVersionModelSpecs(text, placementName) {
+        var source = String(text || '').trim();
+        var specs = [];
+        if (!source) return specs;
+        var used = {};
+        var multiRe = /(?:^|[\s,;\/])([A-Za-z]{1,4})\s*[-:]\s*[Vv]?\s*\.?\s*(\d+)/g;
+        var match;
+        while ((match = multiRe.exec(source)) !== null) {
+            var code = String(match[1] || '').toUpperCase();
+            var version = parseInt(match[2], 10);
+            if (!code || isNaN(version) || version < 1) continue;
+            var key = code + ':' + version;
+            if (used[key]) continue;
+            used[key] = true;
+            specs.push({
+                code: code,
+                version: version,
+                fileName: replacePlacementDiscipline(placementName, code)
+            });
+        }
+        if (!specs.length) {
+            var single = source.match(/(?:^|[^A-Za-z0-9])V\s*\.?\s*(\d+)\s*\.?/i) || source.match(/^V?\s*\.?\s*(\d+)\s*\.?$/i);
+            if (single && single[1]) {
+                var singleVersion = parseInt(single[1], 10);
+                if (!isNaN(singleVersion) && singleVersion > 0) {
+                    specs.push({ code: '', version: singleVersion, fileName: placementName });
+                }
+            }
+        }
+        return specs;
+    }
+
+    function toRawVersionUrn(urnValue) {
+        var str = String(urnValue || '').trim();
+        if (!str) return '';
+        if (str.indexOf('urn:') === 0) return str;
+        if (str.indexOf('adsk.') === 0) return 'urn:' + str;
+        if (/^[A-Za-z0-9+/=_-]+$/.test(str) && str.length > 20) {
+            try {
+                var padded = str.replace(/-/g, '+').replace(/_/g, '/');
+                while (padded.length % 4) padded += '=';
+                var decoded = atob(padded);
+                if (decoded && decoded.indexOf('urn:') === 0) return decoded;
+            } catch(e) {}
+        }
+        return '';
+    }
+
+    async function resolveIssueVersionModelSpecs(issue, textValue) {
+        var placementName = getPlacementModelName(issue);
+        var specs = parseVersionModelSpecs(textValue, placementName);
+        var resolved = [];
+        for (var i = 0; i < specs.length; i++) {
+            var spec = specs[i];
+            var baseUrn = '';
+            if (typeof window.resolveModelUrn === 'function') {
+                baseUrn = await window.resolveModelUrn(spec.fileName);
+            }
+            if (!baseUrn) baseUrn = await resolveIssueModelUrnFromTree(spec.fileName);
+            var raw = toRawVersionUrn(baseUrn);
+            if (!raw && spec.fileName === placementName) {
+                var info = extractIssueVersionsUrns(issue);
+                raw = toRawVersionUrn(info.createdUrn || targetUrn);
+            }
+            if (!raw) continue;
+            var versionRaw = raw.replace(/[?&]version=\d+/i, '') + '?version=' + spec.version;
+            resolved.push({
+                code: spec.code,
+                fileName: spec.fileName,
+                version: spec.version,
+                urn: encodeRawUrn(versionRaw),
+                label: (spec.code ? spec.code + ' ' : '') + 'V' + spec.version
+            });
+        }
+        return resolved;
+    }
+
+    function applyIssueViewerModelStyle(viewer, urn, model) {
+        if (!viewer) return;
+        try {
+            if (typeof viewer.setEnvMapBackground === 'function') viewer.setEnvMapBackground(false);
+            if (typeof viewer.setBackgroundColor === 'function') {
+                viewer.setBackgroundColor(255, 255, 255, 245, 245, 245);
+            }
+            if (typeof viewer.setLightPreset === 'function') viewer.setLightPreset(1);
+            if (typeof viewer.setGroundShadow === 'function') viewer.setGroundShadow(true);
+            if (typeof viewer.setGroundReflection === 'function') viewer.setGroundReflection(false);
+            if (viewer.prefs) {
+                viewer.prefs.set('edgeRendering', true);
+                viewer.prefs.set('envMapBackground', false);
+                viewer.prefs.set('groundReflection', false);
+                viewer.prefs.set('ambientShadows', true);
+                viewer.prefs.set('ghosting', true);
+            }
+            if (typeof viewer.setQualityLevel === 'function') viewer.setQualityLevel(true, true);
+            if (window.loadedModels && urn && model) window.loadedModels[urn] = model;
+            if (window.applyModelRotation && window.rotationState && urn) {
+                var normalizeForVisibility = function(value) {
+                    return String(value || '').replace(/^urn:/, '').replace(/=/g, '').trim();
+                };
+                var currentUrn = normalizeForVisibility(urn);
+                var rotateOn = Object.keys(window.rotationState).some(function(key) {
+                    return normalizeForVisibility(key) === currentUrn && window.rotationState[key];
+                });
+                window.applyModelRotation(viewer, urn, rotateOn);
+            }
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+                viewer.impl.invalidate(true, true, true);
+            }
+        } catch (err) {
+            console.warn('[IssueModelSet] style sync skipped:', err);
+        }
+    }
+
+    async function loadIssueModelSetIntoMainViewer(items, label, afterLoad) {
+        items = (Array.isArray(items) ? items : []).filter(function(item) { return item && item.urn; });
+        if (!items.length) {
+            if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+            alert('\uc124\uba85/\uacb0\uacfc\uc5d0\uc11c \uc5f4 \uc218 \uc788\ub294 \ubaa8\ub378 \ubc84\uc804\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.');
+            return;
+        }
+        if (typeof window.showIssueViewerLoading === 'function') {
+            window.showIssueViewerLoading(label || '3D 모델 로딩 중', items.map(function(item) {
+                return item.label || item.fileName || 'BIM Model';
+            }).join(', ') + ' 로딩 중...');
+        }
+        if (typeof window.switchTab === 'function') window.switchTab('project');
+        setTimeout(async function() {
+            try {
+            var loadRemaining = async function(viewer, startIndex) {
+                if (!viewer || !viewer.impl) {
+                    console.warn('[IssueModelSet] viewer not ready for aggregated load');
+                    return;
+                }
+                var start = startIndex == null ? 1 : startIndex;
+                console.log('[IssueModelSet] loading model set:', items.map(function(item) {
+                    return (item.label || item.fileName || '') + '|' + item.urn;
+                }));
+                for (var idx = start; idx < items.length; idx++) {
+                    var item = items[idx];
+                    var rawUrn = item.urn.indexOf('urn:') === 0 ? item.urn : 'urn:' + item.urn;
+                    await new Promise(function(resolve) {
+                        Autodesk.Viewing.Document.load(rawUrn, function(doc) {
+                            var geom = doc.getRoot().getDefaultGeometry();
+                            if (!geom) return resolve();
+                            viewer.loadDocumentNode(doc, geom, {
+                                keepCurrentModels: idx > 0,
+                                preserveView: true,
+                                globalOffset: { x: 0, y: 0, z: 0 }
+                            }).then(function(model) {
+                                applyIssueViewerModelStyle(viewer, item.urn, model);
+                                console.log('[IssueModelSet] aggregated model loaded:', item.label || item.fileName, model);
+                                resolve(model);
+                            }).catch(function(err) {
+                                console.error('[IssueModelSet] loadDocumentNode failed:', err, item);
+                                resolve();
+                            });
+                        }, function(code) {
+                            console.error('[IssueModelSet] aggregated model load failed:', code, item);
+                            resolve();
+                        });
+                    });
+                }
+                if (typeof afterLoad === 'function') {
+                    setTimeout(function() { afterLoad(); }, items.length > 1 ? 900 : 300);
+                }
+            };
+            if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                await window.explorer.loadIntoViewer(items[0].urn, label || items[0].label || 'BIM Model');
+                var viewer = window.NOP_VIEWER || window.myGlobalViewer || window.viewer ||
+                    (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
+                applyIssueViewerModelStyle(viewer, items[0].urn, viewer && viewer.model);
+                await loadRemaining(viewer, 1);
+            } else {
+                var activeViewer = window.NOP_VIEWER || window.myGlobalViewer || window.viewer ||
+                    (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
+                await loadRemaining(activeViewer, 0);
+            }
+            } finally {
+                if (typeof window.hideIssueViewerLoading === 'function') {
+                    setTimeout(function() { window.hideIssueViewerLoading(); }, 450);
+                }
+            }
+        }, 300);
+    }
+
     function showVersionMismatchModal(options) {
         options = options || {};
         if (window._isMismatchModalOpen) {
@@ -4863,6 +5418,37 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             return;
         }
         window._isMismatchModalOpen = true;
+        var isUpdateIssue = (function(issue) {
+            if (!issue) return false;
+            var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue;
+            var typeText = [
+                issue.typePath, issue.type, issue.category, issue.issueType,
+                issue.title, issue.description,
+                raw.typePath, raw.type, raw.category, raw.issueType
+            ].map(function(value) {
+                if (!value) return '';
+                if (typeof value === 'object') return value.name || value.text || value.title || '';
+                return String(value);
+            }).join(' ').toLowerCase();
+            return typeText.indexOf('업데이트') > -1 || typeText.indexOf('update') > -1;
+        })(issueObj);
+        var issueMode = getViewerIssueTypeMode(issueObj);
+        isUpdateIssue = issueMode === 'update';
+        var isClashDesignIssue = issueMode === 'clashDesign';
+        var isClosedClashDesign = isClashDesignIssue && isViewerIssueClosed(issueObj);
+        var showSecondaryButtons = isUpdateIssue || isClosedClashDesign;
+        var keepButtonLabel = isUpdateIssue ? '업데이트 모델' : (isClosedClashDesign ? '기존 모델' : '현재 모델');
+        var pastButtonLabel = isUpdateIssue ? '이전 모델' : '수정 모델';
+        var splitButtonLabel = isUpdateIssue ? '이전 모델 VS 업데이트 모델 동시 비교' : '기존 모델 VS 수정 모델';
+        var placementNameForLabels = getPlacementModelName(issueObj);
+        var existingSpecLabels = isClashDesignIssue ? parseVersionModelSpecs(getIssueTextValue(issueObj, 'desc'), placementNameForLabels).map(function(spec) {
+            return (spec.code ? spec.code + '-V' : 'V') + spec.version;
+        }) : [];
+        var modifiedSpecLabels = isClosedClashDesign ? parseVersionModelSpecs(getIssueTextValue(issueObj, 'result'), placementNameForLabels).map(function(spec) {
+            return (spec.code ? spec.code + '-V' : 'V') + spec.version;
+        }) : [];
+        var keepVersionText = isClashDesignIssue && existingSpecLabels.length ? existingSpecLabels.join(', ') : (options.createdVersionText || 'V-');
+        var pastVersionText = isClosedClashDesign && modifiedSpecLabels.length ? modifiedSpecLabels.join(', ') : (options.prevVersionText || 'V-');
 
         var existing = document.getElementById('bim-version-mismatch-modal');
         if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
@@ -4872,10 +5458,11 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
         modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);z-index:9999999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s ease;';
 
         var card = document.createElement('div');
-        card.style.cssText = 'width:440px;max-width:90vw;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:16px;padding:28px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.6);color:#f8fafc;font-family:Inter,-apple-system,sans-serif;transform:scale(0.95);transition:transform 0.2s ease;';
+        card.style.cssText = 'width:440px;max-width:90vw;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:16px;padding:28px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.6);color:#f8fafc;font-family:Inter,-apple-system,sans-serif;transform:scale(0.95);transition:transform 0.2s ease;position:relative;';
 
         card.innerHTML =
-            '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+            '<button id="btn-close-version-mismatch-modal" type="button" title="닫기" aria-label="닫기" style="position:absolute;top:14px;right:14px;width:34px;height:34px;border-radius:10px;border:1px solid rgba(148,163,184,0.28);background:rgba(15,23,42,0.72);color:#cbd5e1;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;transition:all 0.2s;"><i class="fas fa-times"></i></button>'
+          + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
           + '<div style="width:42px;height:42px;border-radius:12px;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);display:flex;align-items:center;justify-content:center;color:#38bdf8;font-size:20px;">'
           + '<i class="fas fa-layer-group"></i>'
           + '</div>'
@@ -4899,16 +5486,46 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
           + '<button id="btn-keep-current-version" style="width:100%;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:700;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 12px rgba(2,132,199,0.3);transition:all 0.2s;">'
           + '<i class="fas fa-bolt"></i><span>⚡ 작성 당시 버전 모델로 이동 (' + (options.createdVersionText || '작성 당시') + ')</span>'
           + '</button>'
-          + '<button id="btn-load-past-version" style="width:100%;padding:11px;border-radius:10px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:#fef3c7;font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;">'
+          + (showSecondaryButtons ? '<button id="btn-load-past-version" style="width:100%;padding:11px;border-radius:10px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:#fef3c7;font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;">'
           + '<i class="fas fa-history"></i><span>🚀 직전 작성 버전 불러오기 (' + (options.prevVersionText || '직전 작성') + ')</span>'
-          + '</button>'
-          + '<button id="btn-split-compare-versions" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(168,85,247,0.4);background:linear-gradient(135deg,rgba(168,85,247,0.25),rgba(147,51,234,0.35));color:#f3e8ff;font-weight:700;font-size:13.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 14px rgba(168,85,247,0.25);transition:all 0.2s;">'
+          + '</button>' : '')
+          + (showSecondaryButtons ? '<button id="btn-split-compare-versions" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(168,85,247,0.4);background:linear-gradient(135deg,rgba(168,85,247,0.25),rgba(147,51,234,0.35));color:#f3e8ff;font-weight:700;font-size:13.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 14px rgba(168,85,247,0.25);transition:all 0.2s;">'
           + '<i class="fas fa-columns" style="color:#c084fc;"></i><span>🔀 작성 당시 vs 직전 버전 분할 화면 동시 비교</span>'
-          + '</button>'
+          + '</button>' : '')
           + '</div>';
 
         modal.appendChild(card);
         document.body.appendChild(modal);
+
+        if (isClashDesignIssue) {
+            var versionValueEls = card.querySelectorAll('div[style*="justify-content:space-between"] span:last-child');
+            if (versionValueEls[0]) versionValueEls[0].textContent = keepVersionText;
+            if (versionValueEls[1]) versionValueEls[1].textContent = pastVersionText;
+            if (!isClosedClashDesign) {
+                var versionRows = card.querySelectorAll('div[style*="justify-content:space-between"]');
+                if (versionRows[1]) versionRows[1].style.display = 'none';
+            }
+        }
+
+        var keepLabelEl = document.querySelector('#btn-keep-current-version span');
+        if (keepLabelEl) keepLabelEl.textContent = keepButtonLabel + ' (' + keepVersionText + ')';
+        var pastLabelEl = document.querySelector('#btn-load-past-version span');
+        if (pastLabelEl) pastLabelEl.textContent = pastButtonLabel + ' (' + pastVersionText + ')';
+        var pastButtonEl = document.getElementById('btn-load-past-version');
+        if (isClosedClashDesign && pastButtonEl) {
+            pastButtonEl.style.border = '1px solid rgba(20,184,166,0.58)';
+            pastButtonEl.style.background = 'linear-gradient(135deg,rgba(16,185,129,0.20),rgba(13,148,136,0.36))';
+            pastButtonEl.style.color = '#ccfbf1';
+            pastButtonEl.style.fontWeight = '800';
+            pastButtonEl.style.boxShadow = '0 4px 14px rgba(20,184,166,0.24)';
+            var pastIconEl = pastButtonEl.querySelector('i');
+            if (pastIconEl) {
+                pastIconEl.className = 'fas fa-edit';
+                pastIconEl.style.color = '#5eead4';
+            }
+        }
+        var splitLabelEl = document.querySelector('#btn-split-compare-versions span');
+        if (splitLabelEl) splitLabelEl.textContent = splitButtonLabel;
 
         requestAnimationFrame(function() {
             modal.style.opacity = '1';
@@ -4924,27 +5541,69 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             }, 200);
         };
 
-        document.getElementById('btn-load-past-version').onclick = function(e) {
+        var closeBtn = document.getElementById('btn-close-version-mismatch-modal');
+        if (closeBtn) closeBtn.onclick = function(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+            closeModal();
+        };
+        var loadPastBtn = document.getElementById('btn-load-past-version');
+        if (loadPastBtn) loadPastBtn.onclick = async function(e) {
             if (e) { e.preventDefault(); e.stopPropagation(); }
             closeModal();
+            if (isClashDesignIssue) {
+                var modifiedItems = await resolveIssueVersionModelSpecs(issueObj, getIssueTextValue(issueObj, 'result'));
+                if (!modifiedItems.length) {
+                    alert('결과 칸에서 수정 모델 버전 정보를 찾지 못했습니다.');
+                    return;
+                }
+                await loadIssueModelSetIntoMainViewer(modifiedItems, '수정 모델', waitForViewerCreationAndZoom);
+                return;
+            }
             if (typeof options.onConfirmLoadPast === 'function') {
                 var cb = options.onConfirmLoadPast;
                 options.onConfirmLoadPast = null;
                 cb();
             }
         };
-        document.getElementById('btn-keep-current-version').onclick = function(e) {
+        document.getElementById('btn-keep-current-version').onclick = async function(e) {
             if (e) { e.preventDefault(); e.stopPropagation(); }
             closeModal();
+            if (isClashDesignIssue) {
+                var existingItems = await resolveIssueVersionModelSpecs(issueObj, getIssueTextValue(issueObj, 'desc'));
+                if (!existingItems.length && options.createdUrn) {
+                    existingItems = [{ urn: options.createdUrn, version: options.createdVer, label: '기존 모델' }];
+                }
+                await loadIssueModelSetIntoMainViewer(existingItems, '기존 모델', waitForViewerCreationAndZoom);
+                return;
+            }
             if (typeof options.onCancelKeepCurrent === 'function') {
                 var cb = options.onCancelKeepCurrent;
                 options.onCancelKeepCurrent = null;
                 cb();
             }
         };
-        document.getElementById('btn-split-compare-versions').onclick = function(e) {
+        var splitCompareBtn = document.getElementById('btn-split-compare-versions');
+        if (splitCompareBtn) splitCompareBtn.onclick = async function(e) {
             if (e) { e.preventDefault(); e.stopPropagation(); }
             closeModal();
+            if (isClosedClashDesign) {
+                var existingItems = await resolveIssueVersionModelSpecs(issueObj, getIssueTextValue(issueObj, 'desc'));
+                var modifiedItems = await resolveIssueVersionModelSpecs(issueObj, getIssueTextValue(issueObj, 'result'));
+                if (!existingItems.length && options.createdUrn) {
+                    existingItems = [{ urn: options.createdUrn, version: options.createdVer, label: '기존 모델' }];
+                }
+                if (!modifiedItems.length) {
+                    alert('결과 칸에서 수정 모델 버전 정보를 찾지 못했습니다.');
+                    return;
+                }
+                window.openDualVersionViewersModal(existingItems, modifiedItems, options.prevVer || '', options.createdVer || '', issueObj, {
+                    leftTitle: '기존 모델',
+                    rightTitle: '수정 모델',
+                    subtitle: '기존 모델 VS 수정 모델'
+                });
+                return;
+            }
             if (typeof options.onConfirmSplitCompare === 'function') {
                 var cb = options.onConfirmSplitCompare;
                 options.onConfirmSplitCompare = null;
@@ -4972,15 +5631,27 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
         if (needLoad) {
             var verInfo = extractIssueVersionsUrns(issueObj);
+            if (!verInfo.createdUrn && targetUrn) verInfo.createdUrn = targetUrn;
             console.log('[focusIssueOnViewer] 모델 버전 불일치 감지 → 커스텀 모달 팝업 출현:', verInfo);
             showVersionMismatchModal({
                 createdVersionText: 'v' + verInfo.createdVer + ' (작성 당시)',
                 prevVersionText: 'v' + verInfo.prevVer + ' (직전 작성)',
+                createdUrn: verInfo.createdUrn,
+                prevUrn: verInfo.prevUrn,
+                createdVer: verInfo.createdVer,
+                prevVer: verInfo.prevVer,
                 onConfirmLoadPast: function() {
                     console.log('[focusIssueOnViewer] 직전 작성 버전 모델 교체 로드 승인 → v' + verInfo.prevVer);
+                    if (!verInfo.prevUrn) {
+                        alert('이 이슈에서 직전 작성 버전 모델 URN을 찾지 못했습니다.');
+                        return;
+                    }
                     if (typeof window.switchTab === 'function') window.switchTab('project');
                     setTimeout(function() {
                         if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                            if (typeof window.showIssueViewerLoading === 'function') {
+                                window.showIssueViewerLoading('이전 모델 로딩 중', '선택한 이슈의 이전 버전 모델을 열고 있습니다.');
+                            }
                             window.explorer.loadIntoViewer(verInfo.prevUrn, 'BIM Model (직전 작성 버전 v' + verInfo.prevVer + ')');
                             waitForViewerCreationAndZoom();
                         }
@@ -4988,9 +5659,16 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 },
                 onCancelKeepCurrent: function() {
                     console.log('[focusIssueOnViewer] 작성 당시 버전 모델 교체 로드 승인 → v' + verInfo.createdVer);
+                    if (!verInfo.createdUrn) {
+                        alert('이 이슈에서 작성 당시 버전 모델 URN을 찾지 못했습니다.');
+                        return;
+                    }
                     if (typeof window.switchTab === 'function') window.switchTab('project');
                     setTimeout(function() {
                         if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                            if (typeof window.showIssueViewerLoading === 'function') {
+                                window.showIssueViewerLoading('업데이트 모델 로딩 중', '선택한 이슈의 작성 당시 모델을 열고 있습니다.');
+                            }
                             window.explorer.loadIntoViewer(verInfo.createdUrn, 'BIM Model (작성 당시 버전 v' + verInfo.createdVer + ')');
                             waitForViewerCreationAndZoom();
                         }
@@ -4998,6 +5676,10 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 },
                 onConfirmSplitCompare: function() {
                     console.log('[focusIssueOnViewer] 🔀 작성 당시(v' + verInfo.createdVer + ') vs 직전(v' + verInfo.prevVer + ') 분할 화면 동시 비교 승인');
+                    if (!verInfo.prevUrn || !verInfo.createdUrn) {
+                        alert('이 이슈에서 비교할 작성 당시/직전 버전 모델 URN을 찾지 못했습니다.');
+                        return;
+                    }
                     if (typeof window.switchTab === 'function') window.switchTab('compare');
                     setTimeout(function() {
                         var runLoad = function(fn) {
@@ -5016,6 +5698,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             console.log('[focusIssueOnViewer] 동일 모델 — 즉시 applySmartIssueFocus 실행');
             if (v.model) {
                 applySmartIssueFocus(v);
+                if (typeof window.hideIssueViewerLoading === 'function') {
+                    setTimeout(function() { window.hideIssueViewerLoading(); }, 450);
+                }
             } else {
                 var fired2 = false;
                 var h2 = function() {
@@ -5023,6 +5708,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     try { v.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2); } catch(e) {}
                     setTimeout(function() {
                         applySmartIssueFocus(v);
+                        if (typeof window.hideIssueViewerLoading === 'function') {
+                            setTimeout(function() { window.hideIssueViewerLoading(); }, 450);
+                        }
                     }, 300);
                 };
                 v.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, h2);
@@ -5030,7 +5718,8 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
         }
     }
 
-    window.openDualVersionViewersModal = function(prevUrn, createdUrn, prevVer, createdVer, targetIssueObj) {
+    window.openDualVersionViewersModal = function(prevUrn, createdUrn, prevVer, createdVer, targetIssueObj, displayOptions) {
+        displayOptions = displayOptions || {};
         var existing = document.getElementById('dual-version-viewer-modal');
         if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
@@ -5070,11 +5759,22 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
         document.body.appendChild(modal);
 
-        document.getElementById('btn-close-dual-modal').onclick = function() {
-            if (window.dualViewerA) { try { window.dualViewerA.finish(); } catch(e){} window.dualViewerA = null; }
-            if (window.dualViewerB) { try { window.dualViewerB.finish(); } catch(e){} window.dualViewerB = null; }
-            if (modal.parentNode) modal.parentNode.removeChild(modal);
+        var closeDualModal = function(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+            [window.dualViewerA, window.dualViewerB].forEach(function(vObj) {
+                if (!vObj) return;
+                try { if (typeof vObj.tearDown === 'function') vObj.tearDown(); } catch(e1) {}
+                try { if (typeof vObj.finish === 'function') vObj.finish(); } catch(e2) {}
+                try { if (typeof vObj.uninitialize === 'function') vObj.uninitialize(); } catch(e3) {}
+            });
+            window.dualViewerA = null;
+            window.dualViewerB = null;
+            var currentModal = document.getElementById('dual-version-viewer-modal') || modal;
+            if (currentModal && currentModal.parentNode) currentModal.parentNode.removeChild(currentModal);
+            document.body.classList.remove('modal-open');
         };
+        document.getElementById('btn-close-dual-modal').onclick = closeDualModal;
 
         var getToken = function(cb) {
             fetch('/api/auth/token').then(function(r){ return r.json(); }).then(function(d){ cb(d.access_token, d.expires_in); }).catch(function(){ cb('', 0); });
@@ -5096,11 +5796,43 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             var applyWhiteBg = function(vObj) {
                 if (!vObj) return;
                 try {
-                    if (typeof vObj.setLightPreset === 'function') vObj.setLightPreset(0);
+                    if (typeof vObj.setLightPreset === 'function') vObj.setLightPreset(1);
+                    if (typeof vObj.setEnvMapBackground === 'function') vObj.setEnvMapBackground(false);
                     if (typeof vObj.setBackgroundColor === 'function') {
-                        vObj.setBackgroundColor(255, 255, 255, 255, 255, 255);
+                        vObj.setBackgroundColor(255, 255, 255, 245, 245, 245);
                     }
+                    if (vObj.prefs) {
+                        vObj.prefs.set('edgeRendering', true);
+                        vObj.prefs.set('envMapBackground', false);
+                        vObj.prefs.set('groundReflection', false);
+                        vObj.prefs.set('ambientShadows', true);
+                        vObj.prefs.set('ghosting', true);
+                    }
+                    if (typeof vObj.setQualityLevel === 'function') vObj.setQualityLevel(true, true);
+                    if (typeof vObj.setGroundReflection === 'function') vObj.setGroundReflection(false);
+                    if (typeof vObj.setGroundShadow === 'function') vObj.setGroundShadow(true);
+                    if (vObj.impl && typeof vObj.impl.invalidate === 'function') vObj.impl.invalidate(true, true, true);
                 } catch(e) {}
+            };
+
+            var widenDualIssueZoom = function(vObj, factor) {
+                factor = factor || 1.1;
+                if (!vObj || !vObj.navigation) return;
+                try {
+                    var nav = vObj.navigation;
+                    var pos = nav.getPosition && nav.getPosition();
+                    var target = nav.getTarget && nav.getTarget();
+                    if (!pos || !target || typeof THREE === 'undefined') return;
+                    var nextPos = new THREE.Vector3(
+                        target.x + (pos.x - target.x) * factor,
+                        target.y + (pos.y - target.y) * factor,
+                        target.z + (pos.z - target.z) * factor
+                    );
+                    if (typeof nav.setView === 'function') nav.setView(nextPos, target);
+                    if (vObj.impl && typeof vObj.impl.invalidate === 'function') vObj.impl.invalidate(true, true, true);
+                } catch(e) {
+                    console.warn('[DualViewer] zoom padding adjust skipped:', e);
+                }
             };
 
             // 지오메트리 로드 완료 시 배경 흰색 설정 & 이슈 위치 카메라 정밀 줌인
@@ -5127,7 +5859,8 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                                     try {
                                         var p = loc.position;
                                         if (typeof THREE !== 'undefined' && typeof vObj.setViewFromArray === 'function') {
-                                            vObj.setViewFromArray([p.x + 10, p.y - 10, p.z + 10, p.x, p.y, p.z, 0, 0, 1]);
+                                            vObj.setViewFromArray([p.x + 11, p.y - 11, p.z + 11, p.x, p.y, p.z, 0, 0, 1]);
+                                            setTimeout(function() { widenDualIssueZoom(vObj, 1.1); }, 80);
                                         }
                                     } catch(e) {}
                                 }
@@ -5136,6 +5869,12 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                                         var dbId = parseInt(loc.objectId, 10);
                                         if (typeof vObj.select === 'function') vObj.select([dbId]);
                                         if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
+                                        setTimeout(function() {
+                                            try {
+                                                if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
+                                                setTimeout(function() { widenDualIssueZoom(vObj, 1.1); }, 80);
+                                            } catch(e) {}
+                                        }, 250);
                                     } catch(e) {}
                                 }
                             }
@@ -5150,19 +5889,28 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
             var loadDocInto = function(vObj, urnVal) {
                 if (!urnVal) return;
-                var rawUrn = urnVal.indexOf('urn:') === 0 ? urnVal : 'urn:' + urnVal;
-                if (urnVal.indexOf('urn:') !== 0 && !/^[A-Za-z0-9+/=_-]+$/.test(urnVal)) {
-                    try { rawUrn = 'urn:' + atob(urnVal); } catch(e) {}
-                }
-                Autodesk.Viewing.Document.load(rawUrn, function(doc) {
-                    var defaultGeometry = doc.getRoot().getDefaultGeometry();
-                    if (defaultGeometry) {
-                        vObj.loadDocumentNode(doc, defaultGeometry).then(function() {
-                            applyWhiteBg(vObj);
-                        });
+                var list = Array.isArray(urnVal) ? urnVal : [urnVal];
+                list.forEach(function(entry, index) {
+                    var itemUrn = entry && (entry.urn || entry.id || entry.versionId || entry);
+                    if (!itemUrn) return;
+                    var rawUrn = itemUrn.indexOf('urn:') === 0 ? itemUrn : 'urn:' + itemUrn;
+                    if (itemUrn.indexOf('urn:') !== 0 && !/^[A-Za-z0-9+/=_-]+$/.test(itemUrn)) {
+                        try { rawUrn = 'urn:' + atob(itemUrn); } catch(e) {}
                     }
-                }, function(errCode) {
-                    console.error('[DualViewer] Document.load error:', errCode);
+                    Autodesk.Viewing.Document.load(rawUrn, function(doc) {
+                        var defaultGeometry = doc.getRoot().getDefaultGeometry();
+                        if (defaultGeometry) {
+                            vObj.loadDocumentNode(doc, defaultGeometry, {
+                                keepCurrentModels: index > 0,
+                                preserveView: true,
+                                globalOffset: { x: 0, y: 0, z: 0 }
+                            }).then(function() {
+                                applyWhiteBg(vObj);
+                            });
+                        }
+                    }, function(errCode) {
+                        console.error('[DualViewer] Document.load error:', errCode);
+                    });
                 });
             };
 
@@ -5215,14 +5963,26 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
     // 2. 버전 차이 감지 시 탭 이동 전에 프리미엄 커스텀 모달 팝업 출현!
     if (isVersionMismatch) {
         var verInfoMain = extractIssueVersionsUrns(issueObj);
+        if (!verInfoMain.createdUrn && targetUrn) verInfoMain.createdUrn = targetUrn;
         showVersionMismatchModal({
             createdVersionText: 'v' + verInfoMain.createdVer + ' (작성 당시)',
             prevVersionText: 'v' + verInfoMain.prevVer + ' (직전 작성)',
+            createdUrn: verInfoMain.createdUrn,
+            prevUrn: verInfoMain.prevUrn,
+            createdVer: verInfoMain.createdVer,
+            prevVer: verInfoMain.prevVer,
             onConfirmLoadPast: function() {
                 console.log('[focusIssueOnViewer] 직전 작성 버전 모델 교체 로드 승인 → v' + verInfoMain.prevVer);
+                if (!verInfoMain.prevUrn) {
+                    alert('이 이슈에서 직전 작성 버전 모델 URN을 찾지 못했습니다.');
+                    return;
+                }
                 if (typeof window.switchTab === 'function') window.switchTab('project');
                 setTimeout(function() {
                     if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                        if (typeof window.showIssueViewerLoading === 'function') {
+                            window.showIssueViewerLoading('이전 모델 로딩 중', '선택한 이슈의 이전 버전 모델을 열고 있습니다.');
+                        }
                         window.explorer.loadIntoViewer(verInfoMain.prevUrn, 'BIM Model (직전 작성 버전 v' + verInfoMain.prevVer + ')');
                         waitForViewerCreationAndZoom();
                     }
@@ -5230,9 +5990,16 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             },
             onCancelKeepCurrent: function() {
                 console.log('[focusIssueOnViewer] 작성 당시 버전 모델 교체 로드 승인 → v' + verInfoMain.createdVer);
+                if (!verInfoMain.createdUrn) {
+                    alert('이 이슈에서 작성 당시 버전 모델 URN을 찾지 못했습니다.');
+                    return;
+                }
                 if (typeof window.switchTab === 'function') window.switchTab('project');
                 setTimeout(function() {
                     if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                        if (typeof window.showIssueViewerLoading === 'function') {
+                            window.showIssueViewerLoading('업데이트 모델 로딩 중', '선택한 이슈의 작성 당시 모델을 열고 있습니다.');
+                        }
                         window.explorer.loadIntoViewer(verInfoMain.createdUrn, 'BIM Model (작성 당시 버전 v' + verInfoMain.createdVer + ')');
                         waitForViewerCreationAndZoom();
                     }
@@ -5240,6 +6007,10 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             },
             onConfirmSplitCompare: function() {
                 console.log('[focusIssueOnViewer] 🔀 작성 당시(v' + verInfoMain.createdVer + ') vs 직전(v' + verInfoMain.prevVer + ') Dual 3D Viewer 런칭!');
+                if (!verInfoMain.prevUrn || !verInfoMain.createdUrn) {
+                    alert('이 이슈에서 비교할 작성 당시/직전 버전 모델 URN을 찾지 못했습니다.');
+                    return;
+                }
                 window.openDualVersionViewersModal(verInfoMain.prevUrn, verInfoMain.createdUrn, verInfoMain.prevVer, verInfoMain.createdVer, issueObj);
             }
         });
@@ -5270,10 +6041,14 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     }
                 } catch(e) {}
                 console.log('[focusIssueOnViewer] 뷰어 없음 → loadIntoViewer로 엔진 강제 초기화:', targetUrn, urnName);
+                if (typeof window.showIssueViewerLoading === 'function') {
+                    window.showIssueViewerLoading('3D 모델 로딩 중', '선택한 이슈 위치로 이동할 모델을 열고 있습니다.');
+                }
                 window.explorer.loadIntoViewer(targetUrn, urnName);
                 waitForViewerCreationAndZoom();
             } else if (!targetUrn) {
                 console.warn('[focusIssueOnViewer] targetUrn 없고 뷰어도 없음 — 탭 전환만 완료.');
+                if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
             } else {
                 import('./viewer.js?v=20260804-main-rotate-fix1').then(function(mod) {
                     if (!mod.initViewer || !mod.loadModel) return;
@@ -5282,8 +6057,14 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     mod.initViewer(container, false).then(function(v) {
                         if (!v) return;
                         window.viewer = v;
+                        if (typeof window.showIssueViewerLoading === 'function') {
+                            window.showIssueViewerLoading('3D 모델 로딩 중', '선택한 이슈 위치로 이동할 모델을 열고 있습니다.');
+                        }
                         mod.loadModel(v, targetUrn).then(function() {
                             waitForViewerCreationAndZoom();
+                        }).catch(function(err) {
+                            if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+                            console.error('[focusIssueOnViewer] fallback model load failed:', err);
                         });
                     });
                 });
@@ -5729,22 +6510,13 @@ window.renderIssueTable = function(skipFetch) {
             
             // 🚨 첫 번째 열: 구분 — issueTypeLabel 기반 배지
             var _itLabel = (function(iss) {
-                var t = [
-                    iss.typePath,
-                    iss.type,
-                    iss.category,
-                    iss.title,
-                    iss.description,
-                    iss.desc
-                ].map(function(v) {
-                    if (!v) return '';
-                    if (typeof v === 'object') return v.name || v.text || v.title || '';
-                    return String(v);
-                }).join(' ').toLowerCase();
+                var rawType = iss.typePath || iss.type_path || iss.typeFullName || iss.type || iss.category || iss.issueType || '';
+                if (typeof rawType === 'object' && rawType) rawType = rawType.name || rawType.text || rawType.title || rawType.typePath || '';
+                var t = String(rawType).replace(/^건화\s*>\s*/i, '').toLowerCase();
 
                 if (t.indexOf('업데이트') > -1 || t.indexOf('update') > -1) return '업데이트';
-                if (t.indexOf('간섭') > -1 || t.indexOf('clash') > -1 || t.indexOf('collision') > -1) return '간섭이슈';
                 if (t.indexOf('설계') > -1 || t.indexOf('design') > -1) return '설계이슈';
+                if (t.indexOf('간섭') > -1 || t.indexOf('clash') > -1 || t.indexOf('collision') > -1) return '간섭이슈';
                 if (t.indexOf('품질') > -1 || t.indexOf('quality') > -1) return '품질이슈';
                 if (t.indexOf('안전') > -1 || t.indexOf('safety') > -1) return '안전이슈';
                 if (iss._source === 'cctv' || iss.type === 'CCTV 관제') return '현장관제';
@@ -7017,6 +7789,7 @@ window.bindIssueItemClickEvents = function() {
         else if (key === 'attachments') value = issue.attachments;
         else if (key === 'references') value = issue.references;
         else if (key === 'comments') value = issue.comments;
+        else if (key === 'result') value = issue.result || issue.outcome || issue.resolutionResult;
         else value = issue[key];
         if (key === 'placement') {
             var finalPlacementKey = String(value || '').trim().toLowerCase();
@@ -7141,22 +7914,13 @@ window.bindIssueItemClickEvents = function() {
 
     function issueTypeLabel(issue) {
         if (!issue) return 'FORMA';
-        var typeText = [
-            issue.typePath,
-            issue.type,
-            issue.category,
-            issue.title,
-            issue.description,
-            issue.desc
-        ].map(function(v) {
-            if (!v) return '';
-            if (typeof v === 'object') return v.name || v.text || v.title || '';
-            return String(v);
-        }).join(' ').toLowerCase();
+        var rawType = issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || issue.issueType || '';
+        if (typeof rawType === 'object' && rawType) rawType = rawType.name || rawType.text || rawType.title || rawType.typePath || '';
+        var typeText = String(rawType).replace(/^건화\s*>\s*/i, '').toLowerCase();
 
         if (typeText.indexOf('업데이트') > -1 || typeText.indexOf('update') > -1) return '업데이트';
-        if (typeText.indexOf('간섭') > -1 || typeText.indexOf('clash') > -1 || typeText.indexOf('collision') > -1) return '간섭이슈';
         if (typeText.indexOf('설계') > -1 || typeText.indexOf('design') > -1) return '설계이슈';
+        if (typeText.indexOf('간섭') > -1 || typeText.indexOf('clash') > -1 || typeText.indexOf('collision') > -1) return '간섭이슈';
         if (typeText.indexOf('품질') > -1 || typeText.indexOf('quality') > -1) return '품질이슈';
         if (typeText.indexOf('안전') > -1 || typeText.indexOf('safety') > -1) return '안전이슈';
         if (issue._source === 'cctv' || issue.type === 'CCTV 관제') return '현장관제';
@@ -7218,6 +7982,32 @@ window.bindIssueItemClickEvents = function() {
 
     function renderDetailMeta(label, value) {
         return '<div class="forma-detail-meta-item"><span>' + esc(label) + '</span><strong>' + esc(value || '-') + '</strong></div>';
+    }
+
+    function getFormaIssueResult(issue) {
+        if (!issue) return '';
+        return issue.result || issue.outcome || issue.resolutionResult ||
+            findIssueValueDeep(issue.rawFormaIssue || issue, ['result', 'results', 'outcome', 'resolutionResult']) || '';
+    }
+
+    function shouldShowFormaIssueResult(issue, typeLabel, statusText) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+        var typeKey = [
+            typeLabel,
+            field(issue, 'type'),
+            issue && (issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || issue.issueType),
+            raw && (raw.typePath || raw.type_path || raw.typeFullName || raw.type || raw.category || raw.issueType)
+        ].map(function(value) {
+            if (!value) return '';
+            if (typeof value === 'object') return value.name || value.text || value.title || value.typePath || '';
+            return String(value);
+        }).join(' ').toLowerCase();
+        var statusKey = String(statusText || field(issue, 'status') || '').toLowerCase();
+        var isTargetType = typeKey.indexOf('\uac04\uc12d') > -1 || typeKey.indexOf('clash') > -1 ||
+            typeKey.indexOf('collision') > -1 || typeKey.indexOf('\uc124\uacc4') > -1 || typeKey.indexOf('design') > -1;
+        var isClosed = statusKey.indexOf('\uc885\ub8cc') > -1 || statusKey.indexOf('\uc644\ub8cc') > -1 ||
+            statusKey.indexOf('closed') > -1 || statusKey.indexOf('done') > -1 || statusKey.indexOf('complete') > -1;
+        return isTargetType && isClosed && !!getFormaIssueResult(issue);
     }
 
     function issueSnapshotUrn(issue) {
@@ -7439,6 +8229,13 @@ window.bindIssueItemClickEvents = function() {
         var desc = field(issue, 'desc');
         var typeLabel = issueTypeLabel(issue);
         var statusText = status || '-';
+        var resultValue = getFormaIssueResult(issue);
+        var resultSectionHtml = shouldShowFormaIssueResult(issue, typeLabel, statusText)
+            ? '<section class="forma-detail-section">'
+                + '<div class="forma-detail-section-title">결과</div>'
+                + '<div class="forma-detail-description">' + renderDetailDescription(resultValue) + '</div>'
+              + '</section>'
+            : '';
 
         document.body.insertAdjacentHTML('beforeend',
             '<div id="forma-issue-detail-modal" class="forma-detail-overlay">'
@@ -7471,9 +8268,10 @@ window.bindIssueItemClickEvents = function() {
             + '</div>'
             + '</section>'
             + '<section class="forma-detail-section">'
-            + '<div class="forma-detail-section-title">설명 및 변경사항</div>'
+            + '<div class="forma-detail-section-title">설명</div>'
             + '<div class="forma-detail-description">' + renderDetailDescription(desc) + '</div>'
             + '</section>'
+            + resultSectionHtml
             + '</div>'
             + '<div class="forma-detail-actions">'
             + '<button id="forma-detail-viewer-btn" type="button" class="forma-detail-action primary"><i class="fas fa-cube"></i><span>3D 뷰어에서 위치보기</span></button>'
@@ -7490,14 +8288,16 @@ window.bindIssueItemClickEvents = function() {
             var oldText = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>모델 찾는 중...</span>';
             var dbId = issue.dbId || issue.displayId || issue.id || '';
+            closeFormaIssueDetail();
+            if (typeof window.showIssueViewerLoading === 'function') {
+                window.showIssueViewerLoading('3D 모델 준비 중', '이슈와 연결된 모델 버전을 찾고 있습니다.');
+            }
             var urn = await resolveFormaIssueViewerUrn(issue);
             if (!urn) {
-                btn.disabled = false;
-                btn.innerHTML = oldText;
+                if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
                 alert('이 이슈와 연결된 3D 모델을 찾을 수 없습니다. 배치/모델 파일명이 등록되어 있는지 확인해 주세요.');
                 return;
             }
-            closeFormaIssueDetail();
             if (typeof window.focusIssueOnViewer === 'function') {
                 window.focusIssueOnViewer(issue, urn);
                 return;

@@ -178,6 +178,36 @@ function getReviewerRaw(issue) {
     return pick(issue, ['reviewer', 'reviewedBy', 'verifier', 'attributes.reviewer', 'attributes.reviewedBy', 'attributes.verifier'], '');
 }
 
+function getIssueResultValue(issue) {
+    const customResult = getCustomValueSafe(issue, [
+        '결과',
+        '조치결과',
+        '처리결과',
+        '완료결과',
+        '해결결과',
+        'Result',
+        'Results',
+        'Outcome',
+        'Resolution'
+    ]);
+    if (customResult) return customResult;
+
+    return textFromValueSafe(pick(issue, [
+        'result',
+        'results',
+        'outcome',
+        'resolution',
+        'resolutionResult',
+        'resolution.result',
+        'attributes.result',
+        'attributes.results',
+        'attributes.outcome',
+        'attributes.resolution',
+        'attributes.resolutionResult',
+        'attributes.resolution.result'
+    ], ''));
+}
+
 function normalizeType(issue, typeMap) {
     const typeId = pick(issue, ['issueTypeId', 'issueSubtypeId', 'attributes.issueTypeId', 'attributes.issueSubtypeId', 'typeId'], '');
     if (typeId && typeMap.get(typeId)) return typeMap.get(typeId);
@@ -1188,6 +1218,7 @@ function normalizeFormaIssue(issue, typeMap, userMap) {
         typePath,
         category: typePath,
         description: pick(issue, ['description', 'attributes.description', 'details', 'attributes.details'], ''),
+        result: getIssueResultValue(issue),
         location: normalizeLocation(issue),
         assignee: displayUser(assigneeRaw, userMap),
         creator: displayUser(creatorRaw, userMap),
@@ -1236,6 +1267,7 @@ function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new 
         typePath,
         category: typePath,
         description: pick(issue, ['description', 'attributes.description', 'details', 'attributes.details'], ''),
+        result: getIssueResultValue(issue),
         location: normalizeLocationForForma(issue, locationMap),
         assignee: displayUser(assigneeRaw, userMap),
         creator: displayUser(creatorRaw, userMap),

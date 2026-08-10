@@ -628,6 +628,13 @@ function bindStructureIssueListEvents(container, issues) {
                 return;
             }
 
+            if (typeof window.closeIssueViewerPopups === 'function') {
+                window.closeIssueViewerPopups();
+            }
+            if (typeof window.showIssueViewerLoading === 'function') {
+                window.showIssueViewerLoading('3D 모델 준비 중', '월간 이슈 위치로 이동할 모델을 찾고 있습니다.');
+            }
+
             // ── 월간 이슈 모달 및 이슈 상세 모달 닫기 ──
             const modal = container.closest('.bim-timeline-modal') || document.getElementById('bim-timeline-modal');
             if (modal) {
@@ -648,6 +655,7 @@ function bindStructureIssueListEvents(container, issues) {
                 if (typeof window.focusIssueOnViewer === 'function') {
                     window.focusIssueOnViewer(issue, targetUrn);
                 } else if (typeof window.openFormaIssueDetail === 'function') {
+                    if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
                     window.openFormaIssueDetail(issue);
                 }
             })();
