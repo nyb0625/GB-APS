@@ -779,6 +779,8 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
 import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260804-main-rotate-fix1';
 import { initAiPanel } from './ai-panel.js';
 import { explorer } from './explorer.js';
+import './harness-context.js';
+import './harness-action.js';
 
 window.getIssueCaptureImages = function() {
     var input = document.getElementById('multi-capture-data');
@@ -2707,6 +2709,11 @@ window.bindViewerEvents = function(targetViewer) {
         }
         if (typeof initRegularModelIssueButton === 'function') {
             initRegularModelIssueButton();
+        }
+        if (window.ContextHarness && typeof window.ContextHarness.extract === 'function') {
+            setTimeout(function() {
+                window.ContextHarness.extract(targetViewer);
+            }, 300);
         }
         // 🚨 [GEOMETRY_LOADED 마커 복원] 모델 로드 완료 후 localStorage 이슈 마커 일괄 복원
         setTimeout(function() {

@@ -7,27 +7,77 @@
     'use strict';
 
     const ActionHarness = {
+        _resolveViewer: function (viewer) {
+            return viewer || window.viewer || window._viewer || window.NOP_VIEWER || window.viewerLeft || window.myGlobalViewer || null;
+        },
+
+        _resolveCategoryAlias: function (target, categories) {
+            const raw = String(target || '').trim();
+            const lower = raw.toLowerCase();
+            if (!raw || !Array.isArray(categories) || categories.length === 0) return raw;
+
+            const exact = categories.find((cat) => String(cat).trim().toLowerCase() === lower);
+            if (exact) return exact;
+
+            const includes = categories.find((cat) => {
+                const catLower = String(cat).trim().toLowerCase();
+                return catLower.includes(lower) || lower.includes(catLower);
+            });
+            if (includes) return includes;
+
+            const aliasGroups = [
+                { keys: ['벽', '벽체', 'wall', 'walls'], hints: ['벽', '벽체', 'wall'] },
+                { keys: ['바닥', 'floor', 'floors', 'slab', '슬래브'], hints: ['바닥', 'floor', 'slab', '슬래브'] },
+                { keys: ['기둥', 'column', 'columns'], hints: ['기둥', 'column'] },
+                { keys: ['보', 'beam', 'beams'], hints: ['보', 'beam'] },
+                { keys: ['계단', 'stair', 'stairs'], hints: ['계단', 'stair'] },
+                { keys: ['배관', '파이프', 'pipe', 'pipes'], hints: ['배관', '파이프', 'pipe'] },
+                { keys: ['문', 'door', 'doors'], hints: ['문', 'door'] },
+                { keys: ['창', '창문', 'window', 'windows'], hints: ['창', 'window'] }
+            ];
+
+            const group = aliasGroups.find((item) => item.keys.some((key) => lower.includes(key)));
+            if (!group) return raw;
+
+            return categories.find((cat) => {
+                const catLower = String(cat).toLowerCase();
+                return group.hints.some((hint) => catLower.includes(hint.toLowerCase()));
+            }) || raw;
+        },
+
         /**
          * AI가 생성한 JSON 명령을 분석하여 실행합니다.
          * @param {Object} commandObj 
          */
         dispatch: async function (commandObj, viewer) {
-            viewer = viewer || window._viewer || window.NOP_VIEWER;
+            viewer = this._resolveViewer(viewer);
             if (!commandObj) return { success: false, error: '유효하지 않은 실행 요청' };
 
             const { action, target, params } = commandObj;
-            console.log(`[Action-Harness] 명령 수신: ${action}`, { target, params });
+            const actionName = String(action || '').trim().toLowerCase();
+            console.log(`[Action-Harness] 명령 수신: ${actionName}`, { target, params });
 
-            const requiresViewer = ['select', 'highlight', 'hide', 'isolate', 'showall', 'focus', 'flyto', 'count', 'theme'];
-            if (requiresViewer.includes(action.toLowerCase()) && (!viewer || !viewer.model)) {
+            const requiresViewer = ['select', 'highlight', 'select_material', 'hide', 'isolate', 'showall', 'focus', 'flyto', 'count', 'theme'];
+            if (requiresViewer.includes(actionName) && (!viewer || !viewer.model)) {
                 return { success: false, error: '해당 명령은 3D 모델 객체가 뷰어에 로드되어야 가능합니다.' };
             }
 
             try {
-                switch (action.toLowerCase()) {
+                switch (actionName) {
                     case 'select':
                     case 'highlight':
-                        return await this._handleSearchAndAction(viewer, target, (ids) => viewer.select(ids), action);
+                        return await this._handleSearchAndAction(viewer, target, (ids) => {
+                            viewer.isolate(ids);
+                            viewer.fitToView(ids);
+                            viewer.select(ids);
+                        }, actionName);
+
+                    case 'select_material':
+                        return await this._handleMaterialSearchAndAction(viewer, target, (ids) => {
+                            viewer.isolate(ids);
+                            viewer.fitToView(ids);
+                            viewer.select(ids);
+                        });
 
                     case 'hide':
                         return await this._handleSearchAndAction(viewer, target, (ids) => viewer.hide(ids), action);
@@ -52,8 +102,13 @@
                         return await this._applyThemingColors(viewer, target, params?.color);
 
                     case 'reset_viewer':
-                        viewer.clearThemingColors();
-                        viewer.clearSelection();
+                        if (viewer) {
+                            if (typeof viewer.clearThemingColors === 'function') viewer.clearThemingColors();
+                            if (typeof viewer.clearSelection === 'function') viewer.clearSelection();
+                            if (typeof viewer.showAll === 'function') viewer.showAll();
+                            if (typeof viewer.isolate === 'function') viewer.isolate();
+                            if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+                        }
                         console.log('[Viewer-Reset] 모든 테밍 및 선택이 초기화되었습니다.');
                         return { success: true, message: '뷰어가 원래 상태로 초기화되었습니다.' };
 
@@ -252,97 +307,190 @@
             }
         },
 
+        _handleMaterialSearchAndAction: async function (viewer, target, actionFn) {
+            if (!target || target.trim() === '') {
+                return { success: false, error: '재료 검색어가 비어 있습니다.' };
+            }
+
+            const dbIds = await this._fuzzyScan(viewer, target, [
+                'Material', 'Material Name', 'Structural Material', 'Finish', '재료', '구조 재료', '마감'
+            ]);
+            if (!dbIds || dbIds.length === 0) {
+                return { success: false, error: `모델에서 재료 '${target}'을(를) 적용한 객체를 찾을 수 없습니다.` };
+            }
+            if (dbIds.length > 100) {
+                return {
+                    success: false,
+                    isThresholdError: true,
+                    count: dbIds.length,
+                    target,
+                    error: `재료 '${target}'에 대해 너무 많은 객체(${dbIds.length}개)가 검색되었습니다.`
+                };
+            }
+
+            actionFn(dbIds);
+            return { success: true, count: dbIds.length, target };
+        },
+
+        _searchWithViewerApi: function (viewer, target) {
+            return new Promise((resolve) => {
+                if (!viewer || typeof viewer.search !== 'function') {
+                    resolve([]);
+                    return;
+                }
+
+                viewer.search(
+                    target,
+                    (ids) => resolve(Array.isArray(ids) ? ids : []),
+                    () => resolve([]),
+                    ['Name', 'Category', 'Type', 'Family', 'Material']
+                );
+            });
+        },
+
+        _scanPropertiesForTarget: function (viewer, target) {
+            return new Promise((resolve) => {
+                const model = viewer && viewer.model;
+                const pdb = model && typeof model.getPropertyDb === 'function' ? model.getPropertyDb() : null;
+                if (!pdb || typeof pdb.executeUserFunction !== 'function') {
+                    resolve([]);
+                    return;
+                }
+
+                const targetNorm = String(target || '').replace(/\s+/g, '').toLowerCase();
+                const targetLower = String(target || '').toLowerCase();
+                pdb.executeUserFunction(function (pdb, data) {
+                    var foundIds = [];
+                    var attrIds = [];
+                    var fields = data.fields.map(function (name) { return String(name).toLowerCase(); });
+
+                    pdb.enumAttributes(function (attrId, attrDef) {
+                        var attrName = String((attrDef && attrDef.name) || '').toLowerCase();
+                        if (fields.some(function (field) { return attrName.indexOf(field) !== -1; })) {
+                            attrIds.push(attrId);
+                        }
+                    });
+
+                    pdb.enumObjects(function (dbId) {
+                        var matched = false;
+                        pdb.enumObjectProperties(dbId, function (propId, valueId) {
+                            if (matched || attrIds.indexOf(propId) === -1) return;
+                            var raw = String(pdb.getAttrValue(propId, valueId) || '');
+                            var norm = raw.replace(/\s+/g, '').toLowerCase();
+                            var lower = raw.toLowerCase();
+                            matched = norm.indexOf(data.targetNorm) !== -1 ||
+                                data.targetNorm.indexOf(norm) !== -1 ||
+                                lower.indexOf(data.targetLower) !== -1;
+                        });
+                        if (matched) foundIds.push(dbId);
+                    });
+
+                    return foundIds;
+                }, {
+                    targetNorm,
+                    targetLower,
+                    fields: ['category', 'revit category', 'name', 'type', 'type name', 'family', 'material']
+                }).then((ids) => resolve(Array.isArray(ids) ? ids : [])).catch(() => resolve([]));
+            });
+        },
+
         /**
          * [SSOT Architecture] window.categoryInstancesMap을 직접 참조하여 dbId 배열을 반환합니다.
          * harness-context.js가 모델 초기 스캔 시 구축한 중앙 데이터를 사용하므로,
          * 독자적인 트리 탐색(getInstanceTree, enumNodeChildren 등)을 일절 수행하지 않습니다.
          */
         _performSearch: async function (viewer, target, retryCount = 0) {
-            // [Defense Layer 1] 검색어 검증
             if (!target || target.trim() === "") {
                 console.warn('[Action-Harness] 검색어가 비어 있습니다.');
                 return [];
             }
 
+            viewer = this._resolveViewer(viewer);
             const normalizedTarget = target.trim();
             const lowerTarget = normalizedTarget.toLowerCase();
+            const ssotMap = window.categoryInstancesMap || {};
+            const ssotKeys = Object.keys(ssotMap);
+            const dynCats = Array.from(new Set([...(window.dynamicCategories || []), ...ssotKeys])).filter(Boolean);
+            const aliasTarget = this._resolveCategoryAlias(normalizedTarget, dynCats);
+            const aliasLowerTarget = aliasTarget.toLowerCase();
 
-            // [Defense Layer 2] 퍼지 매칭 가드 (할루시네이션 차단 + 유사어 허용)
-            // 전략: ① 완전 일치 → ② 포함(includes) 양방향 매칭 → ③ 실패 시 차단
-            const dynCats = window.dynamicCategories || [];
-
-            const exactMatch = dynCats.find(cat => cat.trim().toLowerCase() === lowerTarget);
-            const fuzzyMatch = !exactMatch && dynCats.find(cat => {
-                const catLower = cat.trim().toLowerCase();
-                return catLower.includes(lowerTarget) || lowerTarget.includes(catLower);
+            const exactMatch = dynCats.find((cat) => String(cat).trim().toLowerCase() === aliasLowerTarget);
+            const fuzzyMatch = !exactMatch && dynCats.find((cat) => {
+                const catLower = String(cat).trim().toLowerCase();
+                return catLower.includes(aliasLowerTarget) || aliasLowerTarget.includes(catLower);
             });
-            const resolvedTarget = (exactMatch || fuzzyMatch || '').trim();
+            const resolvedTarget = (exactMatch || fuzzyMatch || aliasTarget).trim();
 
-            if (!resolvedTarget && lowerTarget !== "") {
-                console.warn(`[Action-Harness] 🛡️ 가드 발동: '${target}'과 일치하거나 포함하는 카테고리 없음. 차단.`);
-                throw new Error(`모델에 '${target}' 카테고리가 존재하지 않습니다. 제공된 목록에서만 선택해 주세요.`);
-            }
-
-            if (resolvedTarget !== normalizedTarget) {
-                console.log(`[Action-Harness] 🔀 퍼지 해석: '${normalizedTarget}' → '${resolvedTarget}'`);
-            }
-
-            // [SSOT] window.categoryInstancesMap 준비 확인 - 미준비 시 재시도
-            const ssotMap = window.categoryInstancesMap;
-            if (!ssotMap || Object.keys(ssotMap).length === 0) {
-                if (retryCount < 5) {
-                    console.log(`[Action-Harness] [SSOT] categoryInstancesMap 미준비. 1초 후 재시도 (${retryCount + 1}/5)`);
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    return ActionHarness._performSearch(viewer, target, retryCount + 1);
-                } else {
-                    console.error('[Action-Harness] [SSOT] categoryInstancesMap 로딩 제한 시간 초과.');
-                    throw new Error('모델 카테고리 데이터가 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.');
-                }
-            }
-
-            // [SSOT 핵심] 트리 재탐색 없이 중앙 맵에서 직접 dbId 배열 조회 (resolvedTarget 사용)
-            // 1차: resolvedTarget으로 정확한 키 매칭
             let targetIds = ssotMap[resolvedTarget];
-
-            // 2차: 대소문자 무시 퍼지 매칭 (혹시 resolvedTarget 대소문자 불일치 시 보조)
-            if (!targetIds) {
-                const matchedKey = Object.keys(ssotMap).find(
-                    key => key.trim().toLowerCase() === resolvedTarget.toLowerCase()
-                );
-                if (matchedKey) {
-                    targetIds = ssotMap[matchedKey];
-                    console.log(`[Action-Harness] [SSOT] 퍼지 매칭: '${resolvedTarget}' → 키 '${matchedKey}' 발견`);
-                }
+            if (!targetIds && ssotKeys.length > 0) {
+                const matchedKey = ssotKeys.find((key) => String(key).trim().toLowerCase() === resolvedTarget.toLowerCase());
+                if (matchedKey) targetIds = ssotMap[matchedKey];
             }
 
             if (targetIds && targetIds.length > 0) {
-                console.log(`[Action-Harness] [SSOT] ✅ 캐시 히트: '${resolvedTarget}' → ${targetIds.length}개 dbId 즉시 반환 (트리 재탐색 없음)`);
-                return [...targetIds]; // 원본 배열 보호를 위해 복사본 반환
-            } else {
-                console.warn(`[Action-Harness] [SSOT] ❌ '${resolvedTarget}' 키가 categoryInstancesMap에 없습니다.`);
-                console.log(`[Action-Harness] [SSOT] 사용 가능한 키 목록:`, Object.keys(ssotMap));
-                return [];
+                console.log(`[Action-Harness] [SSOT] 캐시 히트: '${resolvedTarget}' -> ${targetIds.length}개 dbId`);
+                return [...new Set(targetIds.map(Number).filter(Number.isFinite))];
             }
-        },
 
+            if (retryCount < 2 && ssotKeys.length === 0) {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                return this._performSearch(viewer, target, retryCount + 1);
+            }
+
+            const viewerSearchIds = await this._searchWithViewerApi(viewer, resolvedTarget);
+            if (viewerSearchIds.length > 0) {
+                console.log(`[Action-Harness] [viewer.search] '${resolvedTarget}' -> ${viewerSearchIds.length}개 dbId`);
+                return [...new Set(viewerSearchIds.map(Number).filter(Number.isFinite))];
+            }
+
+            const scannedIds = await this._scanPropertiesForTarget(viewer, resolvedTarget);
+            if (scannedIds.length > 0) {
+                console.log(`[Action-Harness] [PDB scan] '${resolvedTarget}' -> ${scannedIds.length}개 dbId`);
+                return [...new Set(scannedIds.map(Number).filter(Number.isFinite))];
+            }
+
+            console.warn(`[Action-Harness] '${target}' 검색 결과 없음. 사용 가능한 카테고리:`, dynCats);
+            return [];
+        },
         /**
          * [THEME] 카테고리의 객체들에 색상을 적용하는 헬퍼
          */
         _applyThemingColors: async function (viewer, target, colorName) {
+            const ThreeVector4 = (window.THREE && window.THREE.Vector4) || (typeof THREE !== 'undefined' && THREE.Vector4);
+            if (!ThreeVector4) {
+                return { success: false, error: 'THREE.Vector4 is not available.' };
+            }
+
             const COLOR_MAP = {
-                red:     new THREE.Vector4(1, 0, 0, 1),
-                blue:    new THREE.Vector4(0, 0.4, 1, 1),
-                green:   new THREE.Vector4(0, 0.8, 0.2, 1),
-                yellow:  new THREE.Vector4(1, 0.9, 0, 1),
-                orange:  new THREE.Vector4(1, 0.5, 0, 1),
-                cyan:    new THREE.Vector4(0, 0.9, 1, 1),
-                magenta: new THREE.Vector4(1, 0, 1, 1),
-                white:   new THREE.Vector4(1, 1, 1, 1)
+                red:     new ThreeVector4(1, 0, 0, 1),
+                blue:    new ThreeVector4(0, 0.4, 1, 1),
+                green:   new ThreeVector4(0, 0.8, 0.2, 1),
+                yellow:  new ThreeVector4(1, 0.9, 0, 1),
+                orange:  new ThreeVector4(1, 0.5, 0, 1),
+                cyan:    new ThreeVector4(0, 0.9, 1, 1),
+                magenta: new ThreeVector4(1, 0, 1, 1),
+                white:   new ThreeVector4(1, 1, 1, 1),
+                gray:    new ThreeVector4(0.55, 0.55, 0.55, 1),
+                grey:    new ThreeVector4(0.55, 0.55, 0.55, 1),
+                '\ube68\uac15': new ThreeVector4(1, 0, 0, 1),
+                '\ube68\uac04\uc0c9': new ThreeVector4(1, 0, 0, 1),
+                '\ud30c\ub791': new ThreeVector4(0, 0.4, 1, 1),
+                '\ud30c\ub780\uc0c9': new ThreeVector4(0, 0.4, 1, 1),
+                '\ucd08\ub85d': new ThreeVector4(0, 0.8, 0.2, 1),
+                '\ub179\uc0c9': new ThreeVector4(0, 0.8, 0.2, 1),
+                '\ub178\ub791': new ThreeVector4(1, 0.9, 0, 1),
+                '\ub178\ub780\uc0c9': new ThreeVector4(1, 0.9, 0, 1),
+                '\uc8fc\ud669': new ThreeVector4(1, 0.5, 0, 1),
+                '\uc8fc\ud669\uc0c9': new ThreeVector4(1, 0.5, 0, 1),
+                '\ud558\ub298\uc0c9': new ThreeVector4(0, 0.9, 1, 1),
+                '\ubd84\ud64d': new ThreeVector4(1, 0, 1, 1),
+                '\ud770\uc0c9': new ThreeVector4(1, 1, 1, 1),
+                '\ud68c\uc0c9': new ThreeVector4(0.55, 0.55, 0.55, 1)
             };
 
             const colorVector = COLOR_MAP[(colorName || '').toLowerCase().trim()];
             if (!colorVector) {
-                return { success: false, error: `지원하지 않는 색상입니다: '${colorName}'. (red, blue, green, yellow, orange, cyan, magenta, white 중 하나를 사용하세요.)` };
+                return { success: false, error: `지원하지 않는 색상입니다: '${colorName}'. (red, blue, green, yellow, orange, cyan, magenta, white, gray 중 하나를 사용하세요.)` };
             }
 
             const dbIds = await this._performSearch(viewer, target);
@@ -350,15 +498,16 @@
                 return { success: false, error: `모델에서 '${target}'을(를) 찾을 수 없습니다.` };
             }
 
-            // 객별 dbId마다 색상 적용 (반드시 loop 필요)
             dbIds.forEach(dbId => {
                 viewer.setThemingColor(dbId, colorVector, viewer.model);
             });
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+                viewer.impl.invalidate(true, true, true);
+            }
 
             console.log(`[Action-Harness] [THEME] '${target}' ${dbIds.length}개 객체에 '${colorName}' 적용 완료.`);
             return { success: true, count: dbIds.length, target, color: colorName };
         },
-
         /**
          * [캐녀스 하단] 뷰어 초기화 아이콘 버튼 주입
          */
@@ -547,3 +696,5 @@
     };
     _waitAndInjectReset();
 })();
+
+

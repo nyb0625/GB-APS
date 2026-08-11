@@ -161,9 +161,9 @@ function isCompare(issue) {
 
 function getIssueType(issue) {
     const t = (issue.issueType || issue.type || '').toLowerCase();
-    if (t.includes('간섭') || t.includes('clash')) return '간섭 이슈';
-    if (t.includes('설계') || t.includes('design')) return '설계 이슈';
-    return '업무 이슈';
+    if (t.includes('간섭') || t.includes('clash')) return '간섭이슈';
+    if (t.includes('설계') || t.includes('design')) return '설계이슈';
+    return '업데이트 항목';
 }
 
 function isOverdue(schedule) {
@@ -476,6 +476,12 @@ function renderGantt() {
         timeline.appendChild(rowDiv);
     });
 
+    const timelineWrap = document.querySelector('.gantt-timeline-wrap');
+    if (timelineWrap) {
+        const scrollLeftTarget = (todayOffset - 5) * CELL_W;
+        timelineWrap.scrollLeft = Math.max(0, scrollLeftTarget);
+    }
+
     updateSliderRange();
 }
 
@@ -502,8 +508,8 @@ function renderDonut() {
     let typeData = { clash: 0, design: 0, work: 0 };
     issues.forEach(i => {
         const t = getIssueType(i);
-        if (t === '간섭 이슈')      typeData.clash++;
-        else if (t === '설계 이슈') typeData.design++;
+        if (t === '간섭이슈')      typeData.clash++;
+        else if (t === '설계이슈') typeData.design++;
         else                        typeData.work++;
     });
 
@@ -538,7 +544,7 @@ function renderDonut() {
 
         if (metric === 'type') {
             name = '이슈 유형별';
-            labels = ['간섭 이슈', '설계 이슈', '업무 이슈'];
+            labels = ['간섭이슈', '설계이슈', '업데이트 항목'];
             data = [typeData.clash, typeData.design, typeData.work];
             colors = ['#00f2fe', '#8b5cf6', '#f59e0b'];
         } else if (metric === 'status') {

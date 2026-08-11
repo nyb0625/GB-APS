@@ -4,18 +4,197 @@
  */
 
 import { 
-    selectAndFocusNodes, 
-    setNodesColor, 
-    isolateNodes, 
-    resetViewerOverrides,
     getModelMetadata,
-    searchAndGetBulkProperties,
-    setElementColorByName,
     getViewerInstance
 } from './viewer.js';
 
 let chatHistory = [];
 let modelMetadata = null;
+
+function syncModelMetadataFromHarness(data) {
+    if (!data) return;
+    const categories = Array.isArray(data.categoryList)
+        ? data.categoryList
+        : Object.keys(data.categories || data.categoryInstancesMap || {});
+    if (categories.length === 0) return;
+
+    modelMetadata = {
+        categories,
+        elementsCount: data.totalElements || Object.values(data.categoryInstancesMap || {}).reduce((sum, ids) => sum + (ids?.length || 0), 0),
+        elements: modelMetadata?.elements || []
+    };
+}
+
+function getCurrentModelCategories() {
+    const fromSsot = Object.keys(window.categoryInstancesMap || {});
+    const fromDynamic = Array.isArray(window.dynamicCategories) ? window.dynamicCategories : [];
+    const fromMetadata = Array.isArray(modelMetadata?.categories) ? modelMetadata.categories : [];
+    return [...new Set([...fromSsot, ...fromDynamic, ...fromMetadata].filter(Boolean))].sort();
+}
+
+function buildBimContext() {
+    const categories = getCurrentModelCategories();
+    const countFromSsot = Object.values(window.categoryInstancesMap || {}).reduce((sum, ids) => sum + (ids?.length || 0), 0);
+    const elementCount = countFromSsot || modelMetadata?.elementsCount || 0;
+
+    if (categories.length === 0) {
+        return 'No active model metadata.';
+    }
+
+    return [
+        `현재 파일명: ${window.currentModelName || 'BIM Model'}`,
+        `총 객체 수: ${elementCount}`,
+        `존재하는 카테고리 목록: [${categories.join(', ')}]`,
+        `사용자 별칭 규칙: "벽"은 "벽체" 또는 "Walls"와 가장 가까운 실제 카테고리로, "배관"은 "Pipes"와 가장 가까운 실제 카테고리로 매칭하세요. TARGET은 반드시 위 카테고리 목록의 실제 이름으로 출력하세요.`
+    ].join('\n');
+}
+
+const WEEKLY_TASK_STORAGE_KEY = 'gangbuk_construction_weekly_tasks';
+
+function readConstructionWeeklyTasks() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(WEEKLY_TASK_STORAGE_KEY) || '[]');
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object') {
+            return Object.values(parsed).flatMap((tasks) => Array.isArray(tasks) ? tasks : []);
+        }
+    } catch (err) {
+        console.warn('[AI Panel] weekly task storage parse failed:', err);
+    }
+    return [];
+}
+
+function parseTaskDate(value) {
+    if (!value) return null;
+    const parts = String(value).split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    date.setHours(0, 0, 0, 0);
+    return date;
+}
+
+function getMonday(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay() || 7;
+    d.setDate(d.getDate() - day + 1);
+    return d;
+}
+
+function addWeeks(date, count) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + count * 7);
+    return d;
+}
+
+function parseWeekKey(weekKey) {
+    const match = String(weekKey || '').match(/^(\d{4})-W(\d{2})$/);
+    if (!match) return getMonday(new Date());
+    const firstThursday = new Date(Number(match[1]), 0, 4);
+    const firstMonday = getMonday(firstThursday);
+    return addWeeks(firstMonday, Number(match[2]) - 1);
+}
+
+function getWeekMeta(date) {
+    const monday = getMonday(date);
+    const firstThursday = new Date(monday.getFullYear(), 0, 4);
+    const firstMonday = getMonday(firstThursday);
+    const diffDays = Math.round((monday - firstMonday) / 86400000);
+    const week = Math.floor(diffDays / 7) + 1;
+    const year = monday.getFullYear();
+    return {
+        key: `${year}-W${String(week).padStart(2, '0')}`,
+        label: `${year}년 ${week}주차`
+    };
+}
+
+function getSelectedConstructionWeekRange() {
+    const selectedKey = document.getElementById('bim-week-select')?.value || getWeekMeta(new Date()).key;
+    const start = parseWeekKey(selectedKey);
+    const end = addWeeks(start, 1);
+    end.setDate(end.getDate() - 1);
+    end.setHours(23, 59, 59, 999);
+    return { key: selectedKey, label: getWeekMeta(start).label, start, end };
+}
+
+function taskOverlapsWeek(task, week) {
+    const start = parseTaskDate(task.startDate) || parseTaskDate(task.dueDate) || week.start;
+    let due = parseTaskDate(task.dueDate) || start;
+    if (due < start) due = start;
+    if (task.status === '완료') {
+        due = addWeeks(due, 1);
+    }
+    return start <= week.end && due >= week.start;
+}
+
+function getConstructionWeeklyTaskSnapshot() {
+    const allTasks = readConstructionWeeklyTasks();
+    const week = getSelectedConstructionWeekRange();
+    const weekTasks = allTasks.filter((task) => taskOverlapsWeek(task, week));
+    const countBy = (getter) => weekTasks.reduce((acc, task) => {
+        const key = getter(task) || '-';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+    }, {});
+
+    return {
+        week,
+        allTasks,
+        weekTasks,
+        statusCounts: countBy((task) => task.status || '계획'),
+        categoryCounts: countBy((task) => task.category || '기타'),
+        peopleCounts: countBy((task) => task.people || '미지정')
+    };
+}
+
+function isConstructionWeeklyTaskQuery(text) {
+    const lower = String(text || '').toLowerCase();
+    const hasWork = ['주간 업무', '금주 업무', '업무 현황', '주간업무', '업무'].some((word) => lower.includes(word));
+    const hasConstructionTab = ['시공 bim', '시공bim', '시공 대시보드', '시공 bim 대시보드', '탭'].some((word) => lower.includes(word));
+    const hasQuestion = ['현황', '몇', '개수', '목록', '알려', '요약', '진행중', '완료', '계획', '보류', '담당', '수행'].some((word) => lower.includes(word));
+    return hasWork && (hasConstructionTab || hasQuestion);
+}
+
+function formatCountMap(map) {
+    const entries = Object.entries(map || {}).sort((a, b) => b[1] - a[1]);
+    return entries.length ? entries.map(([key, count]) => `${key} ${count}건`).join(', ') : '없음';
+}
+
+function buildConstructionWeeklyTaskAnswer(question) {
+    const snapshot = getConstructionWeeklyTaskSnapshot();
+    const { week, weekTasks, allTasks } = snapshot;
+    const lower = String(question || '').toLowerCase();
+    const sortedTasks = weekTasks.slice().sort((a, b) => {
+        return String(a.startDate || '').localeCompare(String(b.startDate || '')) ||
+            String(a.dueDate || '').localeCompare(String(b.dueDate || ''));
+    });
+
+    if (lower.includes('진행중')) {
+        const active = sortedTasks.filter((task) => task.status === '진행중');
+        return [
+            `${week.label} 주간 업무 중 진행중 업무는 ${active.length}건입니다.`,
+            active.length ? active.map((task, idx) => `${idx + 1}. [${task.category || '기타'}] ${task.content || '-'} (${task.startDate || '-'}~${task.dueDate || '-'}, ${task.people || '미지정'})`).join('\n') : '진행중 업무가 없습니다.'
+        ].join('\n');
+    }
+
+    if (lower.includes('목록') || lower.includes('뭐') || lower.includes('어떤')) {
+        return [
+            `${week.label} 주간 업무는 총 ${sortedTasks.length}건입니다.`,
+            sortedTasks.length ? sortedTasks.map((task, idx) => `${idx + 1}. [${task.status || '계획'} / ${task.category || '기타'}] ${task.content || '-'} (${task.startDate || '-'}~${task.dueDate || '-'}, ${task.people || '미지정'})`).join('\n') : '선택한 주차에 등록된 업무가 없습니다.'
+        ].join('\n');
+    }
+
+    return [
+        `${week.label} 주간 업무 현황입니다.`,
+        `전체 등록 업무: ${allTasks.length}건, 선택 주차 업무: ${weekTasks.length}건`,
+        `상태별: ${formatCountMap(snapshot.statusCounts)}`,
+        `구분별: ${formatCountMap(snapshot.categoryCounts)}`,
+        `수행인원별: ${formatCountMap(snapshot.peopleCounts)}`,
+        sortedTasks.length
+            ? `주요 업무: ${sortedTasks.slice(0, 5).map((task) => `[${task.status || '계획'}] ${task.content || '-'}`).join(' / ')}`
+            : '선택한 주차에 등록된 업무가 없습니다.'
+    ].join('\n');
+}
 
 export async function initAiPanel() {
     const chatForm  = document.getElementById('chat-form');
@@ -40,6 +219,11 @@ export async function initAiPanel() {
             addSystemMessage('BIM 모델 로드 완료. AI 분석 서비스를 시작합니다.');
         });
     }
+
+    window.addEventListener('APS_MODEL_DATA_EXTRACTED', (event) => {
+        syncModelMetadataFromHarness(event.detail);
+        console.log('[AI Panel] Harness categories synced:', getCurrentModelCategories());
+    });
 
     // 엔터키 자동 전송 가드
     (function() {
@@ -108,72 +292,6 @@ function isIssueRelatedQuery(text) {
     if (hasFacility && hasStatus) return true;
 
     return false;
-}
-
-// ─────────────────────────────────────────────────────────────────
-// 🤖 [Viewer Bridge] 의도 파악 (Intent Classification)
-// ─────────────────────────────────────────────────────────────────
-
-/**
- * 모델 특성(체적·면적·수량) 조회 의도 여부 판별
- */
-function isModelPropertyQuery(text) {
-    const keywords = [
-        '체적', '볼륨', 'volume', '면적', 'area', '수량', '길이', '개수',
-        '몇 개', '몇개', '얼마나', '재료', 'material', '특성', '속성',
-        '모델', 'bim', '부재', '슬래브', '벽', '기둥', '보', '계단', '지붕',
-        '콘크리트', '철근', '강재', '창문', '문', '바닥', '천장'
-    ];
-    const lower = text.toLowerCase();
-    // 이슈 키워드가 있으면 모델 조회가 아님
-    if (isIssueRelatedQuery(text) && !lower.includes('bim') && !lower.includes('모델')) return false;
-    return keywords.some(kw => lower.includes(kw.toLowerCase()));
-}
-
-/**
- * 모델 색상 제어 의도 여부 판별
- */
-function isModelColorControlQuery(text) {
-    const colorActions = ['색', '색상', '칠', '하이라이트', '표시', '강조', '변경', '바꿔', '바꿔줘', '칠해'];
-    const colorNames   = ['빨간', '파란', '초록', '노란', '주황', '하늘', '분홍', '흰', '회색', 'red', 'blue', 'green', 'yellow', 'orange', 'cyan', 'white', 'gray'];
-    const lower = text.toLowerCase();
-    const hasAction = colorActions.some(kw => lower.includes(kw));
-    const hasColor  = colorNames.some(kw => lower.includes(kw));
-    return hasAction || hasColor;
-}
-
-/**
- * 쿼리에서 BIM 부재명 키워드 추출 (예: '슬래브의 체적' → '슬래브')
- */
-function extractElementKeyword(text) {
-    const elementPatterns = [
-        '슬래브', 'slab', '벽체', '벽', 'wall', '기둥', 'column', '보', 'beam',
-        '계단', 'stair', '지붕', 'roof', '바닥', 'floor', '문', 'door', '창문', 'window',
-        '파이프', 'pipe', '덕트', 'duct', '콘크리트', 'concrete'
-    ];
-    const lower = text.toLowerCase();
-    const found = elementPatterns.find(kw => lower.includes(kw.toLowerCase()));
-    return found || null;
-}
-
-/**
- * 쿼리에서 색상 키워드 추출
- */
-function extractColorKeyword(text) {
-    const colorMap = {
-        '빨간': 'red', '빨강': 'red', '빨간색': 'red', 'red': 'red',
-        '파란': 'blue', '파랑': 'blue', '파란색': 'blue', 'blue': 'blue',
-        '초록': 'green', '초록색': 'green', 'green': 'green',
-        '노란': 'yellow', '노랑': 'yellow', '노란색': 'yellow', 'yellow': 'yellow',
-        '주황': 'orange', '주황색': 'orange', 'orange': 'orange',
-        '하늘': 'cyan', '하늘색': 'cyan', 'cyan': 'cyan',
-        '분홍': 'magenta', '분홍색': 'magenta', 'magenta': 'magenta',
-        '흰': 'white', '흰색': 'white', 'white': 'white',
-        '회': 'gray', '회색': 'gray', 'gray': 'gray'
-    };
-    const lower = text.toLowerCase();
-    const entry = Object.entries(colorMap).find(([k]) => lower.includes(k));
-    return entry ? entry[1] : 'cyan';
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -364,22 +482,6 @@ function toggleLoading(show) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// 🔎 BIM 카테고리 기반 dbId 검색
-// ─────────────────────────────────────────────────────────────────
-function findDbIdsByCategory(target) {
-    if (!modelMetadata || !modelMetadata.elements) return [];
-    const query = String(target).toLowerCase().trim();
-    return modelMetadata.elements
-        .filter(el => {
-            const cat  = String(el.category).toLowerCase();
-            const name = String(el.name).toLowerCase();
-            return cat.includes(query) || query.includes(cat) || name.includes(query);
-        })
-        .map(m => m.dbId);
-}
-
-// ─────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────
 // 📄 [UI 자동화 파이프라인] 필터 적용 ➔ 백그라운드 PDF 생성 ➔ 다이렉트 다운로드 & Auto-Cleanup
 // ─────────────────────────────────────────────────────────────────
@@ -581,45 +683,18 @@ async function submitChatMessage(messageText) {
         }
     }
 
-    // ── [기능 A] 🎨 뷰어 색상 제어 쿼리 — LLM 없이 즉시 처리 ─────────────────
-    const isColorCtrl = isModelColorControlQuery(lq);
-    const elementKw   = extractElementKeyword(lq);
-    if (isColorCtrl && elementKw) {
-        console.log('[Viewer Bridge] 색상 제어 명령 감지:', elementKw);
-        toggleLoading(true);
-        const colorKw = extractColorKeyword(lq);
-        const colorResult = await setElementColorByName(elementKw, colorKw);
-        toggleLoading(false);
-        if (colorResult.success) {
-            appendMessage('assistant', colorResult.message);
-            chatHistory.push({ role: 'assistant', content: colorResult.message });
-        } else {
-            // 색상 제어 실패 시에도 LLM에게 계속 진행
-            addSystemMessage(`⚠️ 뷰어 색상 제어 실패: ${colorResult.message}`);
-        }
-        if (colorResult.success) return; // 완전히 처리됨
+    if (isConstructionWeeklyTaskQuery(cleanQuery)) {
+        const weeklyAnswer = buildConstructionWeeklyTaskAnswer(cleanQuery);
+        appendMessage('assistant', weeklyAnswer);
+        chatHistory.push({ role: 'assistant', content: weeklyAnswer });
+        return;
     }
 
-    // ── [기능 B] 🔬 뷰어 모델 특성 조회 — 실시간 데이터 추출 후 LLM에 주입 ─────
-    let viewerPropertyContext = null;
-    const isModelQuery = isModelPropertyQuery(lq);
-    if (isModelQuery && elementKw) {
-        console.log('[Viewer Bridge] 모델 특성 조회 감지:', elementKw);
-        addSystemMessage(`🔍 뷰어에서 '${elementKw}' 부재 특성을 실시간으로 추출하는 중...`);
-        const propResult = await searchAndGetBulkProperties(elementKw);
-        viewerPropertyContext = propResult.contextText;
-        console.log('[Viewer Bridge] 추출 완료:', viewerPropertyContext);
-    }
+    const handledViewerIntent = !isIssueRelatedQuery(cleanQuery) && await tryExecuteLocalViewerIntent(cleanQuery);
+    if (handledViewerIntent) return;
 
     // ── [기능 2] BIM 모델 컨텍스트 ────────────────────────────────
-    let bimContext = 'No active model metadata.';
-    if (modelMetadata) {
-        bimContext = [
-            `현재 파일명: ${window.currentModelName || 'BIM Model'}`,
-            `총 객체 수: ${modelMetadata.elementsCount}`,
-            `존재하는 카테고리 목록: [${modelMetadata.categories.join(', ')}]`
-        ].join('\n');
-    }
+    const bimContext = buildBimContext();
 
     // ── [기능 3] 이슈 컨텍스트 (이슈 관련 질문일 때만 포함) ────────
     const includeIssueCtx = isIssueRelatedQuery(cleanQuery);
@@ -655,10 +730,18 @@ async function submitChatMessage(messageText) {
             '수치는 무조건 주입된 실시간 데이터의 정확한 건수로만 수치화하고 절대 지어내지 마세요.',
             '',
             '사용 가능한 뷰어 제어 액션 태그:',
+            '사용자가 3D 모델 객체의 선택, 색상 변경, 개수, 숨김, 격리, 위치 이동을 요청하면 설명보다 ACTION 태그를 우선 출력하세요.',
+            'TARGET은 반드시 아래 현재 BIM 모델 컨텍스트의 카테고리 목록에 있는 실제 이름으로 출력하세요.',
+            '예: 사용자가 "벽"이라고 했고 목록에 "벽체"가 있으면 TARGET은 반드시 "벽체"입니다.',
             '[ACTION:SELECT, TARGET:카테고리명] — 해당 객체 선택',
             '[ACTION:THEME, TARGET:카테고리명, COLOR:색상] — 색상 강조',
             '[ACTION:RESET_VIEWER] — 뷰어 초기화',
             '[ACTION:COUNT, TARGET:카테고리명] — 객체 수 조회',
+            '[ACTION:ISOLATE, TARGET:카테고리명] — 해당 객체만 보기',
+            '[ACTION:HIDE, TARGET:카테고리명] — 해당 객체 숨기기',
+            '[ACTION:FLYTO, TARGET:카테고리명] — 해당 객체 위치로 이동',
+            '[ACTION:SELECT_MATERIAL, TARGET:재료명] — 해당 재료가 적용된 객체 선택',
+            '색상은 red, blue, green, yellow, orange, cyan, magenta, white, gray 중 하나를 사용하세요.',
             '',
             '현재 BIM 모델 컨텍스트:',
             bimContext
@@ -672,19 +755,6 @@ async function submitChatMessage(messageText) {
         }
 
         let finalUserContent = cleanQuery;
-
-        // 뷰어 실시간 특성 데이터 주입 (모델 조회 쿼리인 경우)
-        if (viewerPropertyContext) {
-            finalUserContent = [
-                `[실시간 BIM 뷰어 데이터]`,
-                viewerPropertyContext,
-                ``,
-                `[사용자 질문]`,
-                cleanQuery,
-                ``,
-                `위 실시간 뷰어 데이터를 기반으로, 부재 개수·체적·면적 등의 수치를 구체적으로 언급하며 정확하게 답변하세요.`
-            ].join('\n');
-        }
 
         // 이슈 컨텍스트 주입 (이슈 쿼리인 경우)
         if (issueContext) {
@@ -754,6 +824,146 @@ async function submitChatMessage(messageText) {
 // ─────────────────────────────────────────────────────────────────
 // 🎬 뷰어 액션 태그 파싱
 // ─────────────────────────────────────────────────────────────────
+const handleChatCommands = (text) => {
+    const actions = [];
+    const patterns = [
+        { reg: /\[(?:COMMAND|ACTION)\s*:\s*THEME\s*,\s*TARGET\s*:\s*([^,\]]+)\s*,\s*COLOR\s*:\s*([^\]]+)\]/gi, type: 'theme' },
+        { reg: /\[(?:COMMAND|ACTION)\s*:\s*(RESET_VIEWER)\]/gi, type: 'reset' },
+        { reg: /\[(?:COMMAND|ACTION)\s*:\s*SELECT_MATERIAL\s*,\s*TARGET\s*:\s*([^\]]+)\]/gi, type: 'select_material' },
+        { reg: /\[(?:COMMAND|ACTION)\s*:\s*([^,\]]+)\s*,\s*TARGET\s*:\s*([^\]]+)\]/gi, type: 'standard' }
+    ];
+
+    for (const p of patterns) {
+        const matches = [...text.matchAll(p.reg)];
+        for (const match of matches) {
+            if (p.type === 'theme') {
+                actions.push({ action: 'theme', target: match[1].trim(), params: { color: match[2].trim() } });
+            } else if (p.type === 'reset') {
+                actions.push({ action: 'reset_viewer', target: null });
+            } else if (p.type === 'select_material') {
+                actions.push({ action: 'select_material', target: match[1].trim() });
+            } else {
+                const action = match[1].trim();
+                if (/^(theme|select_material)$/i.test(action)) continue;
+                actions.push({ action, target: match[2].trim() });
+            }
+        }
+    }
+    return actions;
+};
+
+async function executeViewerCommand(data) {
+    if (!window.ActionHarness || typeof window.ActionHarness.dispatch !== 'function') {
+        return { success: false, error: 'ActionHarness is not loaded.' };
+    }
+    const activeViewer = getViewerInstance?.() || window.viewer || window._viewer || window.NOP_VIEWER || window.viewerLeft;
+    return await window.ActionHarness.dispatch({
+        action: (data.command || data.action || 'select').toLowerCase(),
+        target: data.target || data.category || null,
+        params: data.params || {}
+    }, activeViewer);
+}
+
+function normalizeViewerColor(text) {
+    const lower = String(text || '').toLowerCase();
+    const colorMap = [
+        { keys: ['빨강', '빨간', '빨간색', 'red'], value: 'red' },
+        { keys: ['파랑', '파란', '파란색', 'blue'], value: 'blue' },
+        { keys: ['초록', '녹색', 'green'], value: 'green' },
+        { keys: ['노랑', '노란', '노란색', 'yellow'], value: 'yellow' },
+        { keys: ['주황', '주황색', 'orange'], value: 'orange' },
+        { keys: ['하늘색', '청록', 'cyan'], value: 'cyan' },
+        { keys: ['분홍', '자홍', 'magenta'], value: 'magenta' },
+        { keys: ['흰색', '하얀색', 'white'], value: 'white' },
+        { keys: ['회색', 'gray', 'grey'], value: 'gray' }
+    ];
+    return colorMap.find((item) => item.keys.some((key) => lower.includes(key)))?.value || null;
+}
+
+function findLikelyCategoryFromText(text) {
+    const lower = String(text || '').toLowerCase();
+    const categories = getCurrentModelCategories();
+
+    if (categories.length > 0) {
+        const exact = categories.find((cat) => lower.includes(String(cat).toLowerCase()));
+        if (exact) return exact;
+    }
+
+    const aliases = [
+        { keys: ['벽체', '벽', 'wall', 'walls'], hints: ['벽체', '벽', 'wall'], fallback: '벽' },
+        { keys: ['바닥', 'floor', 'floors', 'slab', '슬래브'], hints: ['바닥', 'floor', 'slab', '슬래브'], fallback: '바닥' },
+        { keys: ['기둥', 'column', 'columns'], hints: ['기둥', 'column'], fallback: '기둥' },
+        { keys: ['보', 'beam', 'beams'], hints: ['보', 'beam'], fallback: '보' },
+        { keys: ['계단', 'stair', 'stairs'], hints: ['계단', 'stair'], fallback: '계단' },
+        { keys: ['배관', '파이프', 'pipe', 'pipes'], hints: ['배관', '파이프', 'pipe'], fallback: '배관' },
+        { keys: ['문', 'door', 'doors'], hints: ['문', 'door'], fallback: '문' },
+        { keys: ['창', '창문', 'window', 'windows'], hints: ['창', 'window'], fallback: '창문' }
+    ];
+
+    const matchedAlias = aliases.find((entry) => entry.keys.some((key) => lower.includes(key)));
+    if (!matchedAlias) return null;
+
+    if (categories.length > 0) {
+        const matchedCategory = categories.find((cat) => {
+            const catLower = String(cat).toLowerCase();
+            return matchedAlias.hints.some((hint) => catLower.includes(hint.toLowerCase()));
+        });
+        if (matchedCategory) return matchedCategory;
+    }
+
+    return matchedAlias.fallback;
+}
+
+function inferViewerCommandFromText(text) {
+    const lower = String(text || '').toLowerCase();
+    const target = findLikelyCategoryFromText(text);
+    const color = normalizeViewerColor(text);
+
+    if ((lower.includes('초기화') || lower.includes('원래대로') || lower.includes('reset')) && lower.includes('뷰어')) {
+        return { action: 'reset_viewer', target: null };
+    }
+    if (!target) return null;
+
+    if (color && ['색', '색상', '칠', '변경', '바꿔', '바꿔줘', '하이라이트', '강조'].some((word) => lower.includes(word))) {
+        return { action: 'theme', target, params: { color } };
+    }
+    if (['몇 개', '몇개', '개수', '수량', 'count'].some((word) => lower.includes(word))) {
+        return { action: 'count', target };
+    }
+    if (['숨겨', '숨기', 'hide'].some((word) => lower.includes(word))) {
+        return { action: 'hide', target };
+    }
+    if (['만 보여', '격리', 'isolate'].some((word) => lower.includes(word))) {
+        return { action: 'isolate', target };
+    }
+    if (['이동', '날아', '위치', 'flyto', 'focus'].some((word) => lower.includes(word))) {
+        return { action: 'flyto', target };
+    }
+    if (['선택', '찾아', '찾기', 'select'].some((word) => lower.includes(word))) {
+        return { action: 'select', target };
+    }
+
+    return null;
+}
+
+async function tryExecuteLocalViewerIntent(text) {
+    const command = inferViewerCommandFromText(text);
+    if (!command) return false;
+
+    const res = await executeViewerCommand(command);
+    if (res?.success) {
+        const countText = typeof res.count === 'number' ? ` (${res.count}개)` : '';
+        const message = `요청하신 뷰어 명령을 실행했습니다.${countText}`;
+        appendMessage('assistant', message);
+        chatHistory.push({ role: 'assistant', content: message });
+        return true;
+    }
+
+    addSystemMessage(`⚠️ 명령 실행 실패: ${res?.error || '알 수 없는 오류'}`);
+    appendMessage('assistant', `뷰어 명령을 실행하려고 했지만 실패했습니다: ${res?.error || '알 수 없는 오류'}`);
+    return true;
+}
+
 function processActionTags(reply) {
     let text = reply;
 
@@ -777,51 +987,18 @@ function processActionTags(reply) {
         }
     }
 
-    // 1. Reset Viewer
-    if (text.includes('[ACTION:RESET_VIEWER]')) {
-        resetViewerOverrides(window.viewer);
-        text = text.replace('[ACTION:RESET_VIEWER]', '');
-        addSystemMessage('💡 뷰어 스타일 및 격리 상태가 초기화되었습니다.');
-    }
-
-    // 2. Select
-    const selectRegex = /\[ACTION:SELECT,\s*TARGET:([^\]]+)\]/i;
-    const selectMatch = text.match(selectRegex);
-    if (selectMatch) {
-        const target = selectMatch[1].trim();
-        const dbIds  = findDbIdsByCategory(target);
-        if (dbIds.length > 0) {
-            selectAndFocusNodes(window.viewer, dbIds);
-            addSystemMessage(`💡 <b>${target}</b> 카테고리 객체 ${dbIds.length}개가 선택되었습니다.`);
-        } else {
-            addSystemMessage(`⚠️ 모델 내부에서 <b>${target}</b> 카테고리를 찾을 수 없습니다.`);
-        }
-        text = text.replace(selectRegex, '');
-    }
-
-    // 3. Theme / Color
-    const themeRegex = /\[ACTION:THEME,\s*TARGET:([^,\]]+),\s*COLOR:([^\]]+)\]/i;
-    const themeMatch = text.match(themeRegex);
-    if (themeMatch) {
-        const target = themeMatch[1].trim();
-        const color  = themeMatch[2].trim();
-        const dbIds  = findDbIdsByCategory(target);
-        if (dbIds.length > 0) {
-            setNodesColor(window.viewer, dbIds, color);
-            addSystemMessage(`💡 <b>${target}</b> 카테고리가 <b>${color}</b> 색상으로 칠해졌습니다.`);
-        } else {
-            addSystemMessage(`⚠️ 모델 내부에서 <b>${target}</b> 카테고리를 찾을 수 없습니다.`);
-        }
-        text = text.replace(themeRegex, '');
-    }
-
-    // 4. Count
-    const countRegex = /\[ACTION:COUNT,\s*TARGET:([^\]]+)\]/i;
-    const countMatch = text.match(countRegex);
-    if (countMatch) {
-        const target = countMatch[1].trim();
-        const dbIds  = findDbIdsByCategory(target);
-        text = text.replace(countRegex, `(조회 결과: 총 ${dbIds.length}개 객체 검출)`);
+    const actions = handleChatCommands(text);
+    if (actions.length > 0) {
+        actions.forEach(async (act) => {
+            const res = await executeViewerCommand(act);
+            if (res?.success) {
+                const countText = typeof res.count === 'number' ? ` (${res.count}개)` : '';
+                addSystemMessage(`💡 ${act.action.toUpperCase()} ${act.target || ''}${countText} 명령을 실행했습니다.`);
+            } else {
+                addSystemMessage(`⚠️ 명령 실행 실패: ${res?.error || '알 수 없는 오류'}`);
+            }
+        });
+        text = text.replace(/\[(?:COMMAND|ACTION)\s*:\s*(?!\s*\{)[^\]]+\]/gi, '');
     }
 
     text = text.trim();

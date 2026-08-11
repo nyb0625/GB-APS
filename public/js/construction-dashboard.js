@@ -344,12 +344,21 @@ async function loadIssues() {
     return [];
 }
 
-function summarizeByLocationAndMonth(issues, months) {
+window._monthlyIssueActiveSubTab = 'status';
+
+function getIssueTypeKey(issue) {
+    const t = getIssueTypeText(issue).toLowerCase();
+    if (t.includes('간섭') || t.includes('clash')) return 'clash';
+    if (t.includes('설계') || t.includes('design')) return 'design';
+    return 'work';
+}
+
+function summarizeByLocationAndMonth(issues, months, groupBy = 'status') {
     const rows = new Map();
 
     issues.forEach(issue => {
         const location = getIssueLocation(issue);
-        const group = getStatusGroup(issue);
+        const group = groupBy === 'status' ? getStatusGroup(issue) : getIssueTypeKey(issue);
         const endMonth = getMonthKey(getIssueEnd(issue, getIssueStart(issue)));
         if (!rows.has(location)) {
             rows.set(location, {
@@ -362,29 +371,40 @@ function summarizeByLocationAndMonth(issues, months) {
 
         const row = rows.get(location);
         row.total += 1;
-        if (group === 'closed') row.closed += 1;
+        
+        const statusGroup = getStatusGroup(issue);
+        if (statusGroup === 'closed') row.closed += 1;
 
         months.forEach(monthKey => {
             if (!issueEndsInMonth(issue, monthKey)) return;
             if (!row.months.has(monthKey)) {
-                row.months.set(monthKey, {
-                    created: 0,
-                    review: 0,
-                    delayed: 0,
-                    closed: 0,
+                const bucket = {
                     total: 0,
-                    active: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 },
-                    started: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 },
-                    ended: { created: 0, review: 0, delayed: 0, closed: 0, total: 0 }
-                });
+                    active: { total: 0 },
+                    ended: { total: 0 }
+                };
+                if (groupBy === 'status') {
+                    ['created', 'review', 'delayed', 'closed'].forEach(k => {
+                        bucket[k] = 0;
+                        bucket.active[k] = 0;
+                        bucket.ended[k] = 0;
+                    });
+                } else {
+                    ['clash', 'design', 'work'].forEach(k => {
+                        bucket[k] = 0;
+                        bucket.active[k] = 0;
+                        bucket.ended[k] = 0;
+                    });
+                }
+                row.months.set(monthKey, bucket);
             }
             const bucket = row.months.get(monthKey);
-            bucket.active[group] += 1;
+            bucket.active[group] = (bucket.active[group] || 0) + 1;
             bucket.active.total += 1;
             if (monthKey === endMonth) {
-                bucket.ended[group] += 1;
+                bucket.ended[group] = (bucket.ended[group] || 0) + 1;
                 bucket.ended.total += 1;
-                bucket[group] += 1;
+                bucket[group] = (bucket[group] || 0) + 1;
                 bucket.total += 1;
             }
         });
@@ -438,7 +458,7 @@ function renderGantt(issues) {
     `;
 }
 
-function renderStatusLegend() {
+function renderStatusLegend(groupBy = 'status') {
     if (monthlyIssueChartMode === 'dumbbell') {
         return `
             <div class="bim-chart-legend" aria-label="덤벨 차트 범례">
@@ -448,6 +468,27 @@ function renderStatusLegend() {
             </div>
         `;
     }
+    
+    if (groupBy === 'type') {
+        const TYPE_GROUPS = {
+            clash: { label: '간섭이슈', color: '#00f2fe' },
+            design: { label: '설계이슈', color: '#8b5cf6' },
+            work: { label: '업데이트 항목', color: '#f59e0b' }
+        };
+        const TYPE_ORDER = ['clash', 'design', 'work'];
+        const items = TYPE_ORDER.map(groupKey => {
+            const group = TYPE_GROUPS[groupKey];
+            return `
+                <span class="bim-chart-legend-item" title="${escapeHtml(group.label)}">
+                    <span class="bim-chart-legend-swatch" style="background:${group.color};"></span>
+                    <span>${escapeHtml(group.label)}</span>
+                </span>
+            `;
+        }).join('');
+
+        return `<div class="bim-chart-legend" aria-label="이슈 유형 색상 범례">${items}</div>`;
+    }
+
     const items = GROUP_ORDER.map(groupKey => {
         const group = STATUS_GROUPS[groupKey];
         return `
@@ -461,7 +502,7 @@ function renderStatusLegend() {
     return `<div class="bim-chart-legend" aria-label="이슈 상태 색상 범례">${items}</div>`;
 }
 
-function renderChartCell(bucket, location = '', month = '') {
+function renderChartCell(bucket, location = '', month = '', groupBy = 'status') {
     if (monthlyIssueChartMode === 'dumbbell') {
         return renderDumbbellChartCell(bucket, location, month);
     }
@@ -471,26 +512,59 @@ function renderChartCell(bucket, location = '', month = '') {
         return '<div class="bim-chart-cell"><div class="bim-chart-empty"></div></div>';
     }
 
-    const label = GROUP_ORDER
-        .map(groupKey => {
+    let segments = '';
+    let label = '';
+
+    if (groupBy === 'status') {
+        label = GROUP_ORDER
+            .map(groupKey => {
+                const activeCount = active[groupKey] || 0;
+                const endedCount = ended[groupKey] || 0;
+                if (!activeCount) return '';
+                return `${STATUS_GROUPS[groupKey].label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ''}`;
+            })
+            .filter(Boolean)
+            .join(' · ');
+
+        segments = GROUP_ORDER.map(groupKey => {
             const activeCount = active[groupKey] || 0;
             const endedCount = ended[groupKey] || 0;
             if (!activeCount) return '';
-            return `${STATUS_GROUPS[groupKey].label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ''}`;
-        })
-        .filter(Boolean)
-        .join(' · ');
+            const group = STATUS_GROUPS[groupKey];
+            const width = Math.max(3, (activeCount / active.total) * 100);
+            const segmentClass = endedCount ? 'bim-chart-seg' : 'bim-chart-seg bim-chart-seg-continuing';
+            const segmentText = endedCount ? String(endedCount) : '';
+            return `<div class="${segmentClass}" title="${escapeHtml(`${group.label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ' · 진행 중'}`)}" style="width:${width}%; background:${group.color};">${segmentText}</div>`;
+        }).join('');
+    } else {
+        const TYPE_GROUPS = {
+            clash: { label: '간섭이슈', color: '#00f2fe' },
+            design: { label: '설계이슈', color: '#8b5cf6' },
+            work: { label: '업데이트 항목', color: '#f59e0b' }
+        };
+        const TYPE_ORDER = ['clash', 'design', 'work'];
 
-    const segments = GROUP_ORDER.map(groupKey => {
-        const activeCount = active[groupKey] || 0;
-        const endedCount = ended[groupKey] || 0;
-        if (!activeCount) return '';
-        const group = STATUS_GROUPS[groupKey];
-        const width = Math.max(3, (activeCount / active.total) * 100);
-        const segmentClass = endedCount ? 'bim-chart-seg' : 'bim-chart-seg bim-chart-seg-continuing';
-        const segmentText = endedCount ? String(endedCount) : '';
-        return `<div class="${segmentClass}" title="${escapeHtml(`${group.label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ' · 진행 중'}`)}" style="width:${width}%; background:${group.color};">${segmentText}</div>`;
-    }).join('');
+        label = TYPE_ORDER
+            .map(groupKey => {
+                const activeCount = active[groupKey] || 0;
+                const endedCount = ended[groupKey] || 0;
+                if (!activeCount) return '';
+                return `${TYPE_GROUPS[groupKey].label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ''}`;
+            })
+            .filter(Boolean)
+            .join(' · ');
+
+        segments = TYPE_ORDER.map(groupKey => {
+            const activeCount = active[groupKey] || 0;
+            const endedCount = ended[groupKey] || 0;
+            if (!activeCount) return '';
+            const group = TYPE_GROUPS[groupKey];
+            const width = Math.max(3, (activeCount / active.total) * 100);
+            const segmentClass = endedCount ? 'bim-chart-seg' : 'bim-chart-seg bim-chart-seg-continuing';
+            const segmentText = endedCount ? String(endedCount) : '';
+            return `<div class="${segmentClass}" title="${escapeHtml(`${group.label} 활성 ${activeCount}건${endedCount ? ` · 종료 ${endedCount}건` : ' · 진행 중'}`)}" style="width:${width}%; background:${group.color};">${segmentText}</div>`;
+        }).join('');
+    }
 
     return `
         <div class="bim-chart-cell bim-chart-clickable" data-location="${escapeHtml(location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} · ${location} · ${label}`)}">
@@ -677,6 +751,42 @@ function bindStructureIssueListEvents(container, issues) {
     });
 }
 
+async function exportMonthlyIssuesToPdf(issuesToExport) {
+    if (!issuesToExport || !issuesToExport.length) {
+        alert("내보낼 이슈가 없습니다.");
+        return;
+    }
+    if (typeof window.buildAndOpenBatchPdf !== 'function') {
+        try {
+            await import('./comparison.js?v=pdf-hide-change-row-20260703-4');
+        } catch (err) {
+            console.error("[PDF Export] comparison.js 로드 실패:", err);
+        }
+    }
+    
+    if (typeof window.buildAndOpenBatchPdf === 'function') {
+        var BLANK_1PX = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        window.buildAndOpenBatchPdf(issuesToExport, BLANK_1PX, BLANK_1PX);
+    } else {
+        alert("PDF 생성 모듈을 불러올 수 없습니다.");
+    }
+}
+
+window.exportMonthlyIssueReport = function() {
+    const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+    const search = document.getElementById('monthly-issue-search')?.value || '';
+    const query = String(search || '').trim().toLowerCase();
+    const filteredIssues = issues.filter(issue => {
+        if (!query) return true;
+        return getIssueLocation(issue).toLowerCase().includes(query);
+    });
+    if (!filteredIssues.length) {
+        alert("내보낼 월간 이슈 데이터가 없습니다.");
+        return;
+    }
+    exportMonthlyIssuesToPdf(filteredIssues);
+};
+
 function openMonthlyIssueListModal(titleText, issues = []) {
     const modal = document.getElementById('bim-timeline-modal');
     const body = document.getElementById('bim-timeline-modal-body');
@@ -690,10 +800,19 @@ function openMonthlyIssueListModal(titleText, issues = []) {
         <div class="bim-structure-issue-summary">
             <strong>${escapeHtml(titleText)}</strong>
             <span>${issues.length}건</span>
+            <button type="button" class="bim-db-refresh monthly-popup-pdf-btn" title="이슈 목록 PDF 내보내기" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.38); color: #fca5a5; width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(239, 68, 68, 0.38); outline: none; margin-left: auto; flex-shrink: 0;">
+                <i class="fas fa-file-pdf"></i>
+            </button>
         </div>
         ${renderStructureIssueList(issues, `${titleText}이 없습니다.`)}
     `;
     bindStructureIssueListEvents(body, issues);
+    
+    const pdfBtn = body.querySelector('.monthly-popup-pdf-btn');
+    if (pdfBtn) {
+        pdfBtn.onclick = () => exportMonthlyIssuesToPdf(issues);
+    }
+    
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
 }
@@ -718,8 +837,13 @@ function openStructureIssueModal(location, month = '') {
     body.innerHTML = `
         <div class="monthly-issue-popup-detail">
             <div class="monthly-drilldown-section-head monthly-popup-title-head">
-                <h3>이슈 상태</h3>
-                <span>${issues.length}건</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <h3>이슈 상태</h3>
+                    <span>${issues.length}건</span>
+                </div>
+                <button type="button" class="bim-db-refresh monthly-popup-pdf-btn" title="PDF 내보내기" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.38); color: #fca5a5; width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(239, 68, 68, 0.38); outline: none; flex-shrink: 0;">
+                    <i class="fas fa-file-pdf"></i>
+                </button>
             </div>
             <div class="monthly-drilldown-kpis">
                 ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
@@ -746,6 +870,12 @@ function openStructureIssueModal(location, month = '') {
         </div>
     `;
     bindStructureIssueListEvents(body, issues);
+    
+    const pdfBtn = body.querySelector('.monthly-popup-pdf-btn');
+    if (pdfBtn) {
+        pdfBtn.onclick = () => exportMonthlyIssuesToPdf(issues);
+    }
+    
     body.querySelectorAll('.monthly-drilldown-month[data-drilldown-month]').forEach(button => {
         button.addEventListener('click', () => openStructureIssueModal(location, button.dataset.drilldownMonth || ''));
     });
@@ -790,8 +920,13 @@ function openMonthIssueModal(month = '') {
     body.innerHTML = `
         <div class="monthly-issue-popup-detail">
             <div class="monthly-drilldown-section-head monthly-popup-title-head">
-                <h3>이슈 상태</h3>
-                <span>${issues.length}건</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <h3>이슈 상태</h3>
+                    <span>${issues.length}건</span>
+                </div>
+                <button type="button" class="bim-db-refresh monthly-popup-pdf-btn" title="PDF 내보내기" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.38); color: #fca5a5; width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(239, 68, 68, 0.38); outline: none; flex-shrink: 0;">
+                    <i class="fas fa-file-pdf"></i>
+                </button>
             </div>
             <div class="monthly-drilldown-kpis">
                 ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
@@ -818,6 +953,12 @@ function openMonthIssueModal(month = '') {
         </div>
     `;
     bindStructureIssueListEvents(body, issues);
+    
+    const pdfBtn = body.querySelector('.monthly-popup-pdf-btn');
+    if (pdfBtn) {
+        pdfBtn.onclick = () => exportMonthlyIssuesToPdf(issues);
+    }
+    
     body.querySelectorAll('.monthly-popup-structure-filter[data-location][data-month]').forEach(button => {
         button.addEventListener('click', () => openStructureIssueModal(button.dataset.location || '', button.dataset.month || ''));
     });
@@ -1088,6 +1229,8 @@ function renderMonthlyIssueStatusTab(issues = []) {
     const root = document.getElementById('monthly-issue-status-root');
     if (!root) return;
 
+    const activeSubTab = window._monthlyIssueActiveSubTab || 'status';
+
     const search = document.getElementById('monthly-issue-search')?.value || '';
     const query = String(search || '').trim().toLowerCase();
     const filteredIssues = (Array.isArray(issues) ? issues : []).filter(issue => {
@@ -1101,18 +1244,53 @@ function renderMonthlyIssueStatusTab(issues = []) {
     }
 
     const months = buildMonthRange(filteredIssues);
-    const rows = summarizeByLocationAndMonth(filteredIssues, months);
-    const totals = filteredIssues.reduce((acc, issue) => {
-        const groupKey = getStatusGroup(issue);
-        acc.total += 1;
-        acc[groupKey] += 1;
-        return acc;
-    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
-    const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+    const rows = summarizeByLocationAndMonth(filteredIssues, months, activeSubTab);
+    
+    let kpiHtml = '';
+    
+    if (activeSubTab === 'status') {
+        const totals = filteredIssues.reduce((acc, issue) => {
+            const groupKey = getStatusGroup(issue);
+            acc.total += 1;
+            acc[groupKey] += 1;
+            return acc;
+        }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+        const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+        
+        kpiHtml = `
+            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
+            ${renderMonthlyIssueKpi('생성', totals.created, '#38bdf8', 'created')}
+            ${renderMonthlyIssueKpi('검토', totals.review, '#a78bfa', 'review')}
+            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b', 'delayed')}
+            ${renderMonthlyIssueKpi('종료', totals.closed, '#10b981', 'closed')}
+            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+        `;
+    } else {
+        const totals = filteredIssues.reduce((acc, issue) => {
+            const groupKey = getIssueTypeKey(issue);
+            acc.total += 1;
+            acc[groupKey] += 1;
+            
+            const statusGroup = getStatusGroup(issue);
+            if (statusGroup === 'closed') {
+                acc.closed += 1;
+            }
+            return acc;
+        }, { total: 0, clash: 0, design: 0, work: 0, closed: 0 });
+        const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+
+        kpiHtml = `
+            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
+            ${renderMonthlyIssueKpi('간섭이슈', totals.clash, '#00f2fe', 'clash')}
+            ${renderMonthlyIssueKpi('설계이슈', totals.design, '#8b5cf6', 'design')}
+            ${renderMonthlyIssueKpi('업데이트 항목', totals.work, '#f59e0b', 'work')}
+            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+        `;
+    }
+
     const monthWidth = Math.max(84, Math.floor(980 / Math.max(months.length, 1)));
     const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px;`;
     const yAxis = rows.map(row => {
-        const progress = row.total ? Math.round((row.closed / row.total) * 100) : 0;
         return `
             <div class="bim-chart-yitem monthly-issue-yitem monthly-issue-structure-cell bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
                 <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
@@ -1121,23 +1299,18 @@ function renderMonthlyIssueStatusTab(issues = []) {
     }).join('');
 
     const plot = rows.map(row => {
-        const cells = months.map(month => renderChartCell(row.months.get(month), row.location, month)).join('');
+        const cells = months.map(month => renderChartCell(row.months.get(month), row.location, month, activeSubTab)).join('');
         return `<div class="bim-chart-row monthly-issue-chart-row">${cells}</div>`;
     }).join('');
     const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 전체 이슈 분석 보기`)}">${getMonthLabel(month)}</button>`).join('');
 
     root.innerHTML = `
         <div class="monthly-issue-kpis monthly-issue-kpis-compact">
-            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
-            ${renderMonthlyIssueKpi('생성', totals.created, '#38bdf8', 'created')}
-            ${renderMonthlyIssueKpi('검토', totals.review, '#a78bfa', 'review')}
-            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b', 'delayed')}
-            ${renderMonthlyIssueKpi('종료', totals.closed, '#10b981', 'closed')}
-            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+            ${kpiHtml}
         </div>
         <div class="monthly-issue-workspace">
             <div class="monthly-issue-chart-wrap">
-                ${renderStatusLegend()}
+                ${renderStatusLegend(activeSubTab)}
                 <div class="bim-chart monthly-issue-chart" style="${chartStyle}">
                     <div class="bim-chart-yaxis">${yAxis}</div>
                     <div class="bim-chart-plot">${plot}</div>
@@ -1150,6 +1323,27 @@ function renderMonthlyIssueStatusTab(issues = []) {
         </div>
     `;
 }
+
+window.switchMonthlyIssueSubTab = function(subTab) {
+    window._monthlyIssueActiveSubTab = subTab;
+    
+    const statusBtn = document.getElementById('monthly-issue-subtab-status');
+    const typeBtn = document.getElementById('monthly-issue-subtab-type');
+    
+    if (statusBtn && typeBtn) {
+        if (subTab === 'status') {
+            statusBtn.classList.add('active');
+            typeBtn.classList.remove('active');
+        } else {
+            typeBtn.classList.add('active');
+            statusBtn.classList.remove('active');
+        }
+    }
+    
+    if (typeof renderMonthlyIssueStatusTab === 'function') {
+        renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+    }
+};
 
 function bindMonthlyIssueStatusTab() {
     const root = document.getElementById('monthly-issue-status-root');
@@ -1180,20 +1374,43 @@ function bindMonthlyIssueStatusTab() {
             const kpi = event.target.closest('.monthly-issue-kpi[data-status]');
             if (kpi) {
                 const statusKey = kpi.dataset.status || 'all';
+                const activeSubTab = window._monthlyIssueActiveSubTab || 'status';
                 const searchValue = document.getElementById('monthly-issue-search')?.value || '';
                 const query = String(searchValue || '').trim().toLowerCase();
                 const issues = (Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []).filter(issue => {
                     if (query && !getIssueLocation(issue).toLowerCase().includes(query)) return false;
-                    return statusKey === 'all' || getStatusGroup(issue) === statusKey;
+                    if (statusKey === 'all') return true;
+                    if (activeSubTab === 'status') {
+                        return getStatusGroup(issue) === statusKey;
+                    } else {
+                        if (statusKey === 'closed') {
+                            return getStatusGroup(issue) === 'closed';
+                        }
+                        return getIssueTypeKey(issue) === statusKey;
+                    }
                 });
-                const titleMap = {
-                    all: '전체 이슈 목록',
-                    created: '생성 이슈 목록',
-                    review: '검토 이슈 목록',
-                    delayed: '지연 이슈 목록',
-                    closed: '종료 이슈 목록'
-                };
-                openMonthlyIssueListModal(titleMap[statusKey] || '이슈 목록', issues);
+                
+                let title = '이슈 목록';
+                if (activeSubTab === 'status') {
+                    const titleMap = {
+                        all: '전체 이슈 목록',
+                        created: '생성 이슈 목록',
+                        review: '검토 이슈 목록',
+                        delayed: '지연 이슈 목록',
+                        closed: '종료 이슈 목록'
+                    };
+                    title = titleMap[statusKey] || '이슈 목록';
+                } else {
+                    const titleMap = {
+                        all: '전체 이슈 목록',
+                        clash: '간섭이슈 목록',
+                        design: '설계이슈 목록',
+                        work: '업데이트 항목 목록',
+                        closed: '종료 이슈 목록'
+                    };
+                    title = titleMap[statusKey] || '이슈 목록';
+                }
+                openMonthlyIssueListModal(title, issues);
                 return;
             }
             const monthButton = event.target.closest('.monthly-issue-month-button[data-month]');

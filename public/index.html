@@ -1442,6 +1442,17 @@
                                 <option value="closed">완료</option>
                             </select>
                             <input id="monthly-issue-search" class="bim-filter-input" type="search" placeholder="구조물 검색">
+                            <div class="monthly-issue-view-toggle">
+                                <button type="button" id="monthly-issue-subtab-status" class="active" onclick="switchMonthlyIssueSubTab('status')" title="상태별 보기">
+                                    <i class="fas fa-tasks"></i>
+                                </button>
+                                <button type="button" id="monthly-issue-subtab-type" onclick="switchMonthlyIssueSubTab('type')" title="유형별 보기">
+                                    <i class="fas fa-tags"></i>
+                                </button>
+                            </div>
+                            <button id="monthly-issue-pdf-export" class="bim-db-refresh" type="button" title="월간 이슈 PDF 내보내기" onclick="exportMonthlyIssueReport()" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.38); color: #fca5a5; margin-left: 2px;">
+                                <i class="fas fa-file-pdf"></i>
+                            </button>
                             <button id="monthly-issue-refresh" class="bim-db-refresh" type="button" title="새로고침">
                                 <i class="fas fa-sync-alt"></i>
                             </button>

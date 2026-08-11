@@ -1984,3 +1984,39 @@
 .monthly-issue-popup-detail .bim-structure-issue-table {
     margin-top: 0;
 }
+
+/* 월간 이슈 현황 헤더 뷰 토글 스타일 */
+.monthly-issue-view-toggle {
+    display: inline-flex;
+    gap: 2px;
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 6px;
+    padding: 2px;
+    height: 32px;
+    align-items: center;
+    box-sizing: border-box;
+}
+
+.monthly-issue-view-toggle button {
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.monthly-issue-view-toggle button:hover {
+    color: #7dd3fc;
+}
+
+.monthly-issue-view-toggle button.active {
+    background: rgba(56, 189, 248, 0.2) !important;
+    color: #7dd3fc !important;
+}

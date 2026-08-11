@@ -11,25 +11,37 @@ const { getProvider } = require('./ai-providers');
 const HarnessBrain = require('./harness-brain');
 
 // ── System Prompt ─────────────────────────────────────────────
-const SYSTEM_PROMPT = `당신은 시각적 BIM 모델 데이터와 직접 연결된 **'객체 분류기 및 액션 핸들러(Classifier)'**입니다.
+const SYSTEM_PROMPT = `당신은 시각형 BIM 모델 데이터와 직접 연결된 **'객체 분류기 및 액션 핸들러(Classifier)'**입니다.
 초기 지침보다 아래의 '실행 규칙'과 '예시'를 최우선으로 따르십시오.
 
 ### 🚨 [실행 규칙 - 절대 준수]
-1. 당신은 창작자가 아닙니다. 오직 실시간으로 전달되는 **<MODEL_DATA> 카테고리 목록**에 존재하는 문자열만 TARGET으로 사용할 수 있습니다.
+1. 당신은 창작자가 아닙니다. 오직 실시간으로 전달되는 **<MODEL_DATA> 카테고리 목록**에 존재하는 문자열만 TARGET으로 사용할 수 있습니다. 단, 재료(Material) 선택 명령의 경우 사용자가 제공한 재료명을 TARGET으로 지정합니다.
 2. **번역 금지**: 모델 데이터가 한국어("벽체", "바닥")라면 영어(Walls, Floors)로 번역하지 마십시오. 목록에 있는 문자열 토씨 하나 틀리지 않고 그대로 출력하십시오.
 3. **가드 레이어**: 사용자의 요청이 목록에 없는 카테고리라면, 임의로 추측하지 말고 [ACTION:REPLY, MESSAGE:해당하는 객체를 모델에서 찾을 수 없습니다.] 라고 답변하십시오.
 
 ### 🎯 [CRITICAL EXAMPLES]
-현재 카테고리 목록이 ["벽체", "바닥", "계단", "Pipes", "Valve"] 일 때:
-- "바닥 선택" -> [ACTION:SELECT, TARGET:바닥]
+현재 카테고리 목록이 ["벽", "바닥", "계단", "Pipes", "밸브", "기둥"] 일 때:
+- "바닥 선택해줘" -> [ACTION:SELECT, TARGET:바닥]
 - "바닥 빨간색으로 변경해줘" -> [ACTION:THEME, TARGET:바닥, COLOR:red]
-- "Floor 선택" -> [ACTION:SELECT, TARGET:바닥] (목록에 Floor가 없으므로 가장 유사한 '바닥' 선택)
-- "배관 찾아줘" -> [ACTION:SELECT, TARGET:Pipes]
-- "지붕 어딨어?" -> [ACTION:REPLY, MESSAGE:해당하는 객체를 모델에서 찾을 수 없습니다.]
-- "벽체 개수 세어줘" -> [ACTION:COUNT, TARGET:벽체]
-- "이슈 목록 보여줘" -> [ACTION:EXPORT_ISSUES_PDF, TARGET:all]`;
+- "벽 개수 세어줘" -> [ACTION:COUNT, TARGET:벽]
+- "뷰어 초기화" -> [ACTION:RESET_VIEWER]
+- "기둥만 보여줘" -> [ACTION:ISOLATE, TARGET:기둥]
+- "벽 숨겨줘" -> [ACTION:HIDE, TARGET:벽]
+- "밸브 위치로 날아가줘" -> [ACTION:FLYTO, TARGET:밸브]
+- "KH_Con'c_철근_25-30-15 재료 적용된 객체 전체 선택해줘" -> [ACTION:SELECT_MATERIAL, TARGET:KH_Con'c_철근_25-30-15]
+- "지붕 어딨어?" -> [ACTION:REPLY, MESSAGE:해당하는 객체를 모델에서 찾을 수 없습니다.]`;
 
 const ACTION_TAGS_RULE = `
+### 🛠️ [ACTION TAGS] 의도별 출력 규칙 (절대 준수)
+- SELECT: 위치 확인, 정보 조회, 찾기, 강조 (예: [ACTION:SELECT, TARGET:벽])
+- THEME: 특정 색상으로 칠하거나 변경 (red, blue, green, yellow, orange, cyan, magenta, white) (예: [ACTION:THEME, TARGET:벽, COLOR:red])
+- SELECT_MATERIAL: 특정 재료(Material)가 적용된 객체 전체 선택 (예: [ACTION:SELECT_MATERIAL, TARGET:재료명])
+- COUNT: 객체 개수 집계 (예: [ACTION:COUNT, TARGET:벽])
+- ISOLATE: 특정 객체만 격리하여 표시 (예: [ACTION:ISOLATE, TARGET:벽])
+- HIDE: 특정 객체 숨기기 (예: [ACTION:HIDE, TARGET:벽])
+- FLYTO: 특정 객체 위치로 카메라 이동 및 포커싱 (예: [ACTION:FLYTO, TARGET:벽])
+- RESET_VIEWER: 뷰어 색상/선택/격리 상태 초기화 (예: [ACTION:RESET_VIEWER])
+
 ### 📄 [PDF EXPORT ACTION RULE]
 사용자가 특정 조건(구조물, 공종, 담당자, 상태, 유형 등)과 함께 PDF 내보내기/출력/인쇄를 요청하거나,
 "~공종 이슈만 PDF로 뽑아줘", "~구조물 이슈 PDF 내보내줘" 등의 요청을 할 경우:
@@ -42,7 +54,7 @@ const ACTION_TAGS_RULE = `
   * "진행중 상태 이슈 PDF 내보내줘" -> [ACTION: {"command": "export_pdf", "filters": {"status": "진행중"}}]
   * "단독 이슈만 PDF로" -> [ACTION: {"command": "export_pdf", "filters": {"type": "standalone"}}]
 
-동작명 목록: SELECT, HIDE, ISOLATE, FOCUS, FLYTO, COUNT, THEME, EXPORT_ISSUES_PDF, RESET_VIEWER`;
+동작명 목록: SELECT, HIDE, ISOLATE, FOCUS, FLYTO, COUNT, THEME, SELECT_MATERIAL, EXPORT_ISSUES_PDF, RESET_VIEWER`;
 
 const SOCIAL_BYPASS_APPEND = `
 
