@@ -2,8 +2,8 @@
    cctv.js — CCTV & BIM Monitoring Tab Logic (ES6 Module)
    ========================================================================== */
 
-import { initViewer, loadModel } from './viewer.js';
-import { refreshGlobalVisibilityPopup, initModelVisibilityPopupEvents } from './model-visibility.js';
+import { initViewer, loadModel } from './viewer.js?v=20260804-main-rotate-fix1';
+import { refreshGlobalVisibilityPopup, initModelVisibilityPopupEvents } from './model-visibility.js?v=20260804-tab-preserve1';
 
 // Predefined camera state corresponding to CCTV camera view angle for model alignment
 const CCTV_CAMERA_STATE = {
@@ -16,6 +16,7 @@ let currentCctvImg = '/img/lapse/lapse_1.jpg';
 let activeChannel = null;
 let currentHlsInstance = null;
 let currentPresetIdx = 0;
+let cctvModelLoadSeq = 0;
 
 const PRESET_VIEWS = [
     { name: '조감도 (ISO)', position: { x: -120, y: 180, z: 90 }, target: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
@@ -24,6 +25,14 @@ const PRESET_VIEWS = [
 ];
 
 export async function initCctvTab() {
+    if (window._cctvTabInitialized) {
+        if (window.cctvViewer && typeof window.cctvViewer.resize === 'function') {
+            setTimeout(() => window.cctvViewer.resize(), 50);
+        }
+        return;
+    }
+    window._cctvTabInitialized = true;
+
     // 1. Initialize Autodesk Viewer
     await initCctvBimViewer();
 
@@ -57,15 +66,7 @@ async function initCctvBimViewer() {
     const nameLabel = document.getElementById('loaded-model-name');
     if (!container) return;
 
-    const savedUrn = localStorage.getItem('aps_last_urn');
-    const savedName = localStorage.getItem('aps_last_urn_name');
-    
-    // Default fallback URN: 강북_구조물_신설_02_응집침전지_C
-    const defaultUrn = 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLk1EYVFnc1N6UVBheVJHaU53dGl3cUE_dmVyc2lvbj0y';
-    const defaultName = '강북_구조물_신설_02_응집침전지_C';
-    
-    const targetUrn = savedUrn || defaultUrn;
-    const targetName = savedName || defaultName;
+    const targetName = 'CCTV 위치를 선택하면 지정 모델이 로드됩니다.';
 
     if (nameLabel) {
         nameLabel.textContent = targetName;
@@ -73,16 +74,11 @@ async function initCctvBimViewer() {
     }
 
     try {
-        const resolvedUrn = await resolveCctvModelUrn(targetName, targetUrn);
-        console.log(`[CCTV Viewer] Initializing model: ${targetName}`);
+        console.log('[CCTV Viewer] Initializing empty CCTV viewer.');
         const viewer = await initViewer(container, true);
         if (viewer) {
             window.cctvViewer = viewer;
-            await loadModel(viewer, resolvedUrn);
-            if (window.applyModelRotation) {
-                window.applyModelRotation(viewer, resolvedUrn, true);
-            }
-            console.log('[CCTV Viewer] Model loaded successfully.');
+            console.log('[CCTV Viewer] Viewer initialized.');
         }
     } catch (err) {
         console.error('[CCTV Viewer] Initialization failed:', err);
@@ -257,6 +253,8 @@ function findUrnByModelName(treeNode, targetModelName) {
 }
 
 async function resolveCctvModelUrn(modelName, rawUrn) {
+    if (rawUrn) return rawUrn;
+
     let treeData = window._globalRvtModelsCache;
     if (!treeData && typeof window.fetchGlobalRvtModels === 'function') {
         try { treeData = await window.fetchGlobalRvtModels(); } catch (e) {}
@@ -269,6 +267,77 @@ async function resolveCctvModelUrn(modelName, rawUrn) {
         }
     }
     return rawUrn;
+}
+
+function unloadCctvViewerModels(viewer) {
+    if (!viewer || !viewer.impl) return;
+    try {
+        const queue = typeof viewer.impl.modelQueue === 'function' ? viewer.impl.modelQueue() : null;
+        const models = queue && typeof queue.getModels === 'function' ? queue.getModels() : [];
+        models.forEach(model => {
+            try {
+                viewer.impl.unloadModel(model);
+            } catch (err) {
+                console.warn('[CCTV Viewer] Existing model unload skipped:', err.message);
+            }
+        });
+        if (typeof viewer.clearSelection === 'function') viewer.clearSelection();
+        if (typeof viewer.clearThemingColors === 'function') viewer.clearThemingColors();
+    } catch (err) {
+        console.warn('[CCTV Viewer] Failed to clear existing models:', err.message);
+    }
+}
+
+async function loadCctvModelForChannel({ viewer, modelUrn, modelName, channelTitle, channelId }) {
+    if (!viewer || !modelUrn) return null;
+
+    const seq = ++cctvModelLoadSeq;
+    const nameLabel = document.getElementById('loaded-model-name');
+    const label = channelTitle
+        ? `${modelName || '지정 모델'} (${channelTitle})`
+        : (modelName || '지정 모델');
+
+    if (nameLabel) {
+        nameLabel.textContent = `로딩 중: ${label}`;
+        nameLabel.title = label;
+    }
+
+    const projectViewer = window.projectViewer || window.myGlobalViewer || (window.viewer !== viewer ? window.viewer : null);
+    unloadCctvViewerModels(viewer);
+    const model = await loadModel(viewer, modelUrn);
+    if (window.viewer === viewer && projectViewer && projectViewer !== viewer) {
+        window.viewer = projectViewer;
+        window.myGlobalViewer = projectViewer;
+    }
+    if (seq !== cctvModelLoadSeq) {
+        try {
+            if (model && viewer.impl) viewer.impl.unloadModel(model);
+        } catch (err) {
+            console.warn('[CCTV Viewer] Stale model unload skipped:', err.message);
+        }
+        return model;
+    }
+
+    if (window.applyModelRotation) {
+        window.applyModelRotation(viewer, modelUrn, true);
+    }
+
+    if (nameLabel) {
+        nameLabel.textContent = label;
+        nameLabel.title = label;
+    }
+
+    const savedState = localStorage.getItem(`cctv_saved_view_${channelId || 'default'}`);
+    if (savedState) {
+        try {
+            viewer.restoreState(JSON.parse(savedState));
+            console.log(`[CCTV Viewpoint Restored] Restored saved camera angle for channel ${channelId}`);
+        } catch (err) {
+            console.warn('[CCTV Viewpoint Restore] Invalid saved state ignored:', err.message);
+        }
+    }
+
+    return model;
 }
 
 /**
@@ -314,21 +383,15 @@ function bindChannelCards(channels) {
 
             // Load & switch 3D BIM model in cctvViewer
             if (window.cctvViewer && modelUrn) {
-                const nameLabel = document.getElementById('loaded-model-name');
-                if (nameLabel) {
-                    nameLabel.textContent = `${modelName} (${title})`;
-                    nameLabel.title = `${modelName} (${title})`;
-                }
                 try {
-                    await loadModel(window.cctvViewer, modelUrn);
+                    await loadCctvModelForChannel({
+                        viewer: window.cctvViewer,
+                        modelUrn,
+                        modelName,
+                        channelTitle: title,
+                        channelId: ch.id || card.dataset.cctvId
+                    });
                     console.log(`[CCTV BIM Model Sync] Successfully loaded model: ${modelName}`);
-
-                    // Restore saved viewpoint if available
-                    const savedState = localStorage.getItem(`cctv_saved_view_${ch.id}`);
-                    if (savedState) {
-                        window.cctvViewer.restoreState(JSON.parse(savedState));
-                        console.log(`[CCTV Viewpoint Restored] Restored saved camera angle for channel ${ch.id}`);
-                    }
                 } catch (err) {
                     console.warn(`[CCTV BIM Model Sync] Failed to load model ${modelUrn}:`, err);
                 }
@@ -367,18 +430,14 @@ function initTimelineHandlers() {
 
             const modelUrn = await resolveCctvModelUrn(modelName, rawModelUrn);
             if (window.cctvViewer && modelUrn) {
-                const nameLabel = document.getElementById('loaded-model-name');
-                if (nameLabel) {
-                    nameLabel.textContent = `${modelName} (${title})`;
-                    nameLabel.title = `${modelName} (${title})`;
-                }
                 try {
-                    await loadModel(window.cctvViewer, modelUrn);
-
-                    const savedState = localStorage.getItem(`cctv_saved_view_${cctvId}`);
-                    if (savedState) {
-                        window.cctvViewer.restoreState(JSON.parse(savedState));
-                    }
+                    await loadCctvModelForChannel({
+                        viewer: window.cctvViewer,
+                        modelUrn,
+                        modelName,
+                        channelTitle: title,
+                        channelId: cctvId
+                    });
                 } catch (err) {
                     console.warn(`[CCTV Static BIM Sync] Failed to load model ${modelUrn}:`, err);
                 }
@@ -1014,8 +1073,13 @@ if (typeof window !== 'undefined') {
     window.refreshCctvIssuesTable = refreshCctvIssuesTable;
 }
 
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    initCctvTab();
-} else {
-    document.addEventListener('DOMContentLoaded', initCctvTab);
+const shouldAutoInitCctvPage = window.location.pathname.toLowerCase().endsWith('/cctv.html') ||
+    !document.getElementById('tab-content-cctv');
+
+if (shouldAutoInitCctvPage) {
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        initCctvTab();
+    } else {
+        document.addEventListener('DOMContentLoaded', initCctvTab);
+    }
 }

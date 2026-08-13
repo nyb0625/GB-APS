@@ -435,7 +435,6 @@ function renderGantt(issues) {
         return `
             <div class="bim-chart-yitem bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
                 <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
-                <div class="bim-structure-summary">${row.total}건 · 종료 ${row.closed} · ${progress}%</div>
             </div>
         `;
     }).join('');
@@ -611,6 +610,17 @@ function getIssuesForStructure(location, month = '') {
         if (getIssueLocation(issue) !== location) return false;
         return month ? issueEndsInMonth(issue, month) : true;
     });
+}
+
+function getClashIssuesForStructure(location) {
+    const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+    return issues.filter(issue => getIssueLocation(issue) === location && isClashIssue(issue));
+}
+
+function openClashStructureIssueModal(location) {
+    if (!location) return;
+    const issues = getClashIssuesForStructure(location);
+    openMonthlyIssueListModal(`${location} 간섭 목록`, issues);
 }
 
 function getIssuesForMonth(month = '') {
@@ -1529,6 +1539,16 @@ function renderClashStructureChart(issues) {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
+            onClick(event, elements, chart) {
+                const hit = elements && elements[0];
+                if (!hit) return;
+                const structure = chart.data.labels[hit.index];
+                openClashStructureIssueModal(structure);
+            },
+            onHover(event, elements) {
+                const target = event?.native?.target;
+                if (target) target.style.cursor = elements && elements.length ? 'pointer' : 'default';
+            },
             plugins: {
                 legend: {
                     position: 'top',

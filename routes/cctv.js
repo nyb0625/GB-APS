@@ -83,7 +83,7 @@ const UTIC_CCTV_CHANNELS = [
         streamType: 'hls',
         streamUrl: 'https://strm1.spatic.go.kr/live/82.stream/playlist.m3u8',
         modelName: '강북_구조물_신설_06_역세척펌프동_C',
-        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLjFZR3FvRXZ0U1lXZ29SN19WN016bXc_dmVyc2lvbj08',
+        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLjFZR3FvRXZ0U1lXZ29SN19WN016bXc_dmVyc2lvbj04',
         img: '/img/lapse/lapse_2.jpg'
     },
     {

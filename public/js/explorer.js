@@ -533,16 +533,22 @@ class FolderExplorer {
         try {
             // Import and call view load function dynamically from viewer.js
             const { initViewer, loadModel } = await import('./viewer.js?v=20260804-main-rotate-fix1');
-            if (!window.viewer) {
-                window.viewer = await initViewer(document.getElementById('preview'), false);
+            if (!window.projectViewer || window.projectViewer === window.cctvViewer) {
+                window.projectViewer = await initViewer(document.getElementById('preview'), false);
             }
-            if (window.viewer) {
+            if (!window.viewer || window.viewer === window.cctvViewer) {
+                window.viewer = window.projectViewer;
+                window.myGlobalViewer = window.projectViewer;
+            }
+            if (window.projectViewer) {
                 // Clean up current model if exists
-                if (window.viewer.model) {
-                    window.viewer.unloadModel(window.viewer.model);
+                if (window.projectViewer.model) {
+                    window.projectViewer.unloadModel(window.projectViewer.model);
                 }
                 
-                await loadModel(window.viewer, urn);
+                await loadModel(window.projectViewer, urn);
+                window.viewer = window.projectViewer;
+                window.myGlobalViewer = window.projectViewer;
                 console.log(`[Explorer] Model loaded: ${name}`);
                 window.currentUrn = urn;
                 window.currentUrnName = name;

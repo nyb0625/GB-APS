@@ -2785,6 +2785,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         viewerInstance = await initViewer(document.getElementById('preview'));
         window.viewer = viewerInstance; // Expose to global window scope
         window.myGlobalViewer = viewerInstance;
+        window.projectViewer = viewerInstance;
         window.loadModel = loadModel;
         window.onModelSelected = onModelSelected;
         console.log('[Main] Viewer initialized successfully.');
@@ -2925,13 +2926,13 @@ async function checkLoginStatus() {
             return true;
         } else {
             profileSec.innerHTML = `
-                <a href="/api/auth/login" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
+                <a href="/api/auth/login?force=1" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
             `;
             return false;
         }
     } catch (err) {
         profileSec.innerHTML = `
-            <a href="/api/auth/login" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
+            <a href="/api/auth/login?force=1" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
         `;
         return false;
     }
@@ -3012,7 +3013,7 @@ async function updateSourceView() {
                             <p style="color: var(--text-muted); max-width: 400px; margin: 0 auto 1.5rem auto; font-size: 0.9rem; line-height: 1.5;">
                                 Autodesk Docs의 허브, 프로젝트, 폴더를 직접 탐색하고 3D BIM 도면을 AI 에이전트와 연동하려면 먼저 로그인해 주십시오.
                             </p>
-                            <a href="/api/auth/login" class="login-btn" style="padding: 0.6rem 1.5rem; font-size: 0.95rem;">
+                            <a href="/api/auth/login?force=1" class="login-btn" style="padding: 0.6rem 1.5rem; font-size: 0.95rem;">
                                 <i class="fab fa-autodesk"></i> Autodesk Docs 로그인
                             </a>
                         </td>
@@ -7748,6 +7749,115 @@ window.bindIssueItemClickEvents = function() {
         return resolveKnownUser(issue && (issue.reviewer || issue.verifier) || '');
     }
 
+    function issueText(value) {
+        if (value == null) return '';
+        if (Array.isArray(value)) return value.map(issueText).filter(Boolean).join(' > ');
+        if (typeof value === 'object') {
+            return value.path || value.typePath || value.issueTypePath || value.categoryPath ||
+                value.fullName || value.displayName || value.title || value.name || value.text || value.value || '';
+        }
+        return String(value).trim();
+    }
+
+    function pickDeepValue(source, paths) {
+        if (!source || typeof source !== 'object') return '';
+        for (var i = 0; i < paths.length; i++) {
+            var parts = String(paths[i]).split('.');
+            var cur = source;
+            for (var j = 0; j < parts.length; j++) {
+                if (!cur || typeof cur !== 'object') {
+                    cur = null;
+                    break;
+                }
+                cur = cur[parts[j]];
+            }
+            var text = issueText(cur);
+            if (text) return text;
+        }
+        return '';
+    }
+
+    function cleanIssueTypePart(value) {
+        return String(value || '')
+            .replace(/^건화\s*>\s*/i, '')
+            .replace(/^이슈\s*>\s*/i, '')
+            .replace(/^issue\s*>\s*/i, '')
+            .replace(/^건화$/i, '')
+            .replace(/^이슈$/i, '')
+            .replace(/^issue$/i, '')
+            .trim();
+    }
+
+    function getIssueTypeParts(issue) {
+        if (!issue) return [];
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue;
+        var candidates = [
+            issue.typePath, issue.type_path, issue.typeFullName, issue.issueTypePath, issue.issue_type_path,
+            issue.categoryPath, issue.category_path, issue.issueCategoryPath,
+            raw.typePath, raw.type_path, raw.typeFullName, raw.issueTypePath, raw.issue_type_path,
+            raw.categoryPath, raw.category_path, raw.issueCategoryPath
+        ];
+
+        var direct = candidates.map(issueText).find(function(text) { return !!text; }) ||
+            pickDeepValue(raw, [
+                'attributes.typePath',
+                'attributes.issueTypePath',
+                'attributes.categoryPath',
+                'attributes.issueCategoryPath'
+            ]);
+
+        if (!direct) {
+            var parent = issueText(issue.issueType || issue.type || pickDeepValue(raw, [
+                'issueType.name',
+                'issueType.title',
+                'type.name',
+                'type.title',
+                'attributes.issueType.name',
+                'attributes.issueType.title',
+                'attributes.type.name',
+                'attributes.type.title',
+                'attributes.issueType',
+                'attributes.type'
+            ]));
+            var child = issueText(issue.issueSubtype || issue.subtype || pickDeepValue(raw, [
+                'issueSubtype.name',
+                'issueSubtype.title',
+                'subtype.name',
+                'subtype.title',
+                'attributes.issueSubtype.name',
+                'attributes.issueSubtype.title',
+                'attributes.subtype.name',
+                'attributes.subtype.title',
+                'attributes.issueSubtype',
+                'attributes.subtype'
+            ]));
+            direct = [parent, child].filter(Boolean).join(' > ');
+        }
+
+        if (!direct) direct = issueText(issue.type || issue.issueType || issue.category || raw.type || raw.issueType || raw.category);
+
+        return String(direct || '')
+            .split(/\s*>\s*|\s*\/\s*/)
+            .map(cleanIssueTypePart)
+            .filter(function(part) {
+                return part && part !== '-' && part.toLowerCase() !== 'undefined' && part.toLowerCase() !== 'null';
+            });
+    }
+
+    function getIssueTypeSearchText(issue) {
+        return getIssueTypeParts(issue).join(' ').toLowerCase();
+    }
+
+    function getIssueDisplayType(issue) {
+        var parts = getIssueTypeParts(issue);
+        if (!parts.length) return '-';
+        var meaningful = parts.filter(function(part) {
+            var key = part.toLowerCase();
+            return key !== 'forma' && key !== '이슈' && key !== 'issue';
+        });
+        return meaningful.length ? meaningful[meaningful.length - 1] : parts[parts.length - 1];
+    }
+
     function field(issue, key) {
         if (!issue) return '-';
         var value = '-';
@@ -7755,30 +7865,8 @@ window.bindIssueItemClickEvents = function() {
         else if (key === 'title') value = issue.title;
         else if (key === 'status') value = issue.status;
         else if (key === 'type') {
-            var rawType = issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || '-';
-            if (typeof rawType === 'object' && rawType) {
-                rawType = rawType.name || rawType.text || rawType.title || rawType.typePath || '-';
-            }
-            var cleaned = String(rawType)
-                .replace(/^건화\s*>\s*/i, '')
-                .replace(/^이슈\s*>\s*/i, '')
-                .replace(/^issue\s*>\s*/i, '')
-                .trim();
-
-            if (cleaned === '이슈' || cleaned === 'Issue' || cleaned === '' || cleaned === '-') {
-                var cat = String(issue.category || '').trim();
-                if (cat && cat !== '이슈' && cat !== 'Issue') {
-                    cleaned = cat;
-                } else {
-                    var tLabel = issueTypeLabel(issue);
-                    if (tLabel && tLabel !== 'FORMA') {
-                        cleaned = tLabel;
-                    } else {
-                        cleaned = '기타';
-                    }
-                }
-            }
-            value = cleaned;
+            value = getIssueDisplayType(issue);
+            if (value === '-' || !value) value = issueTypeLabel(issue) || '기타';
         }
         else if (key === 'assignee') value = issue.assignee;
         else if (key === 'dueDate') value = fmtDate(issue.dueDate || issue.endDate || issue.duedate);
@@ -7835,10 +7923,39 @@ window.bindIssueItemClickEvents = function() {
         return false;
     }
 
-    async function fetchFormaIssues(force) {
-        if (!force && window._gangbukFormaSSOT && window._gangbukFormaSSOT.length && Date.now() - formaCache.ts < 60000) {
-            return window._gangbukFormaSSOT;
+    var FORMA_ISSUE_STALE_CACHE_KEY = 'gangbuk_forma_issue_stale_cache_v1';
+    var formaIssueRefreshInFlight = null;
+
+    function readFormaIssueStaleCache() {
+        try {
+            var cached = JSON.parse(localStorage.getItem(FORMA_ISSUE_STALE_CACHE_KEY) || 'null');
+            if (cached && Array.isArray(cached.issues)) return cached;
+        } catch (e) {}
+        return null;
+    }
+
+    function writeFormaIssueStaleCache(issues) {
+        try {
+            localStorage.setItem(FORMA_ISSUE_STALE_CACHE_KEY, JSON.stringify({
+                ts: Date.now(),
+                issues: issues || []
+            }));
+        } catch (e) {
+            console.warn('[Forma Issues] stale cache save failed:', e);
         }
+    }
+
+    function syncFormaIssueGlobals(issues, ts) {
+        var list = Array.isArray(issues) ? issues : [];
+        formaCache = { issues: list, ts: ts || Date.now(), error: null };
+        window._gangbukFormaSSOT = list;
+        window._gangbukFormaCache = list;
+        window.currentIssueList = list;
+        window.currentFilteredIssues = list.slice();
+        return list;
+    }
+
+    async function fetchFormaIssuesFromServer() {
         var resp = await fetch('/api/issues/forma-gangbuk?limit=500', { credentials: 'same-origin' });
         if (!resp.ok) {
             var body = await resp.json().catch(function() { return {}; });
@@ -7849,12 +7966,43 @@ window.bindIssueItemClickEvents = function() {
         issues = issues.filter(function(issue) {
             return !isGunhwaIssueClient(issue);
         });
-        formaCache = { issues: issues, ts: Date.now(), error: null };
-        window._gangbukFormaSSOT = issues;
-        window._gangbukFormaCache = issues;
-        window.currentIssueList = issues;
-        window.currentFilteredIssues = issues.slice();
-        return issues;
+        writeFormaIssueStaleCache(issues);
+        return syncFormaIssueGlobals(issues);
+    }
+
+    function refreshFormaIssuesInBackground() {
+        if (formaIssueRefreshInFlight) return formaIssueRefreshInFlight;
+        formaIssueRefreshInFlight = fetchFormaIssuesFromServer()
+            .then(function(list) {
+                if (typeof window.renderIssueTable === 'function') {
+                    window.renderIssueTable(true);
+                }
+                return list;
+            })
+            .catch(function(err) {
+                formaCache.error = err;
+                console.warn('[Forma Issues] background refresh failed:', err.message);
+                return window._gangbukFormaSSOT || [];
+            })
+            .finally(function() {
+                formaIssueRefreshInFlight = null;
+            });
+        return formaIssueRefreshInFlight;
+    }
+
+    async function fetchFormaIssues(force) {
+        if (!force && window._gangbukFormaSSOT && window._gangbukFormaSSOT.length && Date.now() - formaCache.ts < 60000) {
+            return window._gangbukFormaSSOT;
+        }
+        if (!force) {
+            var cached = readFormaIssueStaleCache();
+            if (cached && cached.issues.length) {
+                var cachedIssues = syncFormaIssueGlobals(cached.issues, cached.ts);
+                refreshFormaIssuesInBackground();
+                return cachedIssues;
+            }
+        }
+        return await fetchFormaIssuesFromServer();
     }
     window.loadFormaIssuesForMainTab = fetchFormaIssues;
 
@@ -7912,7 +8060,7 @@ window.bindIssueItemClickEvents = function() {
 
     function matchesIssueTypeFilter(issue, filter) {
         if (!filter || filter === 'all') return true;
-        var typeText = String(issue.typePath || issue.type || issue.category || '').toLowerCase();
+        var typeText = getIssueTypeSearchText(issue);
         if (filter === 'design') return typeText.indexOf('설계') > -1 || typeText.indexOf('design') > -1;
         if (filter === 'clash') return typeText.indexOf('간섭') > -1 || typeText.indexOf('clash') > -1 || typeText.indexOf('collision') > -1;
         if (filter === 'update') return typeText.indexOf('업데이트') > -1 || typeText.indexOf('update') > -1;
@@ -7921,9 +8069,7 @@ window.bindIssueItemClickEvents = function() {
 
     function issueTypeLabel(issue) {
         if (!issue) return 'FORMA';
-        var rawType = issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || issue.issueType || '';
-        if (typeof rawType === 'object' && rawType) rawType = rawType.name || rawType.text || rawType.title || rawType.typePath || '';
-        var typeText = String(rawType).replace(/^건화\s*>\s*/i, '').toLowerCase();
+        var typeText = getIssueTypeSearchText(issue);
 
         if (typeText.indexOf('업데이트') > -1 || typeText.indexOf('update') > -1) return '업데이트';
         if (typeText.indexOf('설계') > -1 || typeText.indexOf('design') > -1) return '설계이슈';
@@ -8427,4 +8573,10 @@ window.bindIssueItemClickEvents = function() {
     } else {
         renderColumnMenu();
     }
+
+    setTimeout(function() {
+        fetchFormaIssues(false).catch(function(err) {
+            console.warn('[Forma Issues] prefetch failed:', err.message);
+        });
+    }, 800);
 })();

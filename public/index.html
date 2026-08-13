@@ -926,6 +926,7 @@
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
                 <button id="main-tab-example1-btn" class="tab-btn main-tab-btn" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
+                <button id="main-tab-example2-btn" class="tab-btn main-tab-btn" onclick="switchTab('example2')"><i class="fas fa-table-columns"></i> 예시2</button>
                 <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
                 <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
                 <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
@@ -956,7 +957,7 @@
 
             <!-- Login / Profile Section -->
             <div id="login-profile-section">
-                <a href="/api/auth/login" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
+                <a href="/api/auth/login?force=1" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
             </div>
         </div>
     </header>
@@ -1422,6 +1423,23 @@
                         </section>
                     </div>
 
+                </div>
+            </div>
+
+            <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; height: 100%; min-height: 0;">
+                    <section id="example2-left-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
+                        <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
+                            <i class="fas fa-calendar-check" style="color: #38bdf8; margin-right: 8px;"></i> 업무 일정
+                        </div>
+                        <div id="example2-work-schedule" style="flex: 1; min-height: 0;"></div>
+                    </section>
+                    <section id="example2-right-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(16, 185, 129, 0.24); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
+                        <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
+                            <i class="fas fa-diagram-project" style="color: #10b981; margin-right: 8px;"></i> 업무
+                        </div>
+                        <div id="example2-cde-tasks" style="flex: 1; min-height: 0;"></div>
+                    </section>
                 </div>
             </div>
 
@@ -2182,7 +2200,7 @@
     </script>
     <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
     <!-- Main Entry Point Module -->
-    <script src="./js/main.js?v=20260807-location1" type="module"></script>
+    <script src="./js/main.js?v=20260812-project-cctv-viewer1" type="module"></script>
 
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
@@ -2208,9 +2226,10 @@
             var construction = document.getElementById('construction-bim-dashboard');
             var monthlyIssues = document.getElementById('monthly-issue-status-tab');
             var example1 = document.getElementById('example1-tab');
+            var example2 = document.getElementById('example2-tab');
 
             // 🚨 [핵심 방어막] 탭 전환 시 기존의 모든 비-프로젝트 탭들을 우선 일괄 display: none 처리하여 화면 밀림/겹침 완벽 차단
-            var allNonProjectTabs = [dashboard, issue, cctv, construction, monthlyIssues, example1];
+            var allNonProjectTabs = [dashboard, issue, cctv, construction, monthlyIssues, example1, example2];
             allNonProjectTabs.forEach(function(tabEl) {
                 if (tabEl) tabEl.style.display = 'none';
             });
@@ -2236,6 +2255,28 @@
                         const hint = document.getElementById('viewer-hint');
                         if (hint) hint.style.opacity = '0';
                     }, 3000);
+                }
+            }
+
+            if (example2 && tabName === 'example2') {
+                example2.style.display = 'block';
+                example2.style.position = 'relative';
+                example2.style.zIndex = '10';
+                if (!window._example2ScheduleInited) {
+                    window._example2ScheduleInited = true;
+                    import('./js/example2-schedule.js?v=20260813-work-schedule-today1')
+                        .then(mod => { if (typeof mod.initExample2Schedule === 'function') mod.initExample2Schedule(); })
+                        .catch(err => console.error('[Example2 Schedule] init 실패:', err));
+                } else if (typeof window.initExample2Schedule === 'function') {
+                    window.initExample2Schedule();
+                }
+                if (!window._example2CdeTasksInited) {
+                    window._example2CdeTasksInited = true;
+                    import('./js/example2-cde-tasks.js?v=20260813-workflow-viewer2')
+                        .then(mod => { if (typeof mod.initExample2CdeTasks === 'function') mod.initExample2CdeTasks(); })
+                        .catch(err => console.error('[Example2 CDE Tasks] init 실패:', err));
+                } else if (typeof window.initExample2CdeTasks === 'function') {
+                    window.initExample2CdeTasks();
                 }
             }
 
@@ -2285,7 +2326,7 @@
                 cctv.style.zIndex = '10';
                 if (!window._cctvInited) {
                     window._cctvInited = true;
-                    import('./js/cctv.js')
+                    import('./js/cctv.js?v=20260812-cctv-model-sync5')
                         .then(mod => { if (typeof mod.initCctvTab === 'function') mod.initCctvTab(); })
                         .catch(err => console.error('[CCTV] init 실패:', err));
                 }
@@ -2298,6 +2339,10 @@
 
             if (project) {
                 if (tabName === 'project') {
+                    if (window.projectViewer && window.viewer === window.cctvViewer) {
+                        window.viewer = window.projectViewer;
+                        window.myGlobalViewer = window.projectViewer;
+                    }
                     // 뷰어 복귀 (정상 표시)
                     project.style.position = 'relative';
                     project.style.opacity = '1';
@@ -2332,7 +2377,7 @@
         window.addEventListener('DOMContentLoaded', function() {
             var params = new URLSearchParams(window.location.search);
             var tabParam = params.get('tab') || 'dashboard';
-            if (tabParam && ['dashboard', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
+            if (tabParam && ['dashboard', 'example1', 'example2', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
                 if (typeof window.switchTab === 'function') {
                     window._initialMainTabApplied = false;
                     window.switchTab(tabParam);

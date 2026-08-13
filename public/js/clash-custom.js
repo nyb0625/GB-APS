@@ -372,7 +372,7 @@ function renderClashList(instances, opts = {}) {
             <div style="font-weight:700; margin-bottom:4px;">⚠️ BIM Metadata 기반 표시 중</div>
             <div style="color:#94a3b8;">실제 ACC Model Coordination 간섭 데이터를 불러오려면 <strong style="color:#38bdf8;">Autodesk 계정 로그인</strong>이 필요합니다.</div>
             <div style="margin-top:8px;">
-                <a href="/api/auth/login" style="background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; padding:5px 14px; border-radius:5px; text-decoration:none; font-weight:700; font-size:0.78rem;">🔑 Autodesk 로그인</a>
+                <a href="/api/auth/login?force=1" style="background:linear-gradient(135deg,#3b82f6,#2563eb); color:#fff; padding:5px 14px; border-radius:5px; text-decoration:none; font-weight:700; font-size:0.78rem;">🔑 Autodesk 로그인</a>
             </div>`;
         container.appendChild(banner);
     }

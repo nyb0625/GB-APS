@@ -68,6 +68,7 @@ app.use('/api/ai', require('./routes/ai.js'));
 app.use('/api/chatbot', require('./routes/chatbot.js'));
 app.use('/api/hubs', require('./routes/hubs.js'));
 app.use('/api/cctv', require('./routes/cctv.js'));
+app.use('/api/tasks', require('./routes/tasks.js'));
 app.use(require('./routes/issues.js'));
 
 // Error Handling Middleware

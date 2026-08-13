@@ -29,7 +29,8 @@ function buildDynamicCallbackUrl(req) {
 // GET /api/auth/login - Redirect user to Autodesk Sign In
 router.get('/login', (req, res) => {
     const callbackUrl = buildDynamicCallbackUrl(req);
-    const url = getAuthorizationUrl(callbackUrl);
+    const forceLogin = req.query.force === '1' || req.query.prompt === 'login' || req.query.switch === '1';
+    const url = getAuthorizationUrl(callbackUrl, { forceLogin });
     res.redirect(url);
 });
 
@@ -51,8 +52,11 @@ router.get('/callback',
 
 // GET /api/auth/logout - Log out user and destroy session
 router.get('/logout', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
     req.session.destroy((err) => {
         if (err) console.error('[Auth] session destroy error:', err);
+        res.clearCookie('connect.sid', { path: '/' });
         res.redirect('/');
     });
 });
@@ -84,7 +88,14 @@ router.get('/profile', async (req, res) => {
     return authRefreshMiddleware(req, res, async () => {
         try {
             const profile = await getUserProfile(req.internalOAuthToken.access_token);
-            res.json({ name: profile.name || 'User' });
+            const firstName = profile.firstName || profile.given_name || '';
+            const lastName = profile.lastName || profile.family_name || '';
+            const fallbackName = [firstName, lastName].filter(Boolean).join(' ').trim();
+            res.json({
+                id: profile.sub || profile.userId || profile.id || profile.oxygenId || profile.email || null,
+                name: profile.name || profile.displayName || fallbackName || profile.email || 'User',
+                email: profile.email || profile.emailId || profile.userName || null
+            });
         } catch (err) {
             console.error('[Auth] Profile fetch failed:', err.message);
             res.json({ name: null });

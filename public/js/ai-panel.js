@@ -297,6 +297,186 @@ function isIssueRelatedQuery(text) {
 // ─────────────────────────────────────────────────────────────────
 // 📊 메인 이슈탭 실시간 데이터 수집 및 컨텍스트 문자열 생성
 // ─────────────────────────────────────────────────────────────────
+function isIssueChartRequest(text) {
+    const lower = String(text || '').toLowerCase();
+    if (!isIssueRelatedQuery(lower)) return false;
+    return ['그래프', '차트', 'chart', 'graph', '시각화', '막대', '분포'].some(word => lower.includes(word));
+}
+
+async function ensureFormaIssueDataLoaded() {
+    if (Array.isArray(window._gangbukFormaSSOT) && window._gangbukFormaSSOT.length > 0) {
+        return window._gangbukFormaSSOT;
+    }
+    if (typeof window.loadFormaIssuesForMainTab === 'function') {
+        try {
+            return await window.loadFormaIssuesForMainTab(false);
+        } catch (err) {
+            console.warn('[AI Panel] Forma issue loader failed:', err);
+        }
+    }
+    try {
+        const resp = await fetch('/api/issues/forma-gangbuk?limit=1000', { credentials: 'same-origin' });
+        if (resp.ok) {
+            const json = await resp.json();
+            const issues = Array.isArray(json.data) ? json.data : [];
+            window._gangbukFormaSSOT = issues;
+            window._gangbukFormaCache = issues;
+            window.currentIssueList = issues;
+            window.currentFilteredIssues = issues.slice();
+            return issues;
+        }
+    } catch (err) {
+        console.warn('[AI Panel] Forma issue fetch failed:', err);
+    }
+    return [];
+}
+
+function issueValue(issue, key) {
+    if (typeof window.getIssueFieldValue === 'function') {
+        const value = window.getIssueFieldValue(issue, key);
+        if (value && value !== '-') return value;
+    }
+    const raw = issue?.rawFormaIssue || issue?.rawDetailIssue || issue || {};
+    if (key === 'type') return issue?.typePath || issue?.issueTypePath || issue?.type || issue?.category || raw.typePath || raw.issueTypePath || raw.type || raw.category || '-';
+    if (key === 'location') return issue?.structure || issue?.location || issue?.locationName || issue?.locationDetails || raw.location || raw.locationName || '-';
+    if (key === 'status') return issue?.status || issue?.statusName || issue?.state || raw.status || raw.state || '-';
+    if (key === 'trade') return issue?.trade || issue?.discipline || issue?.workType || raw.trade || raw.discipline || '-';
+    return issue?.[key] || raw?.[key] || '-';
+}
+
+function collectAllIssueData() {
+    const sources = [
+        window._gangbukFormaSSOT,
+        window._gangbukFormaCache,
+        window._constructionIssueCache,
+        window.currentIssueList,
+        window.currentFilteredIssues,
+        window.formaCache?.issues
+    ];
+    let rawList = [];
+    sources.forEach(list => {
+        if (Array.isArray(list) && list.length) rawList = rawList.concat(list);
+    });
+
+    ['aps_project_issues', 'my_saved_issues', 'my_saved_compare_issues'].forEach(key => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+            if (Array.isArray(parsed)) rawList = rawList.concat(parsed);
+        } catch (e) {}
+    });
+
+    const allIssues = [];
+    const seen = new Set();
+    rawList.forEach(item => {
+        if (!item) return;
+        const id = item.id || item.displayId || item.dbId || item.objectId || '';
+        const fallback = [item.title, issueValue(item, 'location'), issueValue(item, 'type'), issueValue(item, 'status')].join('|');
+        const uniqueKey = String(id || fallback).trim();
+        if (!uniqueKey || seen.has(uniqueKey)) return;
+        seen.add(uniqueKey);
+        allIssues.push(item);
+    });
+    return allIssues;
+}
+
+function countBy(items, getter) {
+    return items.reduce((acc, item) => {
+        const key = String(getter(item) || '미지정').trim() || '미지정';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+    }, {});
+}
+
+function topEntries(map, limit = 12) {
+    return Object.entries(map || {})
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'))
+        .slice(0, limit);
+}
+
+function buildIssueStats(issues) {
+    return {
+        total: issues.length,
+        byStatus: countBy(issues, issue => issueValue(issue, 'status')),
+        byLocation: countBy(issues, issue => issueValue(issue, 'location')),
+        byType: countBy(issues, issue => issueValue(issue, 'type')),
+        byTrade: countBy(issues, issue => issueValue(issue, 'trade'))
+    };
+}
+
+function formatIssueSummary(stats) {
+    const fmt = map => topEntries(map, 8).map(([key, count]) => `${key} ${count}건`).join(', ') || '없음';
+    return [
+        `Forma 이슈 데이터 기준으로 총 ${stats.total}건을 확인했습니다.`,
+        `상태별: ${fmt(stats.byStatus)}`,
+        `구조물/위치별: ${fmt(stats.byLocation)}`,
+        `유형별: ${fmt(stats.byType)}`,
+        `공종별: ${fmt(stats.byTrade)}`
+    ].join('\n');
+}
+
+function renderIssueChartAnswer(question) {
+    const issues = collectAllIssueData();
+    const stats = buildIssueStats(issues);
+    appendMessage('assistant', `${formatIssueSummary(stats)}\n\n아래에 그래프로 표시했습니다.`);
+
+    const container = document.getElementById('chat-history');
+    if (!container) return;
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble assistant';
+    const chartId = `ai-issue-chart-${Date.now()}`;
+    bubble.innerHTML = `
+        <div class="sender">AI 에이전트</div>
+        <div class="text">
+            <div style="height:260px; min-width:280px;">
+                <canvas id="${chartId}"></canvas>
+            </div>
+        </div>
+    `;
+    container.appendChild(bubble);
+    container.scrollTop = container.scrollHeight;
+
+    if (typeof Chart === 'undefined') {
+        addSystemMessage('Chart.js가 로드되지 않아 그래프를 표시하지 못했습니다.');
+        return;
+    }
+
+    const lower = String(question || '').toLowerCase();
+    const selected = lower.includes('구조') || lower.includes('위치') || lower.includes('location')
+        ? { title: '구조물/위치별 이슈', map: stats.byLocation, color: '#38bdf8' }
+        : lower.includes('유형') || lower.includes('type')
+            ? { title: '유형별 이슈', map: stats.byType, color: '#a78bfa' }
+            : lower.includes('공종') || lower.includes('trade')
+                ? { title: '공종별 이슈', map: stats.byTrade, color: '#f59e0b' }
+                : { title: '상태별 이슈', map: stats.byStatus, color: '#10b981' };
+
+    const entries = topEntries(selected.map, 12);
+    const canvas = document.getElementById(chartId);
+    new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: entries.map(([key]) => key),
+            datasets: [{
+                label: selected.title,
+                data: entries.map(([, count]) => count),
+                backgroundColor: selected.color,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                title: { display: true, text: selected.title, color: '#e5e7eb' }
+            },
+            scales: {
+                x: { ticks: { color: '#cbd5e1', maxRotation: 30, minRotation: 0 }, grid: { color: 'rgba(148,163,184,0.12)' } },
+                y: { beginAtZero: true, ticks: { color: '#94a3b8', precision: 0 }, grid: { color: 'rgba(148,163,184,0.16)' } }
+            }
+        }
+    });
+}
+
 function getIssueContext() {
     let rawList = [];
 
@@ -688,6 +868,15 @@ async function submitChatMessage(messageText) {
         appendMessage('assistant', weeklyAnswer);
         chatHistory.push({ role: 'assistant', content: weeklyAnswer });
         return;
+    }
+
+    if (isIssueRelatedQuery(cleanQuery)) {
+        await ensureFormaIssueDataLoaded();
+        if (isIssueChartRequest(cleanQuery)) {
+            renderIssueChartAnswer(cleanQuery);
+            chatHistory.push({ role: 'assistant', content: 'Forma 이슈 데이터를 그래프로 표시했습니다.' });
+            return;
+        }
     }
 
     const handledViewerIntent = !isIssueRelatedQuery(cleanQuery) && await tryExecuteLocalViewerIntent(cleanQuery);

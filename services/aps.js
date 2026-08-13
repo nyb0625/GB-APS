@@ -304,14 +304,25 @@ async function refreshOAuthToken(refreshToken, scopes) {
 /**
  * Generate Autodesk Authorize URL
  */
-service.getAuthorizationUrl = (callbackUrl) => {
+service.getAuthorizationUrl = (callbackUrl, options = {}) => {
     const redirectUri = callbackUrl || APS_CALLBACK_URL;
-    const url = authenticationClient.authorize(
+    let url = authenticationClient.authorize(
         APS_CLIENT_ID,
         ResponseType.Code,
         redirectUri,
         THREE_LEGGED_SCOPES
     );
+    if (options.forceLogin) {
+        try {
+            const parsed = new URL(url);
+            parsed.searchParams.set('prompt', 'login');
+            parsed.searchParams.set('max_age', '0');
+            url = parsed.toString();
+        } catch (_err) {
+            const joiner = url.includes('?') ? '&' : '?';
+            url = `${url}${joiner}prompt=login&max_age=0`;
+        }
+    }
     // Replace "+" with "%20" to avoid issues with strict OAuth servers
     return url.replace(/\+/g, '%20');
 };
@@ -446,6 +457,20 @@ service.getIssueContainerInfo = async (hubId, projectId, accessToken) => {
 };
 
 /**
+ * Fetch project issues from APS Issues API (v2)
+ */
+service.getProjectIssues = async (containerId, accessToken) => {
+    const response = await fetch(`https://developer.api.autodesk.com/issues/v2/containers/${containerId}/issues?limit=100`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to fetch project issues: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data.data || [];
+};
+
+/**
  * Global Search API for project-wide RVT files under a root folder
  * Endpoint: GET /data/v1/projects/{projectId}/folders/{rootFolderId}/search?filter[extension]=rvt
  */
@@ -511,4 +536,3 @@ service.searchProjectRvtFiles = async (projectId, rootFolderId, accessToken) => 
 
     return results;
 };
-

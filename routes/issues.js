@@ -872,7 +872,7 @@ async function fetchIssueTypeMap(projectId, containerId, token) {
                 subtypes.forEach(st => {
                     const subId = st.id || st.issueSubtypeId || st.attributes?.id;
                     const subName = st.name || st.title || st.attributes?.name || st.attributes?.title || '';
-                    const subPath = st.path || st.fullName || [name, subName].filter(Boolean).join(' > ');
+                    const subPath = st.path || st.fullName || [pathName || name, subName].filter(Boolean).join(' > ');
                     if (subId && subPath) {
                         map.set(String(subId), subPath);
                         map.set(String(subId).toLowerCase(), subPath);
@@ -1313,7 +1313,12 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
     const limit = req.query.limit || 300;
     const debugPlacement = req.query.debugPlacement === '1' || req.query.debug_placement === '1';
     const forceRefresh = req.query.refresh === '1' || req.query.force === '1' || debugPlacement;
-    const cacheKey = `${hubId}|${projectId}|${limit}`;
+    const categoryFilter = String(req.query.category || req.query.type || '').trim().toLowerCase();
+    const gunhwaOnly = req.query.gunhwa === '1' || categoryFilter === 'gunhwa' || categoryFilter === '\uac74\ud654';
+    const workScheduleOnly = req.query.workSchedule === '1' || req.query.work_schedule === '1';
+    const includeGunhwa = gunhwaOnly || req.query.includeGunhwa === '1' || req.query.include_gunhwa === '1';
+    const cacheKey = `${hubId}|${projectId}|${limit}|${includeGunhwa ? 'with-gunhwa' : 'without-gunhwa'}|${gunhwaOnly ? 'gunhwa-only' : 'all-visible'}|${workScheduleOnly ? 'work-schedule-fast-v4' : 'main'}`;
+    const cacheTtlMs = workScheduleOnly ? Math.max(FORMA_ISSUES_CACHE_TTL_MS, 10 * 60 * 1000) : FORMA_ISSUES_CACHE_TTL_MS;
 
     try {
         const cached = formaIssuesCache.get(cacheKey);
@@ -1331,28 +1336,120 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             console.warn('[Forma Issues] issue container lookup failed:', err.message);
             return null;
         });
-        const [userMap, typeMap, locationMap, rawIssues] = await Promise.all([
-            fetchProjectMembers(projectId, token),
-            fetchIssueTypeMap(projectId, containerId, token),
-            fetchLocationMap(hubId, projectId, token),
-            fetchFormaIssues(projectId, containerId, token, limit)
-        ]);
-        const enrichedIssues = await enrichFormaIssuesWithDetails(rawIssues, projectId, containerId, token);
-        const isGunhwaIssueServer = (issue) => {
-            if (!issue) return false;
-            try {
-                const fullStr = JSON.stringify(issue).normalize('NFC').toLowerCase();
-                return fullStr.includes('건화') || fullStr.includes('\uac74\ud654');
-            } catch (e) {
-                return false;
+        const [userMap, typeMap, locationMap, rawIssues] = workScheduleOnly
+            ? await Promise.all([
+                fetchProjectMembers(projectId, token),
+                fetchIssueTypeMap(projectId, containerId, token),
+                Promise.resolve(new Map()),
+                fetchFormaIssues(projectId, containerId, token, limit)
+            ])
+            : await Promise.all([
+                fetchProjectMembers(projectId, token),
+                fetchIssueTypeMap(projectId, containerId, token),
+                fetchLocationMap(hubId, projectId, token),
+                fetchFormaIssues(projectId, containerId, token, limit)
+            ]);
+        // 업무 일정 표에는 목록 API의 필드만 필요하므로 상세/배치명 조회를 건너뛰어 초기 로딩을 줄인다.
+        const sourceIssues = workScheduleOnly
+            ? rawIssues
+            : await enrichFormaIssuesWithDetails(rawIssues, projectId, containerId, token);
+        const toCategoryText = (value) => {
+            if (!value) return '';
+            if (Array.isArray(value)) return value.map(toCategoryText).filter(Boolean).join(' > ');
+            if (typeof value === 'object') {
+                return value.path || value.typePath || value.issueTypePath || value.categoryPath ||
+                    value.parentName || value.categoryName || value.issueTypeName || value.typeName ||
+                    value.fullName || value.displayName || value.title || value.name || value.text || value.value || '';
             }
+            return String(value).trim();
+        };
+        const getPathValue = (source, path) => {
+            let cur = source;
+            for (const part of String(path).split('.')) {
+                if (!cur || typeof cur !== 'object') return '';
+                cur = cur[part];
+            }
+            return toCategoryText(cur);
+        };
+        const categoryCandidatesForSchedule = (issue, normalizedIssue) => {
+            const raw = issue && (issue.rawDetailIssue || issue.rawFormaIssue || issue);
+            const paths = [
+                'typePath', 'issueTypePath', 'categoryPath', 'issueCategoryPath',
+                'attributes.typePath', 'attributes.issueTypePath', 'attributes.categoryPath', 'attributes.issueCategoryPath',
+                'type.name', 'type.title', 'issueType.name', 'issueType.title',
+                'category.name', 'category.title', 'issueCategory.name', 'issueCategory.title',
+                'attributes.type.name', 'attributes.type.title', 'attributes.issueType.name', 'attributes.issueType.title',
+                'attributes.category.name', 'attributes.category.title', 'attributes.issueCategory.name', 'attributes.issueCategory.title'
+            ];
+            const nested = [];
+            const seen = new Set();
+            const collectNestedCategoryValues = (value, keyHint = '') => {
+                if (!value || typeof value !== 'object' || seen.has(value)) return;
+                seen.add(value);
+                if (Array.isArray(value)) {
+                    value.forEach(item => collectNestedCategoryValues(item, keyHint));
+                    return;
+                }
+                Object.entries(value).forEach(([key, child]) => {
+                    const keyLower = String(key || '').toLowerCase();
+                    const nextHint = keyHint || (/categorypath|issuecategory|category|typepath|issuetypepath/.test(keyLower) ? keyLower : '');
+                    if (nextHint) {
+                        const text = toCategoryText(child);
+                        if (text) nested.push(text);
+                    }
+                    if (child && typeof child === 'object') collectNestedCategoryValues(child, nextHint);
+                });
+            };
+            collectNestedCategoryValues(raw);
+            return [
+                normalizedIssue && normalizedIssue.typePath,
+                normalizedIssue && normalizedIssue.category,
+                normalizeTypeForForma(issue, typeMap),
+                ...paths.map(path => getPathValue(raw, path)),
+                ...nested
+            ].map(toCategoryText).filter(Boolean);
+        };
+        const categorySegments = (text) => String(text || '')
+            .normalize('NFC')
+            .split(/\s*>\s*|\s*\/\s*/)
+            .map(part => part.trim().toLowerCase())
+            .filter(Boolean);
+        const isGunhwaIssueServer = (issue, normalizedIssue) => {
+            return categoryCandidatesForSchedule(issue, normalizedIssue).some(text => {
+                const segments = categorySegments(text);
+                return segments[0] === '\uac74\ud654';
+            });
+        };
+        const isUpdateIssueServer = (issue, normalizedIssue) => {
+            return categoryCandidatesForSchedule(issue, normalizedIssue).some(text => {
+                const segments = categorySegments(text);
+                return segments[0] === '\uc774\uc288' &&
+                    (segments[1] === '\uc5c5\ub370\uc774\ud2b8' || segments[1] === 'update');
+            });
         };
 
-        const normalized = enrichedIssues
-            .map(issue => normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap))
-            .filter(issue => !isGunhwaIssueServer(issue));
+        const normalized = sourceIssues
+            .map(issue => {
+                const normalizedIssue = normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap);
+                return {
+                    normalizedIssue,
+                    isGunhwa: isGunhwaIssueServer(issue, normalizedIssue),
+                    isUpdate: isUpdateIssueServer(issue, normalizedIssue)
+                };
+            })
+            .filter(item => {
+                const isGunhwa = item.isGunhwa;
+                if (workScheduleOnly) return item.isGunhwa || item.isUpdate;
+                if (gunhwaOnly) return isGunhwa;
+                return includeGunhwa || !isGunhwa;
+            })
+            .map(item => ({
+                ...item.normalizedIssue,
+                workScheduleCategory: item.isGunhwa ? '건화' : (item.isUpdate ? '업데이트' : ''),
+                rawCategoryMatched: item.isGunhwa
+            }));
         const placementDebug = debugPlacement
-            ? enrichedIssues
+            ? sourceIssues
                 .map((issue, index) => buildPlacementDebug(issue, normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap)))
                 .filter(item => item.normalizedPlacement === '-' || !item.normalizedPlacement || item.normalizedPlacement === 'Docs' || item.rawPaths.length || item.detailPaths.length)
                 .slice(0, 25)
@@ -1366,15 +1463,17 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
                 containerId,
                 count: normalized.length,
                 rawCount: rawIssues.length,
-                enrichedCount: enrichedIssues.filter(issue => issue && issue.rawDetailIssue).length,
+                enrichedCount: workScheduleOnly ? 0 : sourceIssues.filter(issue => issue && issue.rawDetailIssue).length,
+                fastMode: workScheduleOnly,
                 cache: false,
                 fetchedAt: new Date().toISOString(),
                 ...(debugPlacement ? { placementDebug } : {}),
-                excludedCategory: '건화'
+                categoryFilter: workScheduleOnly ? 'workSchedule' : (gunhwaOnly ? '건화' : 'default'),
+                excludedCategory: includeGunhwa ? null : '건화'
             }
         };
         if (!debugPlacement) {
-            formaIssuesCache.set(cacheKey, { value: payload, expiresAt: Date.now() + FORMA_ISSUES_CACHE_TTL_MS });
+            formaIssuesCache.set(cacheKey, { value: payload, expiresAt: Date.now() + cacheTtlMs });
         }
         res.json(payload);
     } catch (err) {
