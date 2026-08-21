@@ -27,19 +27,42 @@ let clashStructureChart = null;
 const monthlyIssueDrilldownState = { location: '', month: '' };
 const dashboardIssueRegistry = new Map();
 const CONSTRUCTION_PROGRESS_ITEMS = [
-    { id: 'new-01', zone: 'new', name: '신설 수처리동', progress: 68, status: '진행중', startDate: '2026-07-20', endDate: '2026-08-08', color: '#ef4444' },
-    { id: 'new-02', zone: 'new', name: '신설 제수밸브실', progress: 46, status: '진행중', startDate: '2026-07-24', endDate: '2026-08-14', color: '#ef4444' },
-    { id: 'extension-01', zone: 'extension', name: '증설 여과지', progress: 73, status: '진행중', startDate: '2026-07-29', endDate: '2026-08-20', color: '#06b6d4' },
-    { id: 'priority-01', zone: 'priority', name: '우선시공 관로구간', progress: 91, status: '완료임박', startDate: '2026-07-18', endDate: '2026-08-02', color: '#eab308' }
+    { id: 'priority-01', zone: 'priority', name: '가설공사', progress: 100, status: '완료', startDate: '2026-07-01', endDate: '2026-07-07', color: '#eab308' },
+    { id: 'priority-02', zone: 'priority', name: '안전/환경관리', progress: 100, status: '완료', startDate: '2026-07-01', endDate: '2026-07-31', color: '#eab308' },
+    { id: 'priority-03', zone: 'priority', name: '불수성 연결공로', progress: 80, status: '진행중', startDate: '2026-07-08', endDate: '2026-08-08', color: '#eab308' },
+    { id: 'priority-04', zone: 'priority', name: '철보/전기/계측설비', progress: 35, status: '진행중', startDate: '2026-08-01', endDate: '2026-08-20', color: '#eab308' },
+    { id: 'main-01', zone: 'extension', name: '인허가', progress: 100, status: '완료', startDate: '2026-07-01', endDate: '2026-07-08', color: '#06b6d4' },
+    { id: 'main-02', zone: 'extension', name: '흙막이 가시설', progress: 100, status: '완료', startDate: '2026-07-03', endDate: '2026-07-21', color: '#06b6d4' },
+    { id: 'main-03', zone: 'extension', name: '착수정 및 혼화지', progress: 90, status: '진행중', startDate: '2026-07-15', endDate: '2026-08-05', color: '#06b6d4' },
+    { id: 'main-04', zone: 'extension', name: '정수지(수조부)', progress: 75, status: '진행중', startDate: '2026-07-22', endDate: '2026-08-18', color: '#06b6d4' },
+    { id: 'main-05', zone: 'extension', name: '정수지(펌프실)', progress: 70, status: '진행중', startDate: '2026-07-26', endDate: '2026-08-22', color: '#06b6d4' },
+    { id: 'main-06', zone: 'extension', name: '역세척펌프동', progress: 55, status: '진행중', startDate: '2026-08-01', endDate: '2026-08-29', color: '#06b6d4' },
+    { id: 'main-07', zone: 'extension', name: '응집침전지 #1~#3', progress: 60, status: '진행중', startDate: '2026-08-04', endDate: '2026-09-02', color: '#06b6d4' },
+    { id: 'main-08', zone: 'extension', name: '응집침전지 #4~#6', progress: 45, status: '진행중', startDate: '2026-08-08', endDate: '2026-09-08', color: '#06b6d4' },
+    { id: 'main-09', zone: 'extension', name: '약품투입동', progress: 35, status: '진행중', startDate: '2026-08-14', endDate: '2026-09-12', color: '#06b6d4' },
+    { id: 'main-10', zone: 'extension', name: '구내배관', progress: 30, status: '진행중', startDate: '2026-08-18', endDate: '2026-09-18', color: '#06b6d4' },
+    { id: 'main-11', zone: 'extension', name: '토수관로', progress: 25, status: '진행중', startDate: '2026-08-22', endDate: '2026-09-20', color: '#06b6d4' },
+    { id: 'main-12', zone: 'extension', name: '활성탄흡착지', progress: 20, status: '진행중', startDate: '2026-08-28', endDate: '2026-09-25', color: '#06b6d4' },
+    { id: 'main-13', zone: 'extension', name: '활성탄흡착지동', progress: 15, status: '진행중', startDate: '2026-09-01', endDate: '2026-09-28', color: '#06b6d4' },
+    { id: 'main-14', zone: 'extension', name: '후오존접촉지', progress: 10, status: '진행중', startDate: '2026-09-05', endDate: '2026-10-01', color: '#06b6d4' },
+    { id: 'main-15', zone: 'extension', name: '후오존접촉지동', progress: 5, status: '진행중', startDate: '2026-09-08', endDate: '2026-10-04', color: '#06b6d4' },
+    { id: 'main-16', zone: 'extension', name: '급속여과지', progress: 0, status: '예정', startDate: '2026-09-10', endDate: '2026-10-06', color: '#06b6d4' },
+    { id: 'main-17', zone: 'extension', name: '급속여과지동', progress: 0, status: '예정', startDate: '2026-09-12', endDate: '2026-10-08', color: '#06b6d4' },
+    { id: 'main-18', zone: 'extension', name: '염차농축조', progress: 0, status: '예정', startDate: '2026-09-15', endDate: '2026-10-10', color: '#06b6d4' },
+    { id: 'main-19', zone: 'extension', name: '기계설치/계측제어', progress: 0, status: '예정', startDate: '2026-09-18', endDate: '2026-10-13', color: '#06b6d4' },
+    { id: 'main-20', zone: 'extension', name: '접지공사, 전기설비', progress: 0, status: '예정', startDate: '2026-09-22', endDate: '2026-10-16', color: '#06b6d4' },
+    { id: 'main-21', zone: 'extension', name: '탈수기동', progress: 0, status: '예정', startDate: '2026-09-25', endDate: '2026-10-19', color: '#06b6d4' },
+    { id: 'main-22', zone: 'extension', name: '우오수/포장/조경시설물', progress: 0, status: '예정', startDate: '2026-10-01', endDate: '2026-10-24', color: '#06b6d4' },
+    { id: 'main-23', zone: 'extension', name: '종합시운전', progress: 0, status: '예정', startDate: '2026-10-10', endDate: '2026-10-31', color: '#06b6d4' }
 ];
 const CONSTRUCTION_ZONES = {
     new: { label: '신설', color: '#ef4444' },
-    extension: { label: '증설', color: '#06b6d4' },
+    extension: { label: '본공사', color: '#06b6d4' },
     priority: { label: '우선시공분', color: '#eab308' }
 };
 const CONSTRUCTION_ZONE_FOLDER_KEYWORDS = {
     new: ['신설', '신설구조물', '신설 구조물'],
-    extension: ['증설', '증설구조물', '증설 구조물'],
+    extension: ['본공사', '증설', '증설구조물', '증설 구조물'],
     priority: ['우선시공', '우선시공분', '우선 시공']
 };
 const CONSTRUCTION_TARGET_HUB_ID = 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
@@ -1235,6 +1258,24 @@ function renderMonthlyIssueKpi(label, value, color, statusKey = '') {
     `;
 }
 
+function getMonthlyIssueRowHeight(rowCount) {
+    const fallback = rowCount >= 24 ? 24 : rowCount >= 18 ? 28 : rowCount >= 12 ? 32 : 40;
+    if (!rowCount || typeof window === 'undefined') return fallback;
+
+    const root = document.getElementById('monthly-issue-status-root');
+    const tab = document.getElementById('monthly-issue-status-tab');
+    if (!root || !tab || tab.style.display === 'none') return fallback;
+
+    const rootRect = root.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const bottom = tabRect.bottom > rootRect.top ? Math.min(window.innerHeight, tabRect.bottom) : window.innerHeight;
+    const reservedHeight = 90; // KPI cards, legend, month axis, panel padding.
+    const availableHeight = Math.floor(bottom - rootRect.top - reservedHeight);
+    if (availableHeight <= 0) return fallback;
+
+    return Math.max(22, Math.min(44, Math.floor(availableHeight / rowCount)));
+}
+
 function renderMonthlyIssueStatusTab(issues = []) {
     const root = document.getElementById('monthly-issue-status-root');
     if (!root) return;
@@ -1298,8 +1339,10 @@ function renderMonthlyIssueStatusTab(issues = []) {
         `;
     }
 
-    const monthWidth = Math.max(84, Math.floor(980 / Math.max(months.length, 1)));
-    const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px;`;
+    const rowHeight = getMonthlyIssueRowHeight(rows.length);
+    const axisHeight = rowHeight <= 28 ? 26 : 30;
+    const monthWidth = Math.max(64, Math.floor(1040 / Math.max(months.length, 1)));
+    const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px; --monthly-issue-row-height:${rowHeight}px; --monthly-issue-axis-height:${axisHeight}px;`;
     const yAxis = rows.map(row => {
         return `
             <div class="bim-chart-yitem monthly-issue-yitem monthly-issue-structure-cell bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
@@ -1377,6 +1420,17 @@ function bindMonthlyIssueStatusTab() {
     if (refresh && !refresh.dataset.monthlyIssueBound) {
         refresh.dataset.monthlyIssueBound = 'true';
         refresh.addEventListener('click', () => refreshMonthlyIssueStatusTab(true));
+    }
+    if (!window._monthlyIssueResizeBound) {
+        window._monthlyIssueResizeBound = true;
+        let resizeTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                const tab = document.getElementById('monthly-issue-status-tab');
+                if (tab && tab.style.display !== 'none') rerender();
+            }, 120);
+        });
     }
     if (root && !root.dataset.monthlyIssueBound) {
         root.dataset.monthlyIssueBound = 'true';
@@ -1720,7 +1774,14 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
         </div>
     `).join('');
 
+    let lastGroup = '';
     const rows = items.map(item => {
+        const zoneMeta = CONSTRUCTION_ZONES[item.zone] || {};
+        const groupLabel = zoneMeta.label || item.zone || '기타';
+        const groupRow = groupLabel !== lastGroup
+            ? `<div class="bim-schedule-group-row" style="--group-color:${escapeHtml(zoneMeta.color || item.color || '#38bdf8')};"><span>${escapeHtml(groupLabel)}</span></div>`
+            : '';
+        lastGroup = groupLabel;
         const itemStart = parseIssueDate(item.startDate);
         const itemEnd = parseIssueDate(item.endDate || item.startDate) || itemStart;
         const overlaps = itemStart <= range.end && itemEnd >= range.start;
@@ -1728,6 +1789,7 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
         const end = overlaps ? getScheduleColumnIndex(range, item.endDate || item.startDate, itemStart || range.start) : -1;
         const span = Math.max(1, end - start + 1);
         return `
+            ${groupRow}
             <div class="bim-schedule-cell bim-schedule-left" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
             <div class="bim-schedule-plot" title="${escapeHtml(item.name)} ${escapeHtml(item.startDate)} ~ ${escapeHtml(item.endDate)}">
                 ${overlaps ? `<div class="bim-schedule-bar" style="--start:${start}; --span:${span}; --task-color:${item.color};"></div>` : '<div class="bim-schedule-outside">기간 외</div>'}
@@ -1784,12 +1846,12 @@ function renderProgressDonuts(activeZone = '') {
     const wrap = document.getElementById('bim-progress-donuts');
     if (!wrap) return;
     const all = getAverageProgress(CONSTRUCTION_PROGRESS_ITEMS);
-    const fresh = getAverageProgress(getProgressItems('new'));
+    const priority = getAverageProgress(getProgressItems('priority'));
     const extension = getAverageProgress(getProgressItems('extension'));
     const cards = [
         { label: '전체 공사', value: all, color: '#22c55e', zone: '' },
-        { label: '신설 공사', value: fresh, color: '#ef4444', zone: 'new' },
-        { label: '증설 공사', value: extension, color: '#06b6d4', zone: 'extension' }
+        { label: '우선시공분', value: priority, color: '#eab308', zone: 'priority' },
+        { label: '본공사', value: extension, color: '#06b6d4', zone: 'extension' }
     ];
     wrap.innerHTML = cards.map(card => `
         <button type="button" class="bim-progress-donut-card${activeZone && card.zone === activeZone ? ' active' : ''}${card.zone ? ' is-clickable' : ''}" data-zone="${escapeHtml(card.zone)}" ${card.zone ? `title="${escapeHtml(card.label)} 폴더 모델 한 번에 보기"` : ''}>
@@ -2104,7 +2166,7 @@ async function reloadActiveConstructionZoneModels() {
     const zone = window._constructionActiveViewerZone || '';
     const zoneMeta = CONSTRUCTION_ZONES[zone];
     if (!zoneMeta) {
-        setConstructionProgressNote('먼저 신설 또는 증설 영역을 선택해 주세요.');
+        setConstructionProgressNote('먼저 우선시공분 또는 본공사 영역을 선택해 주세요.');
         return;
     }
     const viewer = window.constructionProgressViewer;
@@ -2124,7 +2186,7 @@ async function openConstructionMergePanel() {
     const zoneMeta = CONSTRUCTION_ZONES[zone];
     const viewer = window.constructionProgressViewer;
     if (!zoneMeta || !viewer) {
-        setConstructionProgressNote('먼저 신설 또는 증설 영역을 선택해 주세요.');
+        setConstructionProgressNote('먼저 우선시공분 또는 본공사 영역을 선택해 주세요.');
         return;
     }
 
@@ -2865,7 +2927,7 @@ function openModelUpdateInViewer(urn, name) {
             window.focusIssueOnViewer('', urn);
             return;
         }
-        import('./viewer.js?v=20260804-main-rotate-fix1')
+        import('./viewer.js?v=20260813-runtime-merge-rotation1')
             .then(async mod => {
                 const container = document.getElementById('preview');
                 if (!container || !mod.initViewer || !mod.loadModel) return;

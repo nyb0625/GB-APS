@@ -17,7 +17,7 @@ let scheduleState = {
     cacheTs: 0
 };
 
-const GUNHWA_SCHEDULE_CACHE_KEY = 'gangbuk_work_schedule_stale_cache_v8';
+const GUNHWA_SCHEDULE_CACHE_KEY = 'gangbuk_work_schedule_stale_cache_v10_location';
 const SCHEDULE_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 const KOREAN_HOLIDAYS_BY_YEAR = {
@@ -188,6 +188,31 @@ function normalizeScheduleTask(issue) {
     const typePath = issue.workScheduleCategory
         ? `${issue.workScheduleCategory} · ${getIssueTypeText(issue) || ''}`.trim()
         : getIssueTypeText(issue);
+    const location = issue.location || issue.locationName || issue.locationDetails || issue.locationDetail ||
+        issue.locationDescription || issue.structure || readDeep(raw, [
+            'attributes.location',
+            'attributes.locationName',
+            'attributes.location.name',
+            'attributes.location.displayName',
+            'attributes.locationDetails',
+            'attributes.locationDetail',
+            'attributes.locationDescription',
+            'attributes.locationText',
+            'attributes.lbsLocation',
+            'attributes.lbsLocation.name',
+            'attributes.lbsLocation.displayName',
+            'location',
+            'locationName',
+            'location.name',
+            'location.displayName',
+            'locationDetails',
+            'locationDetail',
+            'locationDescription',
+            'locationText',
+            'lbsLocation',
+            'lbsLocation.name',
+            'lbsLocation.displayName'
+        ]);
 
     return {
         id: issue.id || issue.displayId || issue.dbId || '',
@@ -199,7 +224,7 @@ function normalizeScheduleTask(issue) {
         dueDate: formatDate(dueDate),
         durationDays: daysBetween(startDate, dueDate),
         assignee: issue.assignee || issue.assignedTo || readDeep(raw, ['attributes.assignee', 'attributes.assignedTo', 'assignee', 'assignedTo']) || '미지정',
-        location: issue.location || issue.locationName || issue.structure || readDeep(raw, ['attributes.location', 'attributes.locationName', 'location', 'locationName']) || '미지정',
+        location: textValue(location) || '미지정',
         typePath: textValue(typePath) || '업데이트/건화',
         description: issue.description || issue.desc || readDeep(raw, ['attributes.description', 'description']) || ''
     };
@@ -258,10 +283,16 @@ function getAvailableMonths(tasks) {
     return Array.from(months).sort();
 }
 
+function getTodayMonthKey() {
+    return monthKeyFromDate(new Date());
+}
+
+function getScheduleMonthOptions(tasks) {
+    return Array.from(new Set([getTodayMonthKey(), ...getAvailableMonths(tasks)])).sort();
+}
+
 function getDefaultMonth(tasks) {
-    const todayKey = monthKeyFromDate(new Date());
-    const months = getAvailableMonths(tasks);
-    return months.includes(todayKey) ? todayKey : (months[0] || todayKey);
+    return getTodayMonthKey();
 }
 
 function taskOverlapsMonth(task, monthKey) {
@@ -281,8 +312,7 @@ function applyScheduleTasks(tasks, ts = Date.now()) {
     scheduleState.cacheTs = ts || Date.now();
     scheduleState.loaded = true;
 
-    const months = getAvailableMonths(scheduleState.tasks);
-    if (!scheduleState.month || !months.includes(scheduleState.month)) {
+    if (!scheduleState.month) {
         scheduleState.month = getDefaultMonth(scheduleState.tasks);
     }
 }
@@ -350,7 +380,8 @@ function renderMonthlyGantt(tasks) {
     const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
     const daysInMonth = monthEnd.getDate();
     const days = Array.from({ length: daysInMonth }, (_, index) => index + 1);
-    const taskColumnWidth = 240;
+    const locationColumnWidth = 128;
+    const taskColumnWidth = 210;
     const gridColumns = `repeat(${daysInMonth}, minmax(0, 1fr))`;
     const today = new Date();
     const todayDay = today.getFullYear() === year && today.getMonth() + 1 === month ? today.getDate() : 0;
@@ -386,16 +417,44 @@ function renderMonthlyGantt(tasks) {
         })
         .filter(Boolean);
 
+    const groupedTasks = chartTasks
+        .slice()
+        .sort((a, b) => {
+            return String(a.location || '').localeCompare(String(b.location || ''), 'ko') ||
+                String(a.startDate || '').localeCompare(String(b.startDate || '')) ||
+                String(a.dueDate || '').localeCompare(String(b.dueDate || '')) ||
+                String(a.title || '').localeCompare(String(b.title || ''), 'ko');
+        })
+        .reduce((groups, task) => {
+            const location = String(task.location || '미지정 위치').trim() || '미지정 위치';
+            if (!groups.has(location)) groups.set(location, []);
+            groups.get(location).push(task);
+            return groups;
+        }, new Map());
+
     const rows = chartTasks.length
-        ? chartTasks.map(task => {
-            const style = STATUS_STYLES[task.statusKey] || STATUS_STYLES.planned;
-            return `
-                <div style="display:grid; grid-template-columns:${taskColumnWidth}px minmax(0,1fr); min-height:38px; border-top:1px solid rgba(148,163,184,0.10);">
-                    <div style="min-width:0; padding:7px 10px; color:#e5e7eb; font-size:11px; font-weight:800; line-height:1.35; white-space:normal; word-break:keep-all; overflow-wrap:anywhere;" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</div>
-                    <div style="display:grid; grid-template-columns:${gridColumns}; grid-template-rows:1fr; align-items:center; position:relative; padding:5px 0; background:linear-gradient(90deg, rgba(148,163,184,0.08) 1px, transparent 1px); background-size:calc(100% / ${daysInMonth}) 100%;">
-                        ${holidayCells}
-                        <div title="${escapeHtml(`${task.title} ${task.startDate} ~ ${task.dueDate}`)}" style="grid-column:${task.startDay} / ${task.endDay + 1}; grid-row:1; z-index:1; height:16px; border-radius:999px; background:${style.color}; box-shadow:0 0 0 1px rgba(255,255,255,0.12) inset; min-width:14px;"></div>
+        ? Array.from(groupedTasks.entries()).map(([location, groupTasks]) => {
+            const rowCount = groupTasks.length;
+            const taskRows = groupTasks.map((task, index) => {
+                const style = STATUS_STYLES[task.statusKey] || STATUS_STYLES.planned;
+                return `
+                    <div style="display:contents;">
+                        ${index === 0 ? `
+                            <div style="grid-column:1; grid-row:1 / span ${rowCount}; min-width:0; display:flex; align-items:center; padding:8px 9px; border-top:1px solid rgba(148,163,184,0.14); border-right:1px solid rgba(148,163,184,0.12); background:rgba(30,41,59,0.54); color:#bae6fd; font-size:11px; font-weight:900; line-height:1.35; word-break:keep-all; overflow-wrap:anywhere;" title="${escapeHtml(location)}">
+                                <span>${escapeHtml(location)}</span>
+                            </div>
+                        ` : ''}
+                        <div style="grid-column:2; min-width:0; min-height:38px; padding:7px 10px; border-top:1px solid rgba(148,163,184,0.10); border-right:1px solid rgba(148,163,184,0.12); color:#e5e7eb; font-size:11px; font-weight:800; line-height:1.35; white-space:normal; word-break:keep-all; overflow-wrap:anywhere;" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</div>
+                        <div style="grid-column:3; min-height:38px; display:grid; grid-template-columns:${gridColumns}; grid-template-rows:1fr; align-items:center; position:relative; padding:5px 0; border-top:1px solid rgba(148,163,184,0.10); background:linear-gradient(90deg, rgba(148,163,184,0.08) 1px, transparent 1px); background-size:calc(100% / ${daysInMonth}) 100%;">
+                            ${holidayCells}
+                            <div title="${escapeHtml(`${task.title} ${task.startDate} ~ ${task.dueDate}`)}" style="grid-column:${task.startDay} / ${task.endDay + 1}; grid-row:1; z-index:1; height:16px; border-radius:999px; background:${style.color}; box-shadow:0 0 0 1px rgba(255,255,255,0.12) inset; min-width:14px;"></div>
+                        </div>
                     </div>
+                `;
+            }).join('');
+            return `
+                <div style="display:grid; grid-template-columns:${locationColumnWidth}px ${taskColumnWidth}px minmax(0,1fr); grid-auto-rows:minmax(38px, auto);">
+                    ${taskRows}
                 </div>
             `;
         }).join('')
@@ -413,8 +472,9 @@ function renderMonthlyGantt(tasks) {
             </div>
             <div style="overflow-y:auto; overflow-x:hidden; max-height:220px;">
                 <div style="width:100%; min-width:0;">
-                    <div style="display:grid; grid-template-columns:${taskColumnWidth}px minmax(0,1fr); min-height:34px;">
-                        <div style="padding:7px 10px; color:#94a3b8; font-size:11px; font-weight:900;">업무</div>
+                    <div style="display:grid; grid-template-columns:${locationColumnWidth}px ${taskColumnWidth}px minmax(0,1fr); min-height:34px;">
+                        <div style="padding:7px 9px; color:#94a3b8; font-size:11px; font-weight:900; border-right:1px solid rgba(148,163,184,0.12);">위치</div>
+                        <div style="padding:7px 10px; color:#94a3b8; font-size:11px; font-weight:900; border-right:1px solid rgba(148,163,184,0.12);">업무</div>
                         <div style="display:grid; grid-template-columns:${gridColumns}; align-items:stretch; color:#94a3b8; font-size:10px; font-weight:800; text-align:center;">
                             ${dayMeta.map(meta => `
                                 <span title="${escapeHtml(meta.isToday ? '오늘' : (meta.holidayName || (meta.isSunday ? '일요일' : (meta.isSaturday ? '토요일' : ''))))}" style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0; min-width:0; color:${meta.isToday ? '#facc15' : (meta.holidayName || meta.isSunday ? '#f87171' : (meta.isSaturday ? '#60a5fa' : '#94a3b8'))}; background:${meta.isToday ? 'rgba(250,204,21,0.20)' : (meta.holidayName ? 'rgba(248,113,113,0.18)' : (meta.isSunday ? 'rgba(248,113,113,0.10)' : (meta.isSaturday ? 'rgba(56,189,248,0.09)' : 'transparent')))}; border-left:1px solid rgba(148,163,184,0.08); ${meta.isToday ? 'box-shadow: inset 0 -2px 0 #facc15;' : ''} font-size:9px; line-height:1.05;">
@@ -480,7 +540,7 @@ function renderSchedule() {
     }
 
     const filtered = getFilteredTasks();
-    const availableMonths = getAvailableMonths(scheduleState.tasks);
+    const availableMonths = getScheduleMonthOptions(scheduleState.tasks);
     const monthOptions = availableMonths.map(month => `<option value="${escapeHtml(month)}">${escapeHtml(formatMonthLabel(month))}</option>`).join('');
     const cacheLabel = scheduleState.cacheTs
         ? `마지막 동기화: ${new Date(scheduleState.cacheTs).toLocaleString('ko-KR')}${scheduleState.refreshing ? ' · 최신화 중' : ''}`
@@ -528,7 +588,7 @@ function renderSchedule() {
 
     const monthPreset = document.getElementById('example2-schedule-month-preset');
     if (monthPreset) {
-        monthPreset.value = availableMonths.includes(scheduleState.month) ? scheduleState.month : (availableMonths[0] || scheduleState.month);
+        monthPreset.value = scheduleState.month || getDefaultMonth(scheduleState.tasks);
         monthPreset.onchange = () => {
             scheduleState.month = monthPreset.value || '';
             renderSchedule();

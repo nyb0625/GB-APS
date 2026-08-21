@@ -208,6 +208,57 @@ function getIssueResultValue(issue) {
     ], ''));
 }
 
+function getScheduleStartDateValue(issue) {
+    return textFromValueSafe(getCustomValueSafe(issue, [
+        '작업 시작일',
+        '작업시작일',
+        '수행 시작일',
+        '수행시작일',
+        '시작일',
+        'Start Date',
+        'Start',
+        'startDate'
+    ])) || textFromValueSafe(pick(issue, [
+        'startDate',
+        'start_date',
+        'attributes.startDate',
+        'attributes.start_date',
+        'createdAt',
+        'attributes.createdAt',
+        'createdDate',
+        'attributes.createdDate'
+    ], ''));
+}
+
+function getScheduleDueDateValue(issue) {
+    return textFromValueSafe(getCustomValueSafe(issue, [
+        '작업 마감일',
+        '작업마감일',
+        '작업 종료일',
+        '작업종료일',
+        '수행 마감일',
+        '수행마감일',
+        '마감일',
+        '종료일',
+        'Due Date',
+        'End Date',
+        'Due',
+        'dueDate',
+        'endDate'
+    ])) || textFromValueSafe(pick(issue, [
+        'dueDate',
+        'due_date',
+        'endDate',
+        'end_date',
+        'attributes.dueDate',
+        'attributes.due_date',
+        'attributes.endDate',
+        'attributes.end_date',
+        'updatedAt',
+        'attributes.updatedAt'
+    ], '')) || getScheduleStartDateValue(issue);
+}
+
 function normalizeType(issue, typeMap) {
     const typeId = pick(issue, ['issueTypeId', 'issueSubtypeId', 'attributes.issueTypeId', 'attributes.issueSubtypeId', 'typeId'], '');
     if (typeId && typeMap.get(typeId)) return typeMap.get(typeId);
@@ -746,6 +797,49 @@ async function fetchJsonWithBody(url, token, body, extraHeaders = {}) {
     return json;
 }
 
+function getIssueRowsFromResponse(json) {
+    return json && (json.results || json.data || json.issues || []);
+}
+
+function getNextIssuesPageUrl(json) {
+    const next = json && (
+        json.next ||
+        json.nextUrl ||
+        json.pagination?.next ||
+        json.pagination?.nextUrl ||
+        json.links?.next?.href ||
+        json.links?.next
+    );
+    if (!next) return '';
+    if (typeof next === 'string') return next;
+    return next.href || next.url || '';
+}
+
+function withQueryParam(rawUrl, key, value) {
+    const url = new URL(rawUrl);
+    url.searchParams.set(key, String(value));
+    return url.toString();
+}
+
+function issuePageSignature(rows) {
+    return rows
+        .slice(0, 5)
+        .map(row => row && (row.id || row.issueId || row.displayId || row.attributes?.id || row.attributes?.displayId || JSON.stringify(row).slice(0, 120)))
+        .join('|');
+}
+
+function dedupeIssueRows(rows) {
+    const seen = new Set();
+    return rows.filter(row => {
+        const key = row && (row.id || row.issueId || row.displayId || row.attributes?.id || row.attributes?.displayId);
+        if (!key) return true;
+        const text = String(key);
+        if (seen.has(text)) return false;
+        seen.add(text);
+        return true;
+    });
+}
+
 function normalizeSnapshotUrn(issue) {
     return textFromValueSafe(pick(issue, [
         'snapshotUrn',
@@ -952,9 +1046,30 @@ async function fetchFormaIssues(projectId, containerId, token, limit) {
     for (const candidate of candidates) {
         try {
             const headers = candidate.region ? { 'x-ads-region': candidate.region } : {};
-            const json = await fetchJson(candidate.url, token, headers);
-            const rows = json.results || json.data || json.issues || [];
-            return rows.slice(0, totalLimit);
+            const rows = [];
+            const signatures = new Set();
+            let url = candidate.url;
+            let offset = 0;
+            for (let page = 0; rows.length < totalLimit && page < Math.ceil(totalLimit / pageLimit) + 3; page += 1) {
+                const json = await fetchJson(url, token, headers);
+                const pageRows = getIssueRowsFromResponse(json);
+                if (!Array.isArray(pageRows) || !pageRows.length) break;
+                const signature = issuePageSignature(pageRows);
+                if (signature && signatures.has(signature)) break;
+                signatures.add(signature);
+                rows.push(...pageRows);
+                if (rows.length >= totalLimit) break;
+
+                const nextUrl = getNextIssuesPageUrl(json);
+                if (nextUrl) {
+                    url = nextUrl.startsWith('http') ? nextUrl : new URL(nextUrl, url).toString();
+                    continue;
+                }
+                if (pageRows.length < pageLimit) break;
+                offset += pageLimit;
+                url = withQueryParam(candidate.url, 'offset', offset);
+            }
+            return dedupeIssueRows(rows).slice(0, totalLimit);
         } catch (err) {
             lastError = err;
             console.warn('[Forma Issues] issue fetch failed:', candidate.url, candidate.region || 'default', err.message);
@@ -1224,8 +1339,8 @@ function normalizeFormaIssue(issue, typeMap, userMap) {
         creator: displayUser(creatorRaw, userMap),
         reviewer: displayUser(reviewerRaw, userMap),
         createdAt: pick(issue, ['createdAt', 'attributes.createdAt', 'createdDate', 'attributes.createdDate'], ''),
-        dueDate: pick(issue, ['dueDate', 'attributes.dueDate', 'endDate', 'attributes.dueDate'], ''),
-        startDate: pick(issue, ['startDate', 'attributes.startDate'], ''),
+        dueDate: getScheduleDueDateValue(issue),
+        startDate: getScheduleStartDateValue(issue),
         placement: formatPlacementInfo(placementInfo),
         placementName: placementInfo.name,
         placementVersion: placementInfo.version,
@@ -1273,8 +1388,8 @@ function normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap = new 
         creator: displayUser(creatorRaw, userMap),
         reviewer: displayUser(reviewerRaw, userMap),
         createdAt: pick(issue, ['createdAt', 'attributes.createdAt', 'createdDate', 'attributes.createdDate'], ''),
-        dueDate: pick(issue, ['dueDate', 'attributes.dueDate', 'endDate'], ''),
-        startDate: pick(issue, ['startDate', 'attributes.startDate'], ''),
+        dueDate: getScheduleDueDateValue(issue),
+        startDate: getScheduleStartDateValue(issue),
         placement: formatPlacementInfo(placementInfo),
         placementName: placementInfo.name,
         placementVersion: placementInfo.version,
@@ -1317,7 +1432,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
     const gunhwaOnly = req.query.gunhwa === '1' || categoryFilter === 'gunhwa' || categoryFilter === '\uac74\ud654';
     const workScheduleOnly = req.query.workSchedule === '1' || req.query.work_schedule === '1';
     const includeGunhwa = gunhwaOnly || req.query.includeGunhwa === '1' || req.query.include_gunhwa === '1';
-    const cacheKey = `${hubId}|${projectId}|${limit}|${includeGunhwa ? 'with-gunhwa' : 'without-gunhwa'}|${gunhwaOnly ? 'gunhwa-only' : 'all-visible'}|${workScheduleOnly ? 'work-schedule-fast-v4' : 'main'}`;
+    const cacheKey = `${hubId}|${projectId}|${limit}|${includeGunhwa ? 'with-gunhwa' : 'without-gunhwa'}|${gunhwaOnly ? 'gunhwa-only' : 'all-visible'}|${workScheduleOnly ? 'work-schedule-fast-v7-location' : 'main'}`;
     const cacheTtlMs = workScheduleOnly ? Math.max(FORMA_ISSUES_CACHE_TTL_MS, 10 * 60 * 1000) : FORMA_ISSUES_CACHE_TTL_MS;
 
     try {
@@ -1340,7 +1455,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             ? await Promise.all([
                 fetchProjectMembers(projectId, token),
                 fetchIssueTypeMap(projectId, containerId, token),
-                Promise.resolve(new Map()),
+                fetchLocationMap(hubId, projectId, token),
                 fetchFormaIssues(projectId, containerId, token, limit)
             ])
             : await Promise.all([
@@ -1428,13 +1543,29 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             });
         };
 
-        const normalized = sourceIssues
-            .map(issue => {
+        const scheduleCandidates = workScheduleOnly
+            ? sourceIssues
+                .map(issue => {
+                    const normalizedIssue = normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap);
+                    return {
+                        issue,
+                        isGunhwa: isGunhwaIssueServer(issue, normalizedIssue),
+                        isUpdate: isUpdateIssueServer(issue, normalizedIssue)
+                    };
+                })
+                .filter(item => item.isGunhwa || item.isUpdate)
+            : [];
+        const normalizedSourceIssues = workScheduleOnly
+            ? await enrichFormaIssuesWithDetails(scheduleCandidates.map(item => item.issue), projectId, containerId, token)
+            : sourceIssues;
+        const normalized = normalizedSourceIssues
+            .map((issue, index) => {
                 const normalizedIssue = normalizeFormaIssueForTable(issue, typeMap, userMap, locationMap);
+                const scheduleCandidate = workScheduleOnly ? scheduleCandidates[index] : null;
                 return {
                     normalizedIssue,
-                    isGunhwa: isGunhwaIssueServer(issue, normalizedIssue),
-                    isUpdate: isUpdateIssueServer(issue, normalizedIssue)
+                    isGunhwa: scheduleCandidate ? scheduleCandidate.isGunhwa : isGunhwaIssueServer(issue, normalizedIssue),
+                    isUpdate: scheduleCandidate ? scheduleCandidate.isUpdate : isUpdateIssueServer(issue, normalizedIssue)
                 };
             })
             .filter(item => {
@@ -1463,7 +1594,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
                 containerId,
                 count: normalized.length,
                 rawCount: rawIssues.length,
-                enrichedCount: workScheduleOnly ? 0 : sourceIssues.filter(issue => issue && issue.rawDetailIssue).length,
+                enrichedCount: normalizedSourceIssues.filter(issue => issue && issue.rawDetailIssue).length,
                 fastMode: workScheduleOnly,
                 cache: false,
                 fetchedAt: new Date().toISOString(),

@@ -17,7 +17,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260806-zone-sub-10">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260819-monthly-fill1">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     
@@ -1263,7 +1263,7 @@
 
                             <!-- 3D 뷰어 컨테이너 -->
                             <div style="position: relative; border-radius: 6px; overflow: hidden; border: 1px solid rgba(56,189,248,0.3); background: #ffffff;">
-                                <div id="weekly-3d-viewer" style="width: 100%; height: 350px; display: block;"></div>
+                                <div id="weekly-3d-viewer" style="width: 100%; height: 350px; min-height: 350px; display: block; position: relative;"></div>
                             </div>
                         </div>
 
@@ -1427,18 +1427,12 @@
             </div>
 
             <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; height: 100%; min-height: 0;">
+                <div style="display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; width: 100%; height: 100%; min-height: 0;">
                     <section id="example2-left-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
                         <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
                             <i class="fas fa-calendar-check" style="color: #38bdf8; margin-right: 8px;"></i> 업무 일정
                         </div>
                         <div id="example2-work-schedule" style="flex: 1; min-height: 0;"></div>
-                    </section>
-                    <section id="example2-right-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(16, 185, 129, 0.24); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
-                        <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
-                            <i class="fas fa-diagram-project" style="color: #10b981; margin-right: 8px;"></i> 업무
-                        </div>
-                        <div id="example2-cde-tasks" style="flex: 1; min-height: 0;"></div>
                     </section>
                 </div>
             </div>
@@ -1528,9 +1522,9 @@
                             <img src="/images/gangbuk-progress-map.png?v=20260806" alt="강북정수장 공사 영역도" class="bim-progress-map-img"
                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
                             <div class="bim-progress-map-fallback" style="display:none;">공사 영역 이미지가 없습니다.</div>
-                            <button type="button" class="bim-zone zone-new-main" data-zone="new" aria-label="신설 영역">신설</button>
-                            <button type="button" class="bim-zone zone-new-sub" data-zone="new" aria-label="신설 영역">신설</button>
-                            <button type="button" class="bim-zone zone-extension" data-zone="extension" aria-label="증설 영역">증설</button>
+                            <button type="button" class="bim-zone zone-new-main" data-zone="extension" aria-label="본공사 영역">본공사</button>
+                            <button type="button" class="bim-zone zone-new-sub" data-zone="extension" aria-label="본공사 영역">본공사</button>
+                            <button type="button" class="bim-zone zone-extension" data-zone="extension" aria-label="본공사 영역">본공사</button>
                             <button type="button" class="bim-zone zone-priority" data-zone="priority" aria-label="우선시공분 영역">우선시공분</button>
                             <div class="bim-progress-viewer-layer">
                                 <div class="bim-progress-viewer-head">
@@ -2038,6 +2032,10 @@
                                 <img src="/img/lapse/lapse_1.jpg" alt="CCTV 1">
                                 <div class="thumb-info">CCTV 1</div>
                             </div>
+                            <div class="thumb-card" data-cctv-id="cctv_construction_site" data-stream-url="https://www.utic.go.kr/jsp/map/openDataCctvStream.jsp?key=4ydVvgYFUHonR2Q0ZysY7MM1MQ5xJ84pwAr3jVMY&amp;cctvid=L010307&amp;cctvName=%25EC%25BD%2594%25EC%2597%2591%25EC%258A%25A4&amp;kind=Seoul&amp;cctvip=undefined&amp;cctvch=52&amp;id=222&amp;cctvpasswd=undefined&amp;cctvport=undefined" data-img="/img/lapse/lapse_1.jpg" data-title="공사현장">
+                                <img src="/img/lapse/lapse_1.jpg" alt="공사현장">
+                                <div class="thumb-info">공사현장</div>
+                            </div>
                         </div>
                     </div>
                     <div id="subtab-content-issues" style="display: none; width: 100%; max-height: 140px; overflow-y: auto;">
@@ -2195,12 +2193,12 @@
     <!-- Autodesk Viewer Scripts -->
     <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
     <script type="module">
-        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260805-monthly-end-only1';
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260819-monthly-fill1';
         document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
     </script>
     <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
     <!-- Main Entry Point Module -->
-    <script src="./js/main.js?v=20260812-project-cctv-viewer1" type="module"></script>
+    <script src="./js/main.js?v=20260813-issue-summary-fallback1" type="module"></script>
 
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
@@ -2249,12 +2247,25 @@
                 // 3D 뷰어 초기화 (최초 1회)
                 if (!window._weekly3DInited && typeof window.initWeekly3DViewer === 'function') {
                     window._weekly3DInited = true;
-                    window.initWeekly3DViewer('weekly-3d-viewer');
+                    Promise.resolve(window.initWeekly3DViewer('weekly-3d-viewer'))
+                        .then(function(ok) {
+                            if (ok === false) window._weekly3DInited = false;
+                        })
+                        .catch(function(err) {
+                            console.error('[Weekly3DViewer] init 실패:', err);
+                            window._weekly3DInited = false;
+                        });
                     // 힌트 자동 페이드아웃
                     setTimeout(() => {
                         const hint = document.getElementById('viewer-hint');
                         if (hint) hint.style.opacity = '0';
                     }, 3000);
+                } else if (window._weekly3DInited) {
+                    var weeklyViewerContainer = document.getElementById('weekly-3d-viewer');
+                    var weeklyViewer = weeklyViewerContainer && weeklyViewerContainer._weeklyViewerInstance;
+                    if (weeklyViewer && typeof weeklyViewer.resize === 'function') {
+                        setTimeout(function() { weeklyViewer.resize(); }, 100);
+                    }
                 }
             }
 
@@ -2264,19 +2275,11 @@
                 example2.style.zIndex = '10';
                 if (!window._example2ScheduleInited) {
                     window._example2ScheduleInited = true;
-                    import('./js/example2-schedule.js?v=20260813-work-schedule-today1')
+                    import('./js/example2-schedule.js?v=20260813-work-schedule-location-field1')
                         .then(mod => { if (typeof mod.initExample2Schedule === 'function') mod.initExample2Schedule(); })
                         .catch(err => console.error('[Example2 Schedule] init 실패:', err));
                 } else if (typeof window.initExample2Schedule === 'function') {
                     window.initExample2Schedule();
-                }
-                if (!window._example2CdeTasksInited) {
-                    window._example2CdeTasksInited = true;
-                    import('./js/example2-cde-tasks.js?v=20260813-workflow-viewer2')
-                        .then(mod => { if (typeof mod.initExample2CdeTasks === 'function') mod.initExample2CdeTasks(); })
-                        .catch(err => console.error('[Example2 CDE Tasks] init 실패:', err));
-                } else if (typeof window.initExample2CdeTasks === 'function') {
-                    window.initExample2CdeTasks();
                 }
             }
 
@@ -2724,6 +2727,6 @@
         })();
     </script>
     <!-- 금주 작업 시각화 3D 뷰어 (Three.js) -->
-    <script src="/js/weekly-3d-viewer.js"></script>
+    <script src="/js/weekly-3d-viewer.js?v=20260821-visible-retry1"></script>
 </body>
 </html>

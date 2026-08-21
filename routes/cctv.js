@@ -24,7 +24,7 @@ const tlsBypassAgent = new https.Agent({ rejectUnauthorized: false });
 const axiosTls = axios.create({ httpsAgent: tlsBypassAgent });
 
 /**
- * UTIC 6개 지정 CCTV 채널 정의 및 사용자 지정 6개 exact Revit BIM 모델 URN 매핑
+ * UTIC 지정 CCTV 채널 정의 및 사용자 지정 Revit BIM 모델 URN 매핑
  *
  * 1. 강남역   ➔ 강북_구조물_신설_02_응집침전지_C
  *    URN: dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLk1EYVFnc1N6UVBheVJHaU53dGl3cUE_dmVyc2lvbj0y
@@ -95,6 +95,16 @@ const UTIC_CCTV_CHANNELS = [
         modelName: '강북_구조물_신설_07_정수지_C',
         modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLmxWN1cwcnduUnNpTnNJOWFaaF9jR2c_dmVyc2lvbj05',
         img: '/img/lapse/lapse_3.jpg'
+    },
+    {
+        id: 'cctv_construction_site',
+        name: '공사현장',
+        title: '공사현장',
+        streamType: 'utic_page',
+        pageUrl: `https://www.utic.go.kr/jsp/map/openDataCctvStream.jsp?key=${UTIC_API_KEY}&cctvid=L010307&cctvName=%25EC%25BD%2594%25EC%2597%2591%25EC%258A%25A4&kind=Seoul&cctvip=undefined&cctvch=52&id=222&cctvpasswd=undefined&cctvport=undefined`,
+        modelName: '',
+        modelUrn: '',
+        img: '/img/lapse/lapse_1.jpg'
     },
     {
         id: 'cctv_pohang_duho',
@@ -174,11 +184,11 @@ async function resolveUticPageStreamUrl(pageUrl) {
 
 /**
  * GET /api/cctv/filtered-list
- * 6개 지정 UTIC CCTV 채널의 실제 HLS 스트림 URL 및 지정 3D BIM 모델 URN 반환
+ * 지정 UTIC CCTV 채널의 실제 HLS 스트림 URL 및 지정 3D BIM 모델 URN 반환
  */
 router.get('/filtered-list', async (req, res) => {
     try {
-        console.log('[UTIC CCTV] Resolving 6 CCTV channels with 100% User-Specified Revit Model URNs...');
+        console.log(`[UTIC CCTV] Resolving ${UTIC_CCTV_CHANNELS.length} CCTV channels with User-Specified Revit Model URNs...`);
 
         const resolvedChannels = await Promise.all(UTIC_CCTV_CHANNELS.map(async (ch) => {
             let streamUrl = null;

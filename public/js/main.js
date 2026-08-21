@@ -776,7 +776,7 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
  * main.js — Client-side orchestrator
  */
 
-import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260804-main-rotate-fix1';
+import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260813-runtime-merge-rotation1';
 import { initAiPanel } from './ai-panel.js';
 import { explorer } from './explorer.js';
 import './harness-context.js';
@@ -5329,16 +5329,6 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             }
             if (typeof viewer.setQualityLevel === 'function') viewer.setQualityLevel(true, true);
             if (window.loadedModels && urn && model) window.loadedModels[urn] = model;
-            if (window.applyModelRotation && window.rotationState && urn) {
-                var normalizeForVisibility = function(value) {
-                    return String(value || '').replace(/^urn:/, '').replace(/=/g, '').trim();
-                };
-                var currentUrn = normalizeForVisibility(urn);
-                var rotateOn = Object.keys(window.rotationState).some(function(key) {
-                    return normalizeForVisibility(key) === currentUrn && window.rotationState[key];
-                });
-                window.applyModelRotation(viewer, urn, rotateOn);
-            }
             if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
                 viewer.impl.invalidate(true, true, true);
             }
@@ -6058,7 +6048,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 console.warn('[focusIssueOnViewer] targetUrn 없고 뷰어도 없음 — 탭 전환만 완료.');
                 if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
             } else {
-                import('./viewer.js?v=20260804-main-rotate-fix1').then(function(mod) {
+                import('./viewer.js?v=20260813-runtime-merge-rotation1').then(function(mod) {
                     if (!mod.initViewer || !mod.loadModel) return;
                     var container = document.getElementById('preview');
                     if (!container) return;

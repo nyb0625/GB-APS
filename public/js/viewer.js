@@ -216,12 +216,6 @@ export function loadModel(viewer, urn) {
                     if (window.loadedModels) {
                         window.loadedModels[urn] = model;
                     }
-                    if (window.applyModelRotation && window.rotationState) {
-                        const normalizeForVisibility = value => String(value || '').replace(/^urn:/, '').replace(/=/g, '').trim();
-                        const currentUrn = normalizeForVisibility(urn);
-                        const rotateOn = Object.keys(window.rotationState).some(key => normalizeForVisibility(key) === currentUrn && window.rotationState[key]);
-                        window.applyModelRotation(viewer, urn, rotateOn);
-                    }
                 } catch (visibilityRegisterError) {
                     console.warn('[Viewer] main model visibility registration skipped:', visibilityRegisterError.message);
                 }
@@ -658,4 +652,3 @@ export function compareViewerModelVersion(issueUrn) {
 if (typeof window !== 'undefined') {
     window.compareViewerModelVersion = compareViewerModelVersion;
 }
-

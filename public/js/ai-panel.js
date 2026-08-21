@@ -414,6 +414,58 @@ function formatIssueSummary(stats) {
     ].join('\n');
 }
 
+function getIssueTitle(issue) {
+    return issue?.title || issue?.name || issue?.subject || issue?.displayId || issue?.id || '제목 없음';
+}
+
+function getIssueDate(issue) {
+    const raw = issue?.createdAt || issue?.createdDate || issue?.date || issue?.startDate || issue?.dueDate || '';
+    return String(raw || '').slice(0, 10) || '-';
+}
+
+function buildIssueTextAnswer(question) {
+    const issues = collectAllIssueData();
+    const stats = buildIssueStats(issues);
+    const lower = String(question || '').toLowerCase();
+    const issueList = issues.slice().sort((a, b) => {
+        return String(getIssueDate(b)).localeCompare(String(getIssueDate(a))) ||
+            String(getIssueTitle(a)).localeCompare(String(getIssueTitle(b)), 'ko');
+    });
+    const topStatus = topEntries(stats.byStatus, 5).map(([key, count]) => `${key} ${count}건`).join(', ') || '없음';
+    const topLocation = topEntries(stats.byLocation, 5).map(([key, count]) => `${key} ${count}건`).join(', ') || '없음';
+    const topType = topEntries(stats.byType, 5).map(([key, count]) => `${key} ${count}건`).join(', ') || '없음';
+    const topTrade = topEntries(stats.byTrade, 5).map(([key, count]) => `${key} ${count}건`).join(', ') || '없음';
+    const recentItems = issueList.slice(0, 6).map((issue, index) => {
+        const title = getIssueTitle(issue);
+        const status = issueValue(issue, 'status');
+        const location = issueValue(issue, 'location');
+        const type = issueValue(issue, 'type');
+        return `${index + 1}. ${title} (${getIssueDate(issue)}, ${status}, ${location}, ${type})`;
+    }).join('\n');
+
+    if (!issues.length) {
+        return '현재 수집된 이슈 데이터가 없습니다. 이슈 탭에서 데이터를 불러온 뒤 다시 질문해 주세요.';
+    }
+
+    const headline = lower.includes('요약')
+        ? `이슈 요약입니다. 현재 확인된 이슈는 총 ${stats.total}건입니다.`
+        : `이슈 분석 결과입니다. 현재 확인된 이슈는 총 ${stats.total}건입니다.`;
+
+    return [
+        headline,
+        '',
+        `상태별 현황: ${topStatus}`,
+        `구조물/위치별 현황: ${topLocation}`,
+        `유형별 현황: ${topType}`,
+        `공종별 현황: ${topTrade}`,
+        '',
+        '최근/주요 이슈:',
+        recentItems || '표시할 이슈가 없습니다.',
+        '',
+        '해석: 건수가 많은 구조물/위치와 상태를 우선 확인하고, 진행중 또는 지연 상태의 이슈부터 담당자 확인과 조치 일정을 잡는 것이 좋습니다.'
+    ].join('\n');
+}
+
 function renderIssueChartAnswer(question) {
     const issues = collectAllIssueData();
     const stats = buildIssueStats(issues);
@@ -877,6 +929,12 @@ async function submitChatMessage(messageText) {
             chatHistory.push({ role: 'assistant', content: 'Forma 이슈 데이터를 그래프로 표시했습니다.' });
             return;
         }
+        if (['요약', '분석', '현황', '정리', '보고', '통계', '알려'].some(word => cleanQuery.toLowerCase().includes(word))) {
+            const issueAnswer = buildIssueTextAnswer(cleanQuery);
+            appendMessage('assistant', issueAnswer);
+            chatHistory.push({ role: 'assistant', content: issueAnswer });
+            return;
+        }
     }
 
     const handledViewerIntent = !isIssueRelatedQuery(cleanQuery) && await tryExecuteLocalViewerIntent(cleanQuery);
@@ -997,13 +1055,19 @@ async function submitChatMessage(messageText) {
 
         console.log('[Smart AI Agent] Ollama 답변 수신 성공 ✅');
 
-        const processedReply = processActionTags(reply);
+        const processedReply = await processActionTags(reply);
         appendMessage('assistant', processedReply);
         chatHistory.push({ role: 'assistant', content: reply });
 
     } catch (err) {
         console.error('[Smart AI Agent] Ollama 연동 실패:', err.message);
         toggleLoading(false);
+        if (includeIssueCtx) {
+            const fallbackAnswer = buildIssueTextAnswer(cleanQuery);
+            appendMessage('assistant', `${fallbackAnswer}\n\n참고: 로컬 LLM 서버 연결이 되지 않아, 현재 브라우저에 수집된 이슈 데이터 기준으로 답변했습니다.`);
+            chatHistory.push({ role: 'assistant', content: fallbackAnswer });
+            return;
+        }
         appendMessage('assistant',
             `❌ 연결 실패\n(로컬 LLM 서버 http://localhost:11434 연결 불가: ${err.message})`
         );
@@ -1051,6 +1115,66 @@ async function executeViewerCommand(data) {
         target: data.target || data.category || null,
         params: data.params || {}
     }, activeViewer);
+}
+
+function getViewerActionLabel(action) {
+    const key = String(action || '').trim().toLowerCase();
+    const labels = {
+        count: '개수 조회',
+        select: '선택',
+        highlight: '강조',
+        isolate: '격리',
+        hide: '숨김',
+        flyto: '이동',
+        focus: '이동',
+        theme: '색상 변경',
+        select_material: '재료 선택',
+        reset_viewer: '초기화',
+        showall: '전체 보기'
+    };
+    return labels[key] || key.toUpperCase();
+}
+
+function normalizeViewerTargetLabel(target) {
+    const text = String(target || '').trim();
+    return text || '대상 객체';
+}
+
+function buildViewerActionReply(command, result = {}) {
+    const action = String(command?.action || command?.command || '').trim().toLowerCase();
+    const target = normalizeViewerTargetLabel(result.target || command?.target || command?.category);
+    const count = Number(result.count);
+    const hasCount = Number.isFinite(count);
+
+    if (action === 'count') {
+        return `${target} 객체는 ${hasCount ? count : 0}개입니다.`;
+    }
+    if (action === 'theme') {
+        const color = result.color || command?.params?.color;
+        return `${target} 객체 ${hasCount ? `${count}개를 ` : ''}${color ? `${color} 색상으로 ` : ''}변경했습니다.`;
+    }
+    if (action === 'select' || action === 'highlight') {
+        return `${target} 객체 ${hasCount ? `${count}개를 ` : ''}선택했습니다.`;
+    }
+    if (action === 'isolate') {
+        return `${target} 객체 ${hasCount ? `${count}개만 ` : ''}보이도록 격리했습니다.`;
+    }
+    if (action === 'hide') {
+        return `${target} 객체 ${hasCount ? `${count}개를 ` : ''}숨겼습니다.`;
+    }
+    if (action === 'flyto' || action === 'focus') {
+        return `${target} 객체 위치로 이동했습니다${hasCount ? ` (${count}개)` : ''}.`;
+    }
+    if (action === 'select_material') {
+        return `${target} 재료가 적용된 객체 ${hasCount ? `${count}개를 ` : ''}선택했습니다.`;
+    }
+    if (action === 'reset_viewer') {
+        return '뷰어 색상과 선택 상태를 초기화했습니다.';
+    }
+    if (action === 'showall') {
+        return '모든 객체가 보이도록 뷰어를 복원했습니다.';
+    }
+    return result.message || `${getViewerActionLabel(action)} 명령을 실행했습니다${hasCount ? ` (${count}개)` : ''}.`;
 }
 
 function normalizeViewerColor(text) {
@@ -1141,8 +1265,7 @@ async function tryExecuteLocalViewerIntent(text) {
 
     const res = await executeViewerCommand(command);
     if (res?.success) {
-        const countText = typeof res.count === 'number' ? ` (${res.count}개)` : '';
-        const message = `요청하신 뷰어 명령을 실행했습니다.${countText}`;
+        const message = buildViewerActionReply(command, res);
         appendMessage('assistant', message);
         chatHistory.push({ role: 'assistant', content: message });
         return true;
@@ -1153,8 +1276,9 @@ async function tryExecuteLocalViewerIntent(text) {
     return true;
 }
 
-function processActionTags(reply) {
+async function processActionTags(reply) {
     let text = reply;
+    const actionReplies = [];
 
     // 0. JSON 액션 인터셉터 ([ACTION: {"command": "export_pdf", "filters": {...}}])
     const jsonActionRegex = /\[ACTION:\s*(\{[\s\S]*?\})\]/i;
@@ -1178,19 +1302,21 @@ function processActionTags(reply) {
 
     const actions = handleChatCommands(text);
     if (actions.length > 0) {
-        actions.forEach(async (act) => {
+        await Promise.all(actions.map(async (act) => {
             const res = await executeViewerCommand(act);
             if (res?.success) {
-                const countText = typeof res.count === 'number' ? ` (${res.count}개)` : '';
-                addSystemMessage(`💡 ${act.action.toUpperCase()} ${act.target || ''}${countText} 명령을 실행했습니다.`);
+                const actionReply = buildViewerActionReply(act, res);
+                actionReplies.push(actionReply);
+                if (actions.length > 1) addSystemMessage(`💡 ${actionReply}`);
             } else {
                 addSystemMessage(`⚠️ 명령 실행 실패: ${res?.error || '알 수 없는 오류'}`);
             }
-        });
+        }));
         text = text.replace(/\[(?:COMMAND|ACTION)\s*:\s*(?!\s*\{)[^\]]+\]/gi, '');
     }
 
     text = text.trim();
+    if (!text && actionReplies.length) text = actionReplies.join('\n');
     if (!text) text = '지시하신 뷰어 제어 명령을 실행했습니다.';
     return text;
 }

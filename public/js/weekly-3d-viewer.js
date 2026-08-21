@@ -61,16 +61,27 @@
 
   function ensureAutodeskInitialized() {
     if (window._autodeskInitPromise) return window._autodeskInitPromise;
-    window._autodeskInitPromise = new Promise((resolve) => {
+    window._autodeskInitPromise = new Promise((resolve, reject) => {
+      let checkInterval = null;
+      const timeout = setTimeout(() => {
+        if (checkInterval) clearInterval(checkInterval);
+        reject(new Error('Autodesk Viewer SDK 로딩 시간이 초과되었습니다.'));
+      }, 15000);
+
+      const finish = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+
       if (typeof Autodesk !== 'undefined' && Autodesk.Viewing) {
         const options = {
           env: 'AutodeskProduction',
           api: 'derivativeV2',
           getAccessToken: getAccessToken
         };
-        Autodesk.Viewing.Initializer(options, () => resolve());
+        Autodesk.Viewing.Initializer(options, finish);
       } else {
-        const checkInterval = setInterval(() => {
+        checkInterval = setInterval(() => {
           if (typeof Autodesk !== 'undefined' && Autodesk.Viewing) {
             clearInterval(checkInterval);
             const options = {
@@ -78,12 +89,17 @@
               api: 'derivativeV2',
               getAccessToken: getAccessToken
             };
-            Autodesk.Viewing.Initializer(options, () => resolve());
+            Autodesk.Viewing.Initializer(options, finish);
           }
         }, 100);
       }
     });
     return window._autodeskInitPromise;
+  }
+
+  function showWeeklyViewerMessage(container, message, color) {
+    if (!container) return;
+    container.innerHTML = `<div style="padding:16px; color:${color || '#ef4444'}; font-size:0.8rem; text-align:center; background:#ffffff; height:100%; min-height:350px; display:flex; align-items:center; justify-content:center; box-sizing:border-box;">${message}</div>`;
   }
 
   function findTargetModel(node) {
@@ -418,7 +434,13 @@
   // ──────────────────────────────────────────────────────────────────────────
   async function initWeekly3DViewer(containerId) {
     const container = document.getElementById(containerId || 'weekly-3d-viewer');
-    if (!container) return;
+    if (!container) return false;
+
+    container.style.width = '100%';
+    container.style.height = container.style.height || '350px';
+    container.style.minHeight = '350px';
+    container.style.display = 'block';
+    container.style.position = container.style.position || 'relative';
 
     if (container._weeklyViewerInstance) {
       setTimeout(() => {
@@ -426,7 +448,7 @@
           container._weeklyViewerInstance.resize();
         }
       }, 100);
-      return;
+      return true;
     }
 
     container.innerHTML = '<div style="padding:16px; color:#0f172a; font-size:0.85rem; font-weight:bold; display:flex; align-items:center; justify-content:center; height:100%; background:#ffffff;"><i class="fas fa-spinner fa-spin" style="margin-right:8px; color:#0284c7;"></i> 강북정수장 [강북_구조물_신설_07_정수지_C] 3D BIM 모델 로딩 중...</div>';
@@ -441,7 +463,10 @@
       const startCode = viewer.start();
       if (startCode > 0) {
         console.error('[Weekly3DViewer] Viewer start failed code:', startCode);
-        return;
+        container._weeklyViewerInstance = null;
+        window._weekly3DInited = false;
+        showWeeklyViewerMessage(container, `3D Viewer 시작에 실패했습니다. (code: ${startCode})`);
+        return false;
       }
 
       // 🎨 지오메트리 로드 완료 시 뷰어 흰 바탕 배경 적용 (다른 뷰어 미영향)
@@ -483,8 +508,10 @@
       const targetFile = findTargetModel(treeData);
       if (!targetFile || !targetFile.urn) {
         console.warn('[Weekly3DViewer] 정수지 C 모델을 찾지 못했습니다.');
-        container.innerHTML = '<div style="padding:16px; color:#ef4444; font-size:0.8rem; text-align:center; background:#ffffff;">[강북_구조물_신설_07_정수지_C] 모델 정보를 불러올 수 없습니다.</div>';
-        return;
+        container._weeklyViewerInstance = null;
+        window._weekly3DInited = false;
+        showWeeklyViewerMessage(container, '[강북_구조물_신설_07_정수지_C] 모델 정보를 불러올 수 없습니다.');
+        return false;
       }
 
       console.log('[Weekly3DViewer] Target file:', targetFile.name, targetFile.urn);
@@ -507,9 +534,15 @@
           }, 400);
         }).catch(err => {
           console.error('[Weekly3DViewer] loadDocumentNode error:', err);
+          container._weeklyViewerInstance = null;
+          window._weekly3DInited = false;
+          showWeeklyViewerMessage(container, '3D 모델 노드 로드에 실패했습니다. 탭을 다시 열어 재시도할 수 있습니다.');
         });
       }, (code, msg) => {
         console.error('[Weekly3DViewer] Document load failure:', code, msg);
+        container._weeklyViewerInstance = null;
+        window._weekly3DInited = false;
+        showWeeklyViewerMessage(container, `3D 모델 문서 로드에 실패했습니다. (${code || 'unknown'})`);
       });
 
       // ResizeObserver 바인딩
@@ -519,9 +552,15 @@
         }
       });
       ro.observe(container);
+      return true;
 
     } catch (err) {
       console.error('[Weekly3DViewer] 초기화 실패:', err);
+      container._weeklyViewerInstance = null;
+      window._autodeskInitPromise = null;
+      window._weekly3DInited = false;
+      showWeeklyViewerMessage(container, err.message || '3D Viewer 초기화에 실패했습니다.');
+      return false;
     }
   }
 
