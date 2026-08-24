@@ -418,7 +418,12 @@ export function loadModelMulti(viewer, urn, options = {}) {
                 console.error('[Viewer]', msg);
                 return reject(new Error(msg));
             }
-            const loadOptions = Object.assign({}, options, { globalOffset: { x: 0, y: 0, z: 0 } });
+            const loadOptions = Object.assign({}, options);
+            if (!Object.prototype.hasOwnProperty.call(loadOptions, 'globalOffset')) {
+                loadOptions.globalOffset = { x: 0, y: 0, z: 0 };
+            } else if (loadOptions.globalOffset === null) {
+                delete loadOptions.globalOffset;
+            }
             viewer.loadDocumentNode(doc, viewables, loadOptions).then((model) => {
                 applyLightBackground(viewer);
                 resolve(model);
@@ -451,6 +456,7 @@ export async function loadAggregated(viewer, models = []) {
 
     const list = Array.isArray(models) ? models : [];
     const loadedModels = [];
+    let sharedGlobalOffset = null;
 
     for (let i = 0; i < list.length; i++) {
         const item = list[i] || {};
@@ -459,9 +465,14 @@ export async function loadAggregated(viewer, models = []) {
 
         const model = await loadModelMulti(viewer, urn, {
             keepCurrentModels: i > 0,
-            preserveView: true
+            preserveView: true,
+            applyRefPoint: true,
+            globalOffset: sharedGlobalOffset || null
         });
         loadedModels.push(model);
+        if (!sharedGlobalOffset && model?.getData && model.getData()?.globalOffset) {
+            sharedGlobalOffset = model.getData().globalOffset;
+        }
     }
 
     return loadedModels;

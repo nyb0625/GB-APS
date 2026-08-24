@@ -102,8 +102,8 @@ const UTIC_CCTV_CHANNELS = [
         title: '공사현장',
         streamType: 'utic_page',
         pageUrl: `https://www.utic.go.kr/jsp/map/openDataCctvStream.jsp?key=${UTIC_API_KEY}&cctvid=L010307&cctvName=%25EC%25BD%2594%25EC%2597%2591%25EC%258A%25A4&kind=Seoul&cctvip=undefined&cctvch=52&id=222&cctvpasswd=undefined&cctvport=undefined`,
-        modelName: '',
-        modelUrn: '',
+        modelName: '강북_구조물_신설_09_약품투입동_A',
+        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLjdNREdFZDJtVGtpdlhuS2xzMEUxcnc/dmVyc2lvbj0y',
         img: '/img/lapse/lapse_1.jpg'
     },
     {
@@ -113,8 +113,8 @@ const UTIC_CCTV_CHANNELS = [
         streamType: 'kb',
         cctvIp: '9988',
         pageUrl: 'https://www.utic.go.kr/jsp/map/openDataCctvStream.jsp?key=4ydVvgYFUHonR2Q0ZysY7MM1MQ5xJ84pwAr3jVMY&cctvid=L933071&cctvName=%25ED%258F%25AC%25ED%2595%25AD%2520%25EB%2591%2590%25ED%2598%25B8%25EB%258F%2599&kind=KB&cctvip=9988&cctvch=undefined&id=undefined&cctvpasswd=undefined&cctvport=undefined',
-        modelName: '강북_구조물_신설_02_응집침전지_C',
-        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLk1EYVFnc1N6UVBheVJHaU53dGl3cUE_dmVyc2lvbj0y',
+        modelName: '강북_구조물_신설_01_착수정 및 혼화지_C',
+        modelUrn: 'dXJuOmFkc2sud2lwcHJvZDpmcy5maWxlOnZmLmJtLVQtRTF5UThtaDJUQTFwMHFpLUE/dmVyc2lvbj0y',
         img: '/img/lapse/lapse_1.jpg'
     }
 ];

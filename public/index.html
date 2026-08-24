@@ -17,7 +17,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260819-monthly-fill1">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260824-layout-shell1">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     
@@ -1483,9 +1483,16 @@
             </div>
 
             <div id="construction-bim-dashboard" class="construction-bim-dashboard" style="display:none;">
-                <section class="bim-db-panel bim-db-panel-issue">
+                <section class="bim-db-panel bim-dashboard-card bim-dashboard-progress">
                     <div class="bim-db-panel-head">
-                        <div class="bim-db-panel-title"><i class="fas fa-chart-bar"></i> 구조물별 월간 이슈 진행</div>
+                        <div class="bim-db-panel-title"><i class="fas fa-gauge-high"></i> 공사 진행률</div>
+                    </div>
+                    <div id="bim-progress-donuts" class="bim-progress-donuts"></div>
+                </section>
+
+                <section class="bim-db-panel bim-dashboard-card bim-dashboard-schedule">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-calendar-days"></i> 공사 일정</div>
                         <div class="bim-db-panel-actions">
                             <span id="bim-dashboard-issue-total" class="bim-db-total">이슈 0건</span>
                             <button id="bim-dashboard-refresh" class="bim-db-refresh" type="button" title="이슈 새로고침">
@@ -1493,14 +1500,99 @@
                             </button>
                         </div>
                     </div>
-                    <div id="bim-issue-gantt-wrap" class="bim-issue-gantt-wrap">
-                        <div class="bim-db-placeholder">이슈 데이터를 불러오는 중입니다.</div>
+                    <div id="bim-construction-gantt" class="bim-construction-gantt"></div>
+                </section>
+
+                <aside class="bim-db-panel bim-dashboard-card bim-dashboard-inspector">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-cubes"></i> BIM 모델 간편조회</div>
+                    </div>
+                    <label class="bim-inspector-field">구조물 선택
+                        <select id="bim-inspector-structure-select" class="bim-week-select" title="구조물 선택">
+                            <option value="">Autodesk Docs 구조물 폴더 불러오는 중...</option>
+                        </select>
+                    </label>
+                    <div class="bim-inspector-summary">
+                        <span>선택 구조물 정보</span>
+                        <strong id="bim-inspector-structure-name">-</strong>
+                        <small id="bim-inspector-structure-meta">Autodesk Docs 모델 트리 기준</small>
+                    </div>
+                    <div class="bim-inspector-tags">
+                        <span>폴더 내 공종 파일</span>
+                        <div id="bim-inspector-trade-tags" class="bim-inspector-trade-tags"></div>
+                    </div>
+                    <button id="bim-inspector-open-model" type="button" class="bim-inspector-primary"><i class="fas fa-cube"></i> 3D 모델 보기</button>
+                    <div class="bim-inspector-tools">
+                        <button type="button" data-inspector-tool="search" title="열린 3D 뷰어에서 부재를 검색합니다."><i class="fas fa-magnifying-glass"></i> 부재 검색</button>
+                        <button type="button" data-inspector-tool="measure" title="열린 3D 뷰어에서 측정 도구를 켭니다."><i class="fas fa-ruler-combined"></i> 거리·치수 측정</button>
+                        <button type="button" data-inspector-tool="section" title="열린 3D 뷰어에서 단면 도구를 켭니다."><i class="fas fa-drafting-compass"></i> 단면 보기</button>
+                        <button type="button" data-inspector-tool="properties" title="선택한 부재의 속성 패널을 엽니다."><i class="fas fa-circle-info"></i> 부재 정보</button>
+                    </div>
+                    <div id="bim-inspector-structure-list" class="bim-inspector-list">
+                        <div class="bim-inspector-file-empty">공종 파일을 불러오는 중입니다.</div>
+                    </div>
+                </aside>
+
+                <section class="bim-db-panel bim-dashboard-card bim-dashboard-live">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-satellite-dish"></i> 현장 실시간 연동</div>
+                        <div class="bim-dashboard-zone-tabs">
+                            <button type="button" class="active" data-live-zone="new">신설 구조물</button>
+                            <button type="button" data-live-zone="extension">증설 구조물</button>
+                            <button type="button" data-live-zone="priority">우선 시공분</button>
+                        </div>
+                    </div>
+                    <div id="bim-progress-map" class="bim-progress-map bim-live-map is-live-new" data-active-live-zone="new">
+                        <img id="bim-live-map-img" src="/images/construction-live-new.png?v=20260824-live3" alt="강북정수장 신설 구조물 영역도" class="bim-progress-map-img"
+                            onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                        <div class="bim-progress-map-fallback" style="display:none;">공사 영역 이미지가 없습니다.</div>
+                        <div class="bim-live-hotspots" aria-label="신설 구조물 선택">
+                            <button type="button" class="bim-live-hotspot hs-filter" data-structure-name="급속여과지" data-zone="new">급속여과지</button>
+                            <button type="button" class="bim-live-hotspot hs-chemical" data-structure-name="약품투입동" data-zone="new">약품투입동</button>
+                            <button type="button" class="bim-live-hotspot hs-intake" data-structure-name="착수정" data-zone="new">착수정</button>
+                            <button type="button" class="bim-live-hotspot hs-ozone" data-structure-name="후오존접촉지" data-zone="new">후오존접촉지</button>
+                            <button type="button" class="bim-live-hotspot hs-sedimentation" data-structure-name="응집침전지" data-zone="new">응집침전지</button>
+                            <button type="button" class="bim-live-hotspot hs-backwash" data-structure-name="역세척펌프동" data-zone="new">역세척펌프동</button>
+                            <button type="button" class="bim-live-hotspot hs-clearwell" data-structure-name="정수지" data-zone="new">정수지</button>
+                            <button type="button" class="bim-live-hotspot hs-carbon" data-structure-name="활성탄흡착지" data-zone="new">활성탄흡착지</button>
+                        </div>
+                        <div class="bim-progress-viewer-layer">
+                            <div class="bim-progress-viewer-head">
+                                <span id="bim-progress-viewer-title">3D Viewer</span>
+                                <div class="bim-progress-viewer-tools">
+                                    <button id="bim-progress-viewer-merge" class="bim-icon-btn" type="button" title="현재 영역 모델 병합 보기">
+                                        <i class="fas fa-layer-group"></i>
+                                    </button>
+                                    <button id="bim-progress-viewer-save-view" class="bim-icon-btn" type="button" title="현재 뷰 시점 저장">
+                                        <i class="fas fa-camera"></i>
+                                    </button>
+                                    <button id="bim-progress-viewer-reset" class="bim-icon-btn" type="button" title="뷰 초기화 / 검색 강조 해제">
+                                        <i class="fas fa-rotate-left"></i>
+                                    </button>
+                                    <button id="bim-progress-viewer-back" class="bim-icon-btn" type="button" title="영역도로 돌아가기">
+                                        <i class="fas fa-arrow-left"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="bim-progress-mini-viewer" class="bim-progress-mini-viewer"></div>
+                        </div>
+                    </div>
+                    <div id="bim-zone-focus-note" class="bim-zone-focus-note">구조물 영역을 선택하면 3D 모델 조회 영역으로 연결됩니다.</div>
+                </section>
+
+                <section class="bim-db-panel bim-dashboard-card bim-dashboard-cctv">
+                    <div class="bim-db-panel-head">
+                        <div class="bim-db-panel-title"><i class="fas fa-video"></i> 현장 CCTV</div>
+                        <button type="button" class="bim-dashboard-link" onclick="switchTab('cctv')">현장 관제 탭으로 이동 <i class="fas fa-arrow-right"></i></button>
+                    </div>
+                    <div id="bim-live-cctv-grid" class="bim-cctv-grid" data-active-structure="착수정">
+                        <div class="bim-db-placeholder">실시간 CCTV 영상을 불러오는 중입니다.</div>
                     </div>
                 </section>
 
-                <section class="bim-db-panel bim-db-panel-work">
+                <section class="bim-db-panel bim-dashboard-card bim-dashboard-operations">
                     <div class="bim-db-panel-head">
-                        <div class="bim-db-panel-title"><i class="fas fa-clipboard-list"></i> 주간 업무 현황</div>
+                        <div class="bim-db-panel-title"><i class="fas fa-clipboard-list"></i> 업무 운영</div>
                         <div class="bim-db-panel-actions">
                             <div id="bim-work-tabs" class="bim-work-tabs" role="tablist" aria-label="업무 보기">
                                 <button type="button" class="bim-work-tab active" data-work-view="week">주간 업무</button>
@@ -1517,64 +1609,14 @@
                     <div id="bim-week-board" class="bim-week-board">
                         <div class="bim-db-placeholder">업무 현황을 불러오는 중입니다.</div>
                     </div>
-                </section>
-
-                <section class="bim-db-panel bim-db-panel-progress">
-                    <div class="bim-db-panel-head">
-                        <div class="bim-db-panel-title"><i class="fas fa-layer-group"></i> 현황 진척도</div>
-                    </div>
-                    <div class="bim-progress-layout">
-                        <div id="bim-progress-map" class="bim-progress-map">
-                            <img src="/images/gangbuk-progress-map.png?v=20260806" alt="강북정수장 공사 영역도" class="bim-progress-map-img"
-                                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-                            <div class="bim-progress-map-fallback" style="display:none;">공사 영역 이미지가 없습니다.</div>
-                            <button type="button" class="bim-zone zone-new-main" data-zone="extension" aria-label="본공사 영역">본공사</button>
-                            <button type="button" class="bim-zone zone-new-sub" data-zone="extension" aria-label="본공사 영역">본공사</button>
-                            <button type="button" class="bim-zone zone-extension" data-zone="extension" aria-label="본공사 영역">본공사</button>
-                            <button type="button" class="bim-zone zone-priority" data-zone="priority" aria-label="우선시공분 영역">우선시공분</button>
-                            <div class="bim-progress-viewer-layer">
-                                <div class="bim-progress-viewer-head">
-                                    <span id="bim-progress-viewer-title">3D Viewer</span>
-                                    <div class="bim-progress-viewer-tools">
-                                        <button id="bim-progress-viewer-merge" class="bim-icon-btn" type="button" title="현재 영역 모델 병합 보기">
-                                            <i class="fas fa-layer-group"></i>
-                                        </button>
-                                        <button id="bim-progress-viewer-save-view" class="bim-icon-btn" type="button" title="현재 뷰 시점 저장">
-                                            <i class="fas fa-camera"></i>
-                                        </button>
-                                        <button id="bim-progress-viewer-back" class="bim-icon-btn" type="button" title="영역도로 돌아가기">
-                                            <i class="fas fa-arrow-left"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div id="bim-progress-mini-viewer" class="bim-progress-mini-viewer"></div>
-                            </div>
-                        </div>
-                        <aside class="bim-progress-side">
-                            <div class="bim-progress-side-title">간단 공사 일정</div>
-                            <div id="bim-construction-gantt" class="bim-construction-gantt"></div>
-                            <div id="bim-progress-donuts" class="bim-progress-donuts"></div>
-                        </aside>
-                    </div>
-                    <div id="bim-zone-focus-note" class="bim-zone-focus-note">영역을 선택하면 진행 구조물이 강조됩니다.</div>
-                </section>
-                <section class="bim-db-panel bim-db-panel-clash">
-                    <div class="bim-db-panel-head">
-                        <div class="bim-db-panel-title"><i class="fas fa-code-branch"></i> 구조물별 간섭 현황</div>
-                        <div class="bim-db-panel-actions">
-                            <span id="bim-clash-total" class="bim-db-total">간섭 0건</span>
-                        </div>
-                    </div>
-                    <div class="bim-clash-panel-body">
-                        <div class="bim-clash-summary">
-                            <div class="bim-clash-kpi"><span>검토</span><strong id="bim-clash-review-count">0</strong></div>
-                            <div class="bim-clash-kpi"><span>지연</span><strong id="bim-clash-delayed-count">0</strong></div>
-                            <div class="bim-clash-kpi"><span>종료</span><strong id="bim-clash-closed-count">0</strong></div>
-                        </div>
-                        <div class="bim-clash-chart-wrap">
-                            <canvas id="bim-clash-structure-chart"></canvas>
-                            <div id="bim-clash-empty" class="bim-db-placeholder" style="display:none;">표시할 간섭 이슈 데이터가 없습니다.</div>
-                        </div>
+                    <div class="bim-dashboard-hidden-metrics" aria-hidden="true">
+                        <span id="bim-clash-total">간섭 0건</span>
+                        <span id="bim-clash-review-count">0</span>
+                        <span id="bim-clash-delayed-count">0</span>
+                        <span id="bim-clash-closed-count">0</span>
+                        <canvas id="bim-clash-structure-chart"></canvas>
+                        <div id="bim-clash-empty" style="display:none;"></div>
+                        <div id="bim-issue-gantt-wrap"></div>
                     </div>
                 </section>
 

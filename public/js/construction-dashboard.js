@@ -68,6 +68,36 @@ const CONSTRUCTION_ZONE_FOLDER_KEYWORDS = {
 const CONSTRUCTION_TARGET_HUB_ID = 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const CONSTRUCTION_TARGET_PROJECT_ID = 'b.374bde3a-83a3-4dd5-80c2-2e01ddeac719';
 const CONSTRUCTION_VIEW_STATE_PREFIX = 'gangbuk_construction_progress_view_';
+const CONSTRUCTION_LIVE_MAPS = {
+    new: {
+        label: '신설 구조물',
+        src: '/images/construction-live-new.png?v=20260824-live3',
+        alt: '강북정수장 신설 구조물 영역도'
+    },
+    extension: {
+        label: '증설 구조물',
+        src: '/images/construction-live-extension.png?v=20260824-live1',
+        alt: '강북정수장 증설 구조물 영역도'
+    },
+    priority: {
+        label: '우선 시공분',
+        src: '/images/construction-live-priority.png?v=20260824-live1',
+        alt: '강북정수장 우선 시공분 영역도'
+    }
+};
+const CONSTRUCTION_SCHEDULE_DATA_URL = '/data/construction-schedule.json?v=20260824-schedule1';
+let constructionProgressItems = CONSTRUCTION_PROGRESS_ITEMS.slice();
+const CONSTRUCTION_STRUCTURE_MODEL_ALIASES = {
+    '착수정': ['착수정', '착수', 'intake'],
+    '약품투입동': ['약품투입동', '약품', '투입동', 'chemical'],
+    '급속여과지': ['급속여과지', '급속여과', '여과지', 'filter'],
+    '후오존접촉지': ['후오존접촉지', '후오존', '오존접촉지', 'ozone'],
+    '응집침전지': ['응집침전지', '응집침전', '침전지', 'sedimentation'],
+    '역세척펌프동': ['역세척펌프동', '역세척', '펌프동', 'backwash'],
+    '정수지': ['정수지', 'clearwell'],
+    '활성탄흡착지': ['활성탄흡착지', '활성탄', '흡착지', 'carbon']
+};
+const CONSTRUCTION_LIVE_STRUCTURES = Object.keys(CONSTRUCTION_STRUCTURE_MODEL_ALIASES);
 
 function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -1635,8 +1665,63 @@ function renderClashStructureChart(issues) {
         }
     });
 }
+function calculateScheduleProgress(startDate, endDate, now = new Date()) {
+    const start = parseIssueDate(startDate);
+    const end = parseIssueDate(endDate);
+    if (!start || !end) return 0;
+    const startTime = getStartOfDay(start).getTime();
+    const endTime = getStartOfDay(end).getTime();
+    const nowTime = getStartOfDay(now).getTime();
+    if (nowTime < startTime) return 0;
+    if (nowTime >= endTime) return 100;
+    const total = Math.max(1, endTime - startTime);
+    return Math.max(0, Math.min(100, Math.round(((nowTime - startTime) / total) * 100)));
+}
+
+function getScheduleStatus(progress) {
+    if (progress >= 100) return '완료';
+    if (progress <= 0) return '예정';
+    return '진행중';
+}
+
+function normalizeConstructionScheduleItem(item, index) {
+    const zone = item.zone || (String(item.category || '').includes('우선') ? 'priority' : 'extension');
+    const progress = calculateScheduleProgress(item.startDate, item.endDate);
+    return {
+        ...item,
+        id: item.id || `${zone}-${index + 1}`,
+        zone,
+        progress,
+        status: item.status || getScheduleStatus(progress),
+        color: item.color || (zone === 'priority' ? '#eab308' : '#06b6d4')
+    };
+}
+
+async function loadConstructionScheduleData() {
+    if (window._constructionScheduleDataPromise) return window._constructionScheduleDataPromise;
+    window._constructionScheduleDataPromise = fetch(CONSTRUCTION_SCHEDULE_DATA_URL, { credentials: 'same-origin' })
+        .then(resp => {
+            if (!resp.ok) throw new Error(`construction schedule fetch failed: HTTP ${resp.status}`);
+            return resp.json();
+        })
+        .then(data => {
+            const items = Array.isArray(data) ? data : (data.items || []);
+            constructionProgressItems = items.map(normalizeConstructionScheduleItem);
+            window._constructionScheduleSource = data.source || {};
+            renderConstructionGantt(constructionScheduleState.zone || '');
+            renderProgressDonuts(constructionScheduleState.zone || '');
+            return constructionProgressItems;
+        })
+        .catch(error => {
+            console.warn('[Construction Schedule] failed to load schedule data:', error);
+            constructionProgressItems = CONSTRUCTION_PROGRESS_ITEMS.slice();
+            return constructionProgressItems;
+        });
+    return window._constructionScheduleDataPromise;
+}
+
 function getProgressItems(zone = '') {
-    return zone ? CONSTRUCTION_PROGRESS_ITEMS.filter(item => item.zone === zone) : CONSTRUCTION_PROGRESS_ITEMS;
+    return zone ? constructionProgressItems.filter(item => item.zone === zone) : constructionProgressItems;
 }
 
 function getAverageProgress(items) {
@@ -1736,18 +1821,31 @@ function getScheduleRange(settings = constructionScheduleState) {
 
 function getScheduleColumnIndex(range, value, fallback) {
     const date = getStartOfDay(parseIssueDate(value) || fallback || range.start);
+    if (date <= range.start) return 0;
+    if (date >= range.end) return Math.max(0, range.cols.length - 1);
     if (range.scale === 'year') return Math.max(0, Math.min(range.cols.length - 1, date.getMonth()));
     const idx = range.cols.findIndex(col => col.key === (range.scale === 'month' ? formatDateKey(date) : formatDateKey(date)));
     if (idx >= 0) return idx;
     return date < range.start ? 0 : Math.max(0, range.cols.length - 1);
 }
 
+function isConstructionItemInProgress(item, now = new Date()) {
+    const start = parseIssueDate(item.startDate);
+    const end = parseIssueDate(item.endDate || item.startDate);
+    if (!start || !end) return false;
+    const today = getStartOfDay(now).getTime();
+    return getStartOfDay(start).getTime() <= today && today <= getStartOfDay(end).getTime();
+}
+
 function renderConstructionSchedule(activeZone = '', settings = constructionScheduleState, expanded = false) {
     const wrap = document.getElementById('bim-construction-gantt');
     if (!wrap && !expanded) return '';
-    const items = getProgressItems(activeZone);
+    const allItems = getProgressItems(activeZone);
+    const items = expanded ? allItems : allItems.filter(item => isConstructionItemInProgress(item));
     if (!items.length) {
-        const empty = '<div class="bim-week-empty">표시할 공정 데이터가 없습니다.</div>';
+        const empty = expanded
+            ? '<div class="bim-week-empty">표시할 공정 데이터가 없습니다.</div>'
+            : '<div class="bim-week-empty">현재 진행 중인 공사가 없습니다. 전체 일정은 크게 보기에서 확인하세요.</div>';
         if (wrap && !expanded) wrap.innerHTML = empty;
         return empty;
     }
@@ -1755,6 +1853,18 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
     const range = getScheduleRange(settings);
     const colCount = range.cols.length;
     const controlSuffix = expanded ? '-expanded' : '';
+    const scaleTabs = ['week', 'month', 'year'].map(scale => {
+        const meta = {
+            week: { label: '주간', icon: 'fa-calendar-week' },
+            month: { label: '월간', icon: 'fa-calendar-days' },
+            year: { label: '연간', icon: 'fa-calendar' }
+        }[scale];
+        return `
+            <button type="button" class="bim-schedule-scale-btn${range.scale === scale ? ' active' : ''}" data-schedule-scale="${scale}" title="${meta.label} 일정 보기" aria-pressed="${range.scale === scale ? 'true' : 'false'}">
+                <i class="fas ${meta.icon}"></i><span>${meta.label}</span>
+            </button>
+        `;
+    }).join('');
     const scaleControl = expanded ? `
         <div class="bim-schedule-controls">
             <select id="bim-construction-schedule-scale${controlSuffix}" class="bim-week-select" title="일정 범위">
@@ -1766,7 +1876,12 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
             <input id="bim-construction-schedule-month${controlSuffix}" class="bim-filter-input" type="month" value="${escapeHtml(settings.month)}" style="display:${range.scale === 'month' ? 'block' : 'none'};">
             <input id="bim-construction-schedule-year${controlSuffix}" class="bim-filter-input" type="number" min="2000" max="2100" value="${escapeHtml(settings.year)}" style="display:${range.scale === 'year' ? 'block' : 'none'};">
         </div>
-    ` : `<button id="bim-construction-schedule-expand" type="button" class="bim-icon-btn" title="공사 일정 크게 보기"><i class="fas fa-up-right-and-down-left-from-center"></i></button>`;
+    ` : `
+        <div class="bim-schedule-quick-controls" role="group" aria-label="공사 일정 범위">
+            ${scaleTabs}
+            <button id="bim-construction-schedule-expand" type="button" class="bim-icon-btn" title="공사 일정 크게 보기"><i class="fas fa-up-right-and-down-left-from-center"></i></button>
+        </div>
+    `;
 
     const headers = range.cols.map(col => `
         <div class="bim-schedule-cell bim-schedule-head bim-schedule-day${col.weekend ? ' weekend' : ''}">
@@ -1800,7 +1915,7 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
 
     const html = `
         <div class="bim-schedule-toolbar">
-            <div class="bim-schedule-title">${expanded ? '간단 공사 일정' : '주간 일정'} · ${range.label}</div>
+            <div class="bim-schedule-title">${expanded ? '전체 공사 일정' : '현재 진행 공사'} · ${range.label}</div>
             ${scaleControl}
         </div>
         <div class="bim-construction-schedule${expanded ? ' expanded' : ''}" style="--schedule-days:${colCount};">
@@ -1816,8 +1931,14 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
 
 function renderConstructionGantt(activeZone = '') {
     constructionScheduleState.zone = activeZone || '';
-    constructionScheduleState.scale = 'week';
+    constructionScheduleState.scale = constructionScheduleState.scale || 'week';
     renderConstructionSchedule(activeZone, constructionScheduleState, false);
+}
+
+function setConstructionScheduleScale(scale) {
+    if (!['week', 'month', 'year'].includes(scale)) return;
+    constructionScheduleState.scale = scale;
+    renderConstructionSchedule(constructionScheduleState.zone || '', constructionScheduleState, false);
 }
 
 function openConstructionScheduleModal() {
@@ -1845,7 +1966,7 @@ function updateExpandedConstructionSchedule() {
 function renderProgressDonuts(activeZone = '') {
     const wrap = document.getElementById('bim-progress-donuts');
     if (!wrap) return;
-    const all = getAverageProgress(CONSTRUCTION_PROGRESS_ITEMS);
+    const all = getAverageProgress(getProgressItems(''));
     const priority = getAverageProgress(getProgressItems('priority'));
     const extension = getAverageProgress(getProgressItems('extension'));
     const cards = [
@@ -1923,6 +2044,679 @@ function findZoneModelsFromTree(node, zone) {
         models = models.filter(model => modelBelongsToZone(model, zone));
     }
     return dedupeModels(models);
+}
+
+function getConstructionStructureAliases(structureName) {
+    return CONSTRUCTION_STRUCTURE_MODEL_ALIASES[structureName] || [structureName];
+}
+
+function isConstructionStructureFolderNode(node) {
+    if (!node || typeof node !== 'object') return false;
+    const files = collectNodeFiles(node, []);
+    if (!files.length) return false;
+    const folderName = getNodeFolderName(node);
+    const pathText = normalizeFolderText(node.path || '');
+    const nameText = normalizeFolderText(folderName);
+    return pathText.includes(normalizeFolderText('신설구조물')) &&
+        !nameText.includes(normalizeFolderText('신설구조물')) &&
+        files.some(file => /\.rvt$/i.test(file.name || ''));
+}
+
+function collectConstructionStructureFolders(node, output = []) {
+    if (!node || typeof node !== 'object') return output;
+    if (isConstructionStructureFolderNode(node)) {
+        output.push({
+            name: getNodeFolderName(node),
+            path: node.path || '',
+            folderId: node.folderId || '',
+            files: dedupeModels(collectNodeFiles(node, []))
+        });
+        return output;
+    }
+    if (Array.isArray(node.children)) {
+        node.children.forEach(child => collectConstructionStructureFolders(child, output));
+    }
+    return output;
+}
+
+function getTradeLabelFromModelName(fileName) {
+    const name = String(fileName || '').toUpperCase();
+    if (name.includes('_AM.')) return '건축설비';
+    if (name.includes('_C.')) return '토목';
+    if (name.includes('_A.')) return '건축';
+    if (name.includes('_M.')) return '기계';
+    if (name.includes('_E.')) return '전기';
+    if (name.includes('_S.')) return '구조';
+    if (name.includes('철근')) return '철근';
+    return '기타';
+}
+
+function getShortModelFileName(fileName) {
+    return String(fileName || '').replace(/\.rvt$/i, '');
+}
+
+function normalizeConstructionModelUrn(urn) {
+    return String(urn || '').replace(/^urn:/i, '');
+}
+
+function isConstructionInspectorModelLoaded(structureName = '') {
+    return !!structureName && window._constructionActiveViewerZone === `inspector:${structureName}`;
+}
+
+function renderConstructionInspectorFiles(structure) {
+    const list = document.getElementById('bim-inspector-structure-list');
+    if (!list) return;
+    if (!structure) {
+        list.innerHTML = '<div class="bim-inspector-file-empty">구조물을 선택하면 공종별 RVT 파일이 표시됩니다.</div>';
+        return;
+    }
+    if (!Array.isArray(structure.files) || !structure.files.length) {
+        list.innerHTML = '<div class="bim-inspector-file-empty">선택 구조물의 RVT 파일이 없습니다.</div>';
+        return;
+    }
+    const isLoaded = isConstructionInspectorModelLoaded(structure.name);
+    const hiddenUrns = window._constructionInspectorHiddenUrns || {};
+    list.innerHTML = structure.files.map(file => {
+        const trade = getTradeLabelFromModelName(file.name);
+        const version = file.versionNumber ? `v${file.versionNumber}` : '';
+        const updated = file.lastModifiedTime ? String(file.lastModifiedTime).slice(0, 10) : '';
+        const urn = file.urn || '';
+        const isHidden = !!hiddenUrns[normalizeConstructionModelUrn(urn)];
+        return `
+            <button type="button" class="bim-inspector-file-card ${isLoaded ? 'is-loaded' : ''} ${isHidden ? 'is-hidden' : ''}" data-model-urn="${escapeHtml(urn)}" title="${escapeHtml(file.name)}">
+                <span class="bim-inspector-file-main">
+                    <mark>${escapeHtml(trade)}</mark>
+                    <strong>${escapeHtml(getShortModelFileName(file.name))}</strong>
+                </span>
+                <span class="bim-inspector-file-side">
+                    <small>${escapeHtml([version, updated].filter(Boolean).join(' · ') || '최신 버전')}</small>
+                    <i class="fas ${isHidden ? 'fa-eye-slash' : 'fa-eye'}" aria-hidden="true"></i>
+                </span>
+            </button>
+        `;
+    }).join('');
+}
+
+function renderConstructionInspectorSelection(structure) {
+    const nameEl = document.getElementById('bim-inspector-structure-name');
+    const metaEl = document.getElementById('bim-inspector-structure-meta');
+    const tagEl = document.getElementById('bim-inspector-trade-tags');
+    const openBtn = document.getElementById('bim-inspector-open-model');
+    if (!structure) {
+        if (nameEl) nameEl.textContent = '모델을 선택해주세요';
+        if (metaEl) metaEl.textContent = '구조물을 선택하면 공종 파일과 3D 통합 모델을 확인할 수 있습니다.';
+        if (tagEl) tagEl.innerHTML = '';
+        if (openBtn) openBtn.disabled = true;
+        renderConstructionInspectorFiles(null);
+        return;
+    }
+    const trades = Array.from(new Set((structure.files || []).map(file => getTradeLabelFromModelName(file.name))));
+    if (nameEl) nameEl.textContent = structure.name;
+    if (metaEl) metaEl.textContent = `${structure.files.length}개 RVT 파일 · ${structure.path || 'Autodesk Docs'}`;
+    if (tagEl) tagEl.innerHTML = trades.map(trade => `<mark>${escapeHtml(trade)}</mark>`).join('');
+    if (openBtn) openBtn.disabled = !Array.isArray(structure.files) || !structure.files.length;
+    renderConstructionInspectorFiles(structure);
+}
+
+function setConstructionInspectorActive(name) {
+    const select = document.getElementById('bim-inspector-structure-select');
+    if (select && select.value !== name) select.value = name || '';
+}
+
+function getSelectedConstructionInspectorStructure() {
+    const select = document.getElementById('bim-inspector-structure-select');
+    const structures = window._constructionInspectorStructures || [];
+    return structures.find(item => item.name === select?.value) || null;
+}
+
+function selectConstructionInspectorStructure(name) {
+    const select = document.getElementById('bim-inspector-structure-select');
+    const structures = window._constructionInspectorStructures || [];
+    const structure = structures.find(item => item.name === name) || null;
+    if (select) select.value = structure?.name || '';
+    renderConstructionInspectorSelection(structure);
+    setConstructionInspectorActive(structure?.name || '');
+}
+
+function shouldAutoRotateConstructionFile(file) {
+    const text = `${file?.folderPath || ''} ${file?.path || ''} ${file?.name || ''}`;
+    return [
+        '01 착수정',
+        '02 응집침전지',
+        '03 급속여과지',
+        '04 후오존접촉지',
+        '05 활성탄흡착지',
+        '착수정',
+        '응집침전지',
+        '급속여과지',
+        '후오존접촉지',
+        '활성탄흡착지'
+    ].some(target => text.includes(target));
+}
+
+function applyConstructionModelAlignmentHints(viewer, files = []) {
+    if (!viewer || !Array.isArray(files) || typeof window.applyModelRotation !== 'function') return;
+    files.forEach(file => {
+        const urn = file?.urn || file?.id || file?.versionId;
+        if (!urn) return;
+        window.applyModelRotation(viewer, urn, shouldAutoRotateConstructionFile(file));
+    });
+}
+
+function normalizeConstructionViewerNavigation(viewer) {
+    const THREE_NS = window.THREE || (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.THREE);
+    if (!viewer || !viewer.navigation || !THREE_NS) return;
+    const up = new THREE_NS.Vector3(0, 0, 1);
+    try {
+        if (typeof viewer.navigation.setWorldUpVector === 'function') {
+            viewer.navigation.setWorldUpVector(up, true);
+        }
+        if (typeof viewer.navigation.setCameraUpVector === 'function') {
+            viewer.navigation.setCameraUpVector(up);
+        }
+        if (typeof viewer.navigation.setUpVector === 'function') {
+            viewer.navigation.setUpVector(up);
+        }
+        if (typeof viewer.navigation.setRequestTransition === 'function') {
+            viewer.navigation.setRequestTransition(true);
+        }
+    } catch (error) {
+        console.warn('[Construction Inspector] navigation normalization skipped:', error);
+    }
+}
+
+function getConstructionThreeNamespace() {
+    return window.THREE || (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.THREE) || null;
+}
+
+function getConstructionInspectorModels(viewer) {
+    if (!viewer) return [];
+    if (typeof viewer.getAllModels === 'function') return viewer.getAllModels();
+    return viewer.model ? [viewer.model] : [];
+}
+
+function clearConstructionInspectorFocus(viewer) {
+    if (!viewer) return;
+    try {
+        getConstructionInspectorModels(viewer).forEach(model => {
+            if (typeof viewer.clearThemingColors === 'function') viewer.clearThemingColors(model);
+        });
+        if (typeof viewer.clearThemingColors === 'function') viewer.clearThemingColors();
+        if (typeof viewer.clearSelection === 'function') viewer.clearSelection();
+        if (viewer.impl?.visibilityManager && typeof viewer.impl.visibilityManager.aggregateIsolate === 'function') {
+            viewer.impl.visibilityManager.aggregateIsolate([]);
+        } else if (typeof viewer.isolate === 'function') {
+            viewer.isolate([]);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+    } catch (error) {
+        console.warn('[Construction Inspector] focus reset skipped:', error);
+    }
+}
+
+function focusConstructionInspectorSearchResults(viewer, results, query) {
+    const validResults = (results || []).filter(item => item?.model && Array.isArray(item.dbIds) && item.dbIds.length);
+    if (!viewer || !validResults.length) return;
+
+    const THREE_NS = getConstructionThreeNamespace();
+    const highlightColor = THREE_NS ? new THREE_NS.Vector4(0.02, 0.72, 1, 1) : null;
+    clearConstructionInspectorFocus(viewer);
+
+    try {
+        if (viewer.prefs && typeof viewer.prefs.set === 'function') viewer.prefs.set('ghosting', true);
+        if (typeof viewer.setGhosting === 'function') viewer.setGhosting(true);
+        const aggregateSelection = validResults.map(item => ({ model: item.model, ids: item.dbIds }));
+        if (viewer.impl?.visibilityManager && typeof viewer.impl.visibilityManager.aggregateIsolate === 'function') {
+            viewer.impl.visibilityManager.aggregateIsolate(aggregateSelection);
+        } else if (typeof viewer.isolate === 'function') {
+            viewer.isolate(validResults[0].dbIds, validResults[0].model);
+        }
+        validResults.forEach(item => {
+            item.dbIds.forEach(dbId => {
+                if (highlightColor && typeof viewer.setThemingColor === 'function') {
+                    viewer.setThemingColor(dbId, highlightColor, item.model, true);
+                }
+            });
+        });
+        if (typeof viewer.select === 'function') {
+            viewer.select(validResults[0].dbIds, validResults[0].model);
+        }
+        if (typeof viewer.fitToView === 'function') {
+            viewer.fitToView(validResults[0].dbIds, validResults[0].model);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        const total = validResults.reduce((sum, item) => sum + item.dbIds.length, 0);
+        setConstructionProgressNote(`"${query}" 검색 결과 ${total}개를 격리하고 파란색으로 강조했습니다.`);
+    } catch (error) {
+        console.warn('[Construction Inspector] search result focus failed:', error);
+        setConstructionProgressNote(`"${query}" 검색 결과를 찾았지만 강조 표시 중 오류가 발생했습니다.`);
+    }
+}
+
+function searchConstructionInspectorModels(viewer, query) {
+    const models = getConstructionInspectorModels(viewer);
+    if (!models.length) {
+        return new Promise(resolve => {
+            viewer.search(query, dbIds => resolve([{ model: viewer.model, dbIds: dbIds || [] }]), () => resolve([]), ['name']);
+        });
+    }
+
+    return Promise.all(models.map(model => new Promise(resolve => {
+        const done = dbIds => resolve({ model, dbIds: Array.isArray(dbIds) ? dbIds : [] });
+        const fail = () => resolve({ model, dbIds: [] });
+        try {
+            if (typeof model.search === 'function') {
+                model.search(query, done, fail);
+            } else if (typeof viewer.search === 'function' && models.length === 1) {
+                viewer.search(query, done, fail);
+            } else {
+                resolve({ model, dbIds: [] });
+            }
+        } catch (error) {
+            console.warn('[Construction Inspector] model search failed:', error);
+            fail();
+        }
+    })));
+}
+
+function getConstructionInspectorSelectedPart(viewer) {
+    if (!viewer) return null;
+    if (typeof viewer.getAggregateSelection === 'function') {
+        const aggregate = viewer.getAggregateSelection() || [];
+        const first = aggregate.find(item => Array.isArray(item.selection) && item.selection.length);
+        if (first) return { model: first.model, dbId: first.selection[0] };
+    }
+    const selection = typeof viewer.getSelection === 'function' ? viewer.getSelection() : [];
+    if (selection.length) return { model: viewer.model || getConstructionInspectorModels(viewer)[0], dbId: selection[0] };
+    return null;
+}
+
+function getConstructionInspectorInfoPanel() {
+    const tools = document.querySelector('.bim-inspector-tools');
+    if (!tools) return null;
+    let panel = document.getElementById('bim-inspector-part-info');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'bim-inspector-part-info';
+        panel.className = 'bim-inspector-part-info';
+        tools.insertAdjacentElement('afterend', panel);
+    }
+    return panel;
+}
+
+function renderConstructionInspectorPartInfo(props) {
+    const panel = getConstructionInspectorInfoPanel();
+    if (!panel) return;
+    if (!props) {
+        panel.classList.remove('is-collapsed');
+        panel.innerHTML = `
+            <div class="bim-inspector-part-head">
+                <button type="button" class="bim-inspector-part-toggle" title="부재 정보 접기/펼치기" aria-expanded="true">
+                    <i class="fas fa-chevron-up"></i>
+                </button>
+                <div>
+                    <span>선택 부재 정보</span>
+                    <strong>부재를 선택해주세요</strong>
+                </div>
+            </div>
+            <div class="bim-inspector-part-body">
+                <div class="bim-inspector-part-empty">3D 뷰어에서 부재를 선택하면 정보가 표시됩니다.</div>
+            </div>
+        `;
+        return;
+    }
+    const propertyList = (props.properties || [])
+        .filter(item => item && item.displayName && item.displayValue !== undefined && item.displayValue !== null && String(item.displayValue).trim() !== '');
+    panel.innerHTML = `
+        <div class="bim-inspector-part-head">
+            <button type="button" class="bim-inspector-part-toggle" title="부재 정보 접기/펼치기" aria-expanded="${panel.classList.contains('is-collapsed') ? 'false' : 'true'}">
+                <i class="fas ${panel.classList.contains('is-collapsed') ? 'fa-chevron-down' : 'fa-chevron-up'}"></i>
+            </button>
+            <div>
+                <span>선택 부재 정보</span>
+                <strong>${escapeHtml(props.name || `dbId ${props.dbId}`)}</strong>
+            </div>
+        </div>
+        <div class="bim-inspector-part-body">
+            <dl>
+                ${propertyList.map(item => `
+                    <dt>${escapeHtml(item.displayName)}</dt>
+                    <dd>${escapeHtml(String(item.displayValue))}</dd>
+                `).join('')}
+            </dl>
+        </div>
+    `;
+}
+
+function setConstructionInspectorActiveTool(tool) {
+    document.querySelectorAll('.bim-inspector-tools [data-inspector-tool]').forEach(button => {
+        const isActive = button.dataset.inspectorTool === tool;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+}
+
+function resetConstructionViewerFocus() {
+    const viewer = window.constructionProgressViewer || window.constructionMiniViewer;
+    if (!viewer || !viewer.impl) {
+        setConstructionProgressNote('초기화할 3D 뷰어가 아직 준비되지 않았습니다.');
+        return;
+    }
+    clearConstructionInspectorFocus(viewer);
+    setConstructionInspectorActiveTool('');
+    try {
+        if (typeof viewer.showAll === 'function') viewer.showAll();
+        if (typeof viewer.fitToView === 'function') viewer.fitToView();
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        resizeConstructionViewCube();
+    } catch (error) {
+        console.warn('[Construction Viewer] reset focus failed:', error);
+    }
+    setConstructionProgressNote('검색 강조, 선택, 격리 상태를 초기화했습니다.');
+}
+
+function toggleConstructionInspectorPartInfo() {
+    const panel = document.getElementById('bim-inspector-part-info');
+    if (!panel) return;
+    const collapsed = !panel.classList.contains('is-collapsed');
+    panel.classList.toggle('is-collapsed', collapsed);
+    const button = panel.querySelector('.bim-inspector-part-toggle');
+    const icon = button?.querySelector('i');
+    if (button) button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (icon) {
+        icon.classList.toggle('fa-chevron-down', collapsed);
+        icon.classList.toggle('fa-chevron-up', !collapsed);
+    }
+}
+
+function hideConstructionInspectorPartInfo() {
+    const panel = document.getElementById('bim-inspector-part-info');
+    if (panel) panel.remove();
+    setConstructionInspectorActiveTool('');
+    window._constructionInspectorPropertiesOpen = false;
+}
+
+function showConstructionInspectorSelectedProperties(viewer) {
+    const selected = getConstructionInspectorSelectedPart(viewer);
+    if (!selected?.model || !selected.dbId) {
+        renderConstructionInspectorPartInfo(null);
+        setConstructionProgressNote('부재 정보를 보려면 3D 뷰어에서 부재를 먼저 선택해주세요.');
+        return;
+    }
+    try {
+        selected.model.getProperties(selected.dbId, props => {
+            renderConstructionInspectorPartInfo(props);
+            window._constructionInspectorPropertiesOpen = true;
+            if (typeof viewer.fitToView === 'function') viewer.fitToView([selected.dbId], selected.model);
+            setConstructionProgressNote(`선택한 부재 정보를 BIM 모델 간편조회 패널에 표시했습니다.`);
+        }, error => {
+            console.warn('[Construction Inspector] getProperties failed:', error);
+            setConstructionProgressNote('선택한 부재의 속성을 불러오지 못했습니다.');
+        });
+    } catch (error) {
+        console.warn('[Construction Inspector] property read failed:', error);
+        setConstructionProgressNote('부재 정보 조회 중 오류가 발생했습니다.');
+    }
+}
+
+function getConstructionInspectorLoadedModel(urn) {
+    const key = normalizeConstructionModelUrn(urn);
+    const loaded = window._constructionInspectorLoadedModels || {};
+    return loaded[key] || null;
+}
+
+function setConstructionInspectorFileVisibility(urn, visible) {
+    const viewer = getConstructionInspectorActiveViewer();
+    const model = getConstructionInspectorLoadedModel(urn);
+    if (!viewer || !model) {
+        setConstructionProgressNote('공종별 가시성은 3D 모델 보기로 통합 모델을 불러온 뒤 조절할 수 있습니다.');
+        return false;
+    }
+
+    try {
+        if (visible && typeof viewer.showModel === 'function') {
+            viewer.showModel(model.id);
+        } else if (!visible && typeof viewer.hideModel === 'function') {
+            viewer.hideModel(model.id);
+        } else if (model.visibilityManager && typeof model.visibilityManager.setNodeOff === 'function') {
+            model.visibilityManager.setNodeOff(1, !visible);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
+        }
+        window._constructionInspectorHiddenUrns = window._constructionInspectorHiddenUrns || {};
+        const key = normalizeConstructionModelUrn(urn);
+        if (visible) delete window._constructionInspectorHiddenUrns[key];
+        else window._constructionInspectorHiddenUrns[key] = true;
+        renderConstructionInspectorFiles(getSelectedConstructionInspectorStructure());
+        setConstructionProgressNote(`${visible ? '표시' : '숨김'} 상태를 공종 파일 카드에 반영했습니다.`);
+        return true;
+    } catch (error) {
+        console.warn('[Construction Inspector] visibility toggle failed:', error);
+        setConstructionProgressNote('공종 가시성 변경 중 오류가 발생했습니다.');
+        return false;
+    }
+}
+
+function getConstructionInspectorActiveViewer() {
+    const viewer = window.constructionProgressViewer || window.constructionMiniViewer;
+    if (!viewer || !viewer.impl) {
+        setConstructionProgressNote('먼저 BIM 모델 간편조회에서 구조물을 선택하고 3D 모델 보기를 실행해주세요.');
+        return null;
+    }
+    return viewer;
+}
+
+async function activateConstructionInspectorExtension(viewer, extensionId, activateArg = null) {
+    const current = typeof viewer.getExtension === 'function' ? viewer.getExtension(extensionId) : null;
+    const extension = current || (typeof viewer.loadExtension === 'function' ? await viewer.loadExtension(extensionId) : null);
+    if (!extension) return null;
+    if (typeof extension.activate === 'function') {
+        if (activateArg) extension.activate(activateArg);
+        else extension.activate();
+    }
+    return extension;
+}
+
+async function runConstructionInspectorTool(tool) {
+    const viewer = getConstructionInspectorActiveViewer();
+    if (!viewer) return;
+
+    if (tool === 'properties' && window._constructionInspectorPropertiesOpen) {
+        hideConstructionInspectorPartInfo();
+        setConstructionProgressNote('부재 정보 패널을 닫았습니다.');
+        return;
+    }
+
+    setConstructionInspectorActiveTool(tool);
+
+    try {
+        if (tool === 'search') {
+            const query = window.prompt('검색할 부재명 또는 속성값을 입력하세요.');
+            if (!query) return;
+            const results = await searchConstructionInspectorModels(viewer, query);
+            const total = results.reduce((sum, item) => sum + (item.dbIds?.length || 0), 0);
+            if (!total) {
+                clearConstructionInspectorFocus(viewer);
+                setConstructionProgressNote(`"${query}" 검색 결과가 없습니다.`);
+                return;
+            }
+            focusConstructionInspectorSearchResults(viewer, results, query);
+            return;
+        }
+
+        if (tool === 'measure') {
+            await activateConstructionInspectorExtension(viewer, 'Autodesk.Measure');
+            setConstructionProgressNote('3D 뷰어 측정 도구를 켰습니다. 모델 위 두 지점을 선택해 거리와 치수를 확인하세요.');
+            return;
+        }
+
+        if (tool === 'section') {
+            await activateConstructionInspectorExtension(viewer, 'Autodesk.Section');
+            setConstructionProgressNote('3D 뷰어 단면 도구를 켰습니다. 뷰어 도구막대에서 단면 방향과 위치를 조절하세요.');
+            return;
+        }
+
+        if (tool === 'properties') {
+            showConstructionInspectorSelectedProperties(viewer);
+        }
+    } catch (error) {
+        console.warn('[Construction Inspector] tool activation failed:', tool, error);
+        setConstructionProgressNote('3D 뷰어 도구를 실행하지 못했습니다. 모델 로드가 완료된 뒤 다시 시도해주세요.');
+    }
+}
+
+async function loadConstructionInspectorStructureViewer(structure = null) {
+    const target = structure || getSelectedConstructionInspectorStructure();
+    if (!target || !Array.isArray(target.files) || !target.files.length) {
+        setConstructionProgressNote('선택한 구조물 폴더에서 불러올 RVT 파일을 찾지 못했습니다.');
+        return false;
+    }
+
+    openConstructionViewerLayer('new');
+    setConstructionViewerTitle(`${target.name} 통합 3D Viewer`);
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${target.name} 폴더 공종 파일 ${target.files.length}개를 병합 로드 중입니다.`);
+
+    const viewer = await getConstructionMiniViewer();
+    if (!viewer || !viewer.impl) {
+        setConstructionProgressNote('미니맵 3D 뷰어를 초기화하지 못했습니다.');
+        return false;
+    }
+
+    try {
+        if (typeof viewer.getAllModels === 'function') {
+            viewer.getAllModels().forEach(model => viewer.unloadModel(model));
+        }
+    } catch (error) {
+        console.warn('[Construction Inspector] failed to clear previous models:', error);
+    }
+
+    const viewerModule = await import('./viewer.js');
+    const loadedModels = await viewerModule.loadAggregated(viewer, target.files);
+    normalizeConstructionViewerNavigation(viewer);
+    window._constructionActiveModelUrns = target.files.map(file => file.urn).filter(Boolean);
+    window._constructionActiveModelNames = target.files.map(file => file.name).filter(Boolean);
+    window._constructionActiveViewerZone = `inspector:${target.name}`;
+    window._constructionInspectorLoadedModels = {};
+    window._constructionInspectorHiddenUrns = {};
+    target.files.forEach((file, index) => {
+        const urn = file?.urn || file?.id || file?.versionId;
+        const model = loadedModels[index];
+        if (urn && model) window._constructionInspectorLoadedModels[normalizeConstructionModelUrn(urn)] = model;
+    });
+    renderConstructionInspectorSelection(target);
+
+    try {
+        if (typeof viewer.resize === 'function') viewer.resize();
+        if (typeof viewer.fitToView === 'function') viewer.fitToView();
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        resizeConstructionViewCube();
+    } catch (error) {
+        console.warn('[Construction Inspector] viewer fit failed:', error);
+    }
+
+    const popup = document.getElementById('model-visibility-popup');
+    if (popup) {
+        popup.style.display = 'none';
+        window._modelVisibilityTargetViewer = null;
+    }
+    setConstructionProgressNote(`${target.name} 폴더의 공종 파일 ${target.files.length}개를 통합 표시 중입니다. 왼쪽 공종 파일 카드에서 공종별 표시/숨김을 조절할 수 있습니다.`);
+    return true;
+}
+
+async function initConstructionInspectorPanel() {
+    const select = document.getElementById('bim-inspector-structure-select');
+    const list = document.getElementById('bim-inspector-structure-list');
+    const openBtn = document.getElementById('bim-inspector-open-model');
+    if (!select || !list) return;
+    if (select.dataset.inspectorBound) return;
+    select.dataset.inspectorBound = 'true';
+
+    try {
+        const tree = await fetchConstructionRvtTree();
+        const structures = collectConstructionStructureFolders(tree)
+            .sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true }));
+        window._constructionInspectorStructures = structures;
+        if (!structures.length) {
+            select.innerHTML = '<option value="">구조물 폴더 없음</option>';
+            list.innerHTML = '<button type="button">표시할 구조물 폴더가 없습니다.</button>';
+            renderConstructionInspectorSelection(null);
+            return;
+        }
+        select.innerHTML = '<option value="">모델을 선택해주세요</option>' +
+            structures.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
+        selectConstructionInspectorStructure('');
+    } catch (error) {
+        console.warn('[Construction Inspector] failed to initialize:', error);
+        select.innerHTML = '<option value="">구조물 폴더 로드 실패</option>';
+        list.innerHTML = '<button type="button">Autodesk Docs 구조물 폴더를 불러오지 못했습니다.</button>';
+        renderConstructionInspectorSelection(null);
+    }
+
+    select.addEventListener('change', () => selectConstructionInspectorStructure(select.value));
+    list.addEventListener('click', event => {
+        const btn = event.target.closest('button.bim-inspector-file-card');
+        if (!btn) return;
+        const structure = getSelectedConstructionInspectorStructure();
+        if (structure && isConstructionInspectorModelLoaded(structure.name)) {
+            const urn = btn.dataset.modelUrn || '';
+            const hidden = btn.classList.contains('is-hidden');
+            setConstructionInspectorFileVisibility(urn, hidden);
+            return;
+        }
+        loadConstructionInspectorStructureViewer();
+    });
+    if (openBtn) {
+        openBtn.addEventListener('click', () => loadConstructionInspectorStructureViewer());
+    }
+    document.querySelectorAll('.bim-inspector-tools [data-inspector-tool]').forEach(button => {
+        if (button.dataset.inspectorToolBound) return;
+        button.dataset.inspectorToolBound = 'true';
+        button.setAttribute('aria-pressed', 'false');
+        button.addEventListener('click', () => runConstructionInspectorTool(button.dataset.inspectorTool));
+    });
+    document.addEventListener('click', event => {
+        const toggle = event.target.closest('.bim-inspector-part-toggle');
+        if (!toggle) return;
+        event.preventDefault();
+        toggleConstructionInspectorPartInfo();
+    });
+}
+
+function scoreConstructionStructureModel(model, structureName, zone = 'new') {
+    const aliases = getConstructionStructureAliases(structureName).map(normalizeFolderText).filter(Boolean);
+    const nameText = normalizeFolderText(model.name || '');
+    const folderText = normalizeFolderText(model.folderPath || '');
+    const combined = `${nameText} ${folderText}`;
+    let score = 0;
+    aliases.forEach(alias => {
+        if (nameText.includes(alias)) score += 100;
+        if (folderText.includes(alias)) score += 35;
+        if (combined.includes(alias)) score += 15;
+    });
+    if (modelBelongsToZone(model, zone)) score += 25;
+    if (/_C\.rvt$/i.test(model.name || '')) score += 20;
+    if (/\.rvt$/i.test(model.name || '')) score += 5;
+    return score;
+}
+
+async function getConstructionStructureModel(structureName, zone = 'new') {
+    const cacheKey = `_constructionStructureModel_${zone}_${structureName}`;
+    if (window[cacheKey]) return window[cacheKey];
+    const tree = await fetchConstructionRvtTree();
+    const allModels = collectNodeFiles(tree, []);
+    const ranked = allModels
+        .map(model => ({ model, score: scoreConstructionStructureModel(model, structureName, zone) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score);
+    const best = ranked[0]?.model || null;
+    window[cacheKey] = best;
+    if (best) {
+        console.log('[Construction Live] structure model:', structureName, best.name, best.urn);
+    } else {
+        console.warn('[Construction Live] structure model not found:', structureName);
+    }
+    return best;
 }
 
 function dedupeModels(models) {
@@ -2095,6 +2889,8 @@ function closeConstructionViewerLayer() {
     const map = document.getElementById('bim-progress-map');
     if (map) map.classList.remove('is-viewer-open');
     setActiveConstructionZone('');
+    const channels = window._constructionLiveCctvChannels || [];
+    if (channels.length) renderConstructionLiveCctvCards(channels);
 }
 
 async function openConstructionZoneViewer(zone) {
@@ -2162,6 +2958,62 @@ async function openConstructionZoneViewer(zone) {
     return true;
 }
 
+async function openConstructionStructureViewer(structureName, zone = 'new') {
+    const zoneMeta = CONSTRUCTION_ZONES[zone] || CONSTRUCTION_ZONES.new;
+    openConstructionViewerLayer(zone);
+    setConstructionViewerTitle(`${structureName} 3D Viewer`);
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>에서 ${structureName} RVT 모델을 찾는 중입니다.`);
+
+    const model = await getConstructionStructureModel(structureName, zone);
+    if (!model?.urn) {
+        setConstructionProgressNote(`${structureName}과 일치하는 RVT 파일을 찾지 못해 ${zoneMeta.label} 구역 모델로 이동합니다.`);
+        return openConstructionZoneViewer(zone);
+    }
+
+    const viewer = await getConstructionMiniViewer();
+    if (!viewer || !viewer.impl) {
+        setConstructionProgressNote('미니맵 3D 뷰어를 초기화하지 못했습니다.');
+        return false;
+    }
+
+    try {
+        if (typeof viewer.getAllModels === 'function') {
+            viewer.getAllModels().forEach(existingModel => viewer.unloadModel(existingModel));
+        } else if (viewer.model && typeof viewer.unloadModel === 'function') {
+            viewer.unloadModel(viewer.model);
+        }
+    } catch (error) {
+        console.warn('[Construction Live] failed to clear previous structure model:', error);
+    }
+
+    const viewerModule = await import('./viewer.js');
+    if (typeof viewerModule.loadModelMulti !== 'function') {
+        setConstructionProgressNote('단일 모델 로더를 찾을 수 없습니다.');
+        return false;
+    }
+
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${model.name} 모델을 불러오는 중입니다.`);
+    await viewerModule.loadModelMulti(viewer, model.urn, { preserveView: false });
+    window._constructionActiveModelUrns = [model.urn];
+    window._constructionActiveModelNames = [model.name];
+    window._constructionActiveViewerZone = `structure:${structureName}`;
+
+    try {
+        if (typeof viewer.resize === 'function') viewer.resize();
+        if (typeof viewer.fitToView === 'function') viewer.fitToView();
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
+        }
+        resizeConstructionViewCube();
+    } catch (error) {
+        console.warn('[Construction Live] structure viewer fit failed:', error);
+    }
+
+    setConstructionViewerTitle(`${structureName} 3D Viewer`);
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${model.name} 모델을 표시 중입니다.`);
+    return true;
+}
+
 async function reloadActiveConstructionZoneModels() {
     const zone = window._constructionActiveViewerZone || '';
     const zoneMeta = CONSTRUCTION_ZONES[zone];
@@ -2215,13 +3067,250 @@ async function focusConstructionZone(zone) {
     }
 }
 
+function updateLinkedCctvPanel(structureName) {
+    const grid = document.getElementById('bim-live-cctv-grid');
+    if (!grid) return;
+    grid.dataset.activeStructure = structureName || '';
+    const channels = window._constructionLiveCctvChannels || [];
+    if (channels.length) renderConstructionLiveCctvCards(channels, structureName);
+}
+
+function getConstructionCctvProxyUrl(rawStreamUrl) {
+    if (!rawStreamUrl) return '';
+    if (typeof window.getPathProxyUrl === 'function') return window.getPathProxyUrl(rawStreamUrl);
+    if (rawStreamUrl.startsWith('/api/cctv/proxy/')) return rawStreamUrl;
+    try {
+        const url = new URL(rawStreamUrl);
+        return `/api/cctv/proxy/${url.protocol.replace(':', '')}/${url.host}${url.pathname}${url.search}`;
+    } catch (error) {
+        return rawStreamUrl;
+    }
+}
+
+function inferConstructionCctvStructure(channel, fallbackIndex = 0) {
+    const text = normalizeFolderText(`${channel?.modelName || ''} ${channel?.title || ''} ${channel?.name || ''}`);
+    const matched = CONSTRUCTION_LIVE_STRUCTURES.find(structure => {
+        return getConstructionStructureAliases(structure)
+            .map(normalizeFolderText)
+            .some(alias => alias && text.includes(alias));
+    });
+    return matched || CONSTRUCTION_LIVE_STRUCTURES[fallbackIndex % CONSTRUCTION_LIVE_STRUCTURES.length];
+}
+
+function normalizeConstructionCctvChannels(channels = []) {
+    return channels
+        .filter(channel => channel && channel.streamUrl)
+        .map((channel, index) => ({
+            ...channel,
+            structureName: inferConstructionCctvStructure(channel, index)
+        }));
+}
+
+function findConstructionCctvChannel(channels, structureName) {
+    if (!channels.length) return null;
+    return channels.find(channel => channel.structureName === structureName) || channels[0];
+}
+
+function playConstructionCctvVideo(video, streamUrl) {
+    if (!video || !streamUrl) return;
+    const proxyUrl = getConstructionCctvProxyUrl(streamUrl);
+    if (video._constructionHls) {
+        video._constructionHls.destroy();
+        video._constructionHls = null;
+    }
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.controls = false;
+
+    if (typeof window.Hls !== 'undefined' && window.Hls.isSupported() && proxyUrl.includes('.m3u8')) {
+        const hls = new window.Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 20 });
+        video._constructionHls = hls;
+        hls.loadSource(proxyUrl);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+        hls.on(window.Hls.Events.ERROR, (event, data) => {
+            if (data?.fatal) {
+                video.closest('figure')?.classList.add('is-offline');
+                hls.destroy();
+                video._constructionHls = null;
+            }
+        });
+    } else {
+        video.src = proxyUrl;
+        video.play().catch(() => {});
+    }
+}
+
+function renderConstructionLiveCctvCards(channels = [], preferredStructure = '') {
+    const grid = document.getElementById('bim-live-cctv-grid');
+    if (!grid) return;
+    const usable = normalizeConstructionCctvChannels(channels);
+    if (!usable.length) {
+        grid.classList.remove('is-detail');
+        grid.innerHTML = '<div class="bim-db-placeholder">연결 가능한 실시간 CCTV 스트림이 없습니다.</div>';
+        return;
+    }
+
+    if (!preferredStructure) {
+        grid.classList.remove('is-detail');
+        grid.dataset.activeStructure = '';
+        grid.innerHTML = usable.slice(0, 8).map((channel, index) => {
+            const title = channel.title || channel.name || channel.structureName;
+            const poster = channel.img || '/img/lapse/lapse_1.jpg';
+            return `
+                <figure data-cctv-structure="${escapeHtml(channel.structureName || '')}" data-cctv-id="${escapeHtml(channel.id || '')}" data-cctv-index="${index}">
+                    <video class="bim-live-cctv-video" muted autoplay playsinline poster="${escapeHtml(poster)}"></video>
+                    <figcaption>${escapeHtml(channel.structureName || title)} <small>${escapeHtml(title)}</small></figcaption>
+                </figure>
+            `;
+        }).join('');
+        grid.querySelectorAll('figure').forEach((card, index) => {
+            const channel = usable[index];
+            playConstructionCctvVideo(card.querySelector('video'), channel?.streamUrl || '');
+            card.addEventListener('click', () => renderConstructionLiveCctvCards(channels, channel?.structureName || ''));
+        });
+        return;
+    }
+
+    grid.classList.add('is-detail');
+    const activeStructure = preferredStructure;
+    const activeChannel = findConstructionCctvChannel(usable, activeStructure);
+    const title = activeChannel.title || activeChannel.name || activeChannel.structureName;
+    const poster = activeChannel.img || '/img/lapse/lapse_1.jpg';
+    grid.dataset.activeStructure = activeChannel.structureName || activeStructure;
+    grid.innerHTML = `
+        <div class="bim-live-cctv-feature" data-cctv-structure="${escapeHtml(activeChannel.structureName || '')}" data-cctv-id="${escapeHtml(activeChannel.id || '')}">
+            <div class="bim-live-cctv-stage">
+                <video class="bim-live-cctv-video" muted autoplay playsinline poster="${escapeHtml(poster)}"></video>
+                <span class="bim-live-cctv-source">출처: 경찰청 UTIC</span>
+            </div>
+            <div class="bim-live-cctv-caption">${escapeHtml(activeChannel.structureName || title)}<small>${escapeHtml(title)}</small></div>
+        </div>
+        <label class="bim-live-cctv-switch">
+            <span>다른 뷰로 이동</span>
+            <select id="bim-live-cctv-select" aria-label="CCTV 뷰 선택">
+                ${usable.map((channel, index) => `
+                    <option value="${index}" ${channel === activeChannel ? 'selected' : ''}>
+                        ${escapeHtml(channel.structureName || channel.title || channel.name || `CCTV ${index + 1}`)}
+                    </option>
+                `).join('')}
+            </select>
+        </label>
+    `;
+
+    playConstructionCctvVideo(grid.querySelector('video'), activeChannel.streamUrl || '');
+    const select = grid.querySelector('#bim-live-cctv-select');
+    if (select) {
+        select.addEventListener('change', event => {
+            const next = usable[Number(event.target.value)] || usable[0];
+            renderConstructionLiveCctvCards(channels, next.structureName);
+        });
+    }
+}
+
+async function initConstructionLiveCctvPanel() {
+    if (window._constructionLiveCctvLoading) return;
+    window._constructionLiveCctvLoading = true;
+    try {
+        const resp = await fetch('/api/cctv/live', { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`CCTV live fetch failed: HTTP ${resp.status}`);
+        const data = await resp.json();
+        const channels = Array.isArray(data) ? data : (data.channels || data.data || []);
+        window._constructionLiveCctvChannels = channels;
+        renderConstructionLiveCctvCards(channels);
+    } catch (error) {
+        console.warn('[Construction Live] CCTV live fetch failed:', error);
+        renderConstructionLiveCctvCards([]);
+    } finally {
+        window._constructionLiveCctvLoading = false;
+    }
+}
+
+function setLiveMapZone(zone) {
+    const mapInfo = CONSTRUCTION_LIVE_MAPS[zone] || CONSTRUCTION_LIVE_MAPS.new;
+    const map = document.getElementById('bim-progress-map');
+    const img = document.getElementById('bim-live-map-img');
+    if (img) {
+        img.src = mapInfo.src;
+        img.alt = mapInfo.alt;
+        img.style.display = '';
+        if (img.nextElementSibling) img.nextElementSibling.style.display = 'none';
+    }
+    if (map) {
+        map.dataset.activeLiveZone = zone;
+        map.classList.toggle('is-live-new', zone === 'new');
+        map.classList.toggle('is-live-extension', zone === 'extension');
+        map.classList.toggle('is-live-priority', zone === 'priority');
+    }
+    document.querySelectorAll('.bim-dashboard-zone-tabs [data-live-zone]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.liveZone === zone);
+    });
+    document.querySelectorAll('.bim-live-hotspot').forEach(btn => btn.classList.remove('active'));
+    updateLinkedCctvPanel('');
+    setConstructionProgressNote(`${mapInfo.label} 영역도를 표시 중입니다.`);
+}
+
+async function focusLiveStructure(structureName, zone = 'new') {
+    if (!structureName) return;
+    setLiveMapZone(zone);
+    document.querySelectorAll('.bim-live-hotspot').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.structureName === structureName);
+    });
+    updateLinkedCctvPanel(structureName);
+    openConstructionViewerLayer(zone);
+    setConstructionViewerTitle(`${structureName} 3D Viewer`);
+    setConstructionProgressNote(`${structureName} 구조물 3D 모델과 연계 CCTV를 준비 중입니다.`);
+    try {
+        await openConstructionStructureViewer(structureName, zone);
+        setConstructionViewerTitle(`${structureName} 3D Viewer`);
+    } catch (error) {
+        console.error('[Construction Live] Failed to focus live structure:', error);
+        setConstructionProgressNote(`${structureName} 3D 모델 이동 중 오류가 발생했습니다.`);
+    }
+}
+
+function initConstructionLivePanel() {
+    const tabs = document.querySelectorAll('.bim-dashboard-zone-tabs [data-live-zone]');
+    tabs.forEach(tab => {
+        if (tab.dataset.liveBound) return;
+        tab.dataset.liveBound = 'true';
+        tab.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const zone = tab.dataset.liveZone || 'new';
+            setLiveMapZone(zone);
+        });
+    });
+
+    document.querySelectorAll('.bim-live-hotspot[data-structure-name]').forEach(btn => {
+        if (btn.dataset.liveBound) return;
+        btn.dataset.liveBound = 'true';
+        btn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            focusLiveStructure(btn.dataset.structureName, btn.dataset.zone || 'new');
+        });
+    });
+
+    setLiveMapZone(document.getElementById('bim-progress-map')?.dataset.activeLiveZone || 'new');
+    updateLinkedCctvPanel('착수정');
+    initConstructionLiveCctvPanel();
+}
+
 function initConstructionProgressPanel() {
     renderConstructionGantt('');
     renderProgressDonuts('');
+    loadConstructionScheduleData();
     const gantt = document.getElementById('bim-construction-gantt');
     if (gantt && !gantt.dataset.bound) {
         gantt.dataset.bound = 'true';
         gantt.addEventListener('click', event => {
+            const scaleBtn = event.target.closest('[data-schedule-scale]');
+            if (scaleBtn) {
+                setConstructionScheduleScale(scaleBtn.dataset.scheduleScale);
+                return;
+            }
             if (event.target.closest('#bim-construction-schedule-expand')) openConstructionScheduleModal();
         });
     }
@@ -2252,6 +3341,7 @@ function initConstructionProgressPanel() {
     const backBtn = document.getElementById('bim-progress-viewer-back');
     const mergeBtn = document.getElementById('bim-progress-viewer-merge');
     const saveViewBtn = document.getElementById('bim-progress-viewer-save-view');
+    const resetBtn = document.getElementById('bim-progress-viewer-reset');
     if (backBtn) {
         backBtn.addEventListener('click', event => {
             event.preventDefault();
@@ -2275,12 +3365,25 @@ function initConstructionProgressPanel() {
             saveConstructionViewerState(window._constructionActiveViewerZone || '');
         });
     }
+    if (resetBtn && !resetBtn.dataset.bound) {
+        resetBtn.dataset.bound = 'true';
+        resetBtn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            resetConstructionViewerFocus();
+        });
+    }
     map.addEventListener('mouseover', event => {
         const zoneBtn = event.target.closest('.bim-zone[data-zone]');
         if (zoneBtn) setActiveConstructionZone(zoneBtn.dataset.zone);
     });
     map.addEventListener('mouseleave', () => setActiveConstructionZone(''));
     map.addEventListener('click', event => {
+        const hotspot = event.target.closest('.bim-live-hotspot[data-structure-name]');
+        if (hotspot) {
+            focusLiveStructure(hotspot.dataset.structureName, hotspot.dataset.zone || 'new');
+            return;
+        }
         const zoneBtn = event.target.closest('.bim-zone[data-zone]');
         if (zoneBtn) focusConstructionZone(zoneBtn.dataset.zone);
     });
@@ -3454,6 +4557,8 @@ export function initConstructionBimDashboard() {
     initWeeklyTaskBoard();
     initStructureIssueBoard();
     initConstructionProgressPanel();
+    initConstructionLivePanel();
+    initConstructionInspectorPanel();
     bindMonthlyIssueStatusTab();
     refreshConstructionBimDashboard();
 }
