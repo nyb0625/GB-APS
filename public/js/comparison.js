@@ -724,6 +724,95 @@ function compareProperties(propsA, propsB) {
     return changes;
 }
 
+export async function runHiddenDiff(projectId, prevViewerUrn, curViewerUrn, onProgress) {
+    if (onProgress) onProgress(5);
+    const host = document.createElement('div');
+    host.id = 'example2-hidden-comparison-host';
+    host.style.cssText = [
+        'position:fixed',
+        'left:-12000px',
+        'top:0',
+        'width:900px',
+        'height:640px',
+        'opacity:0',
+        'pointer-events:none',
+        'z-index:-1',
+        'overflow:hidden',
+        'background:#020617'
+    ].join(';');
+
+    const left = document.createElement('div');
+    const right = document.createElement('div');
+    left.style.cssText = 'position:absolute;left:0;top:0;width:450px;height:640px;';
+    right.style.cssText = 'position:absolute;left:450px;top:0;width:450px;height:640px;';
+    host.appendChild(left);
+    host.appendChild(right);
+    document.body.appendChild(host);
+
+    let hiddenA = null;
+    let hiddenB = null;
+    try {
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        hiddenA = await initViewer(left, true);
+        hiddenB = await initViewer(right, true);
+        if (!hiddenA || !hiddenB) throw new Error('숨김 비교 뷰어를 초기화하지 못했습니다.');
+
+        if (onProgress) onProgress(20);
+        await Promise.all([
+            loadModel(hiddenA, prevViewerUrn),
+            loadModel(hiddenB, curViewerUrn)
+        ]);
+
+        if (onProgress) onProgress(55);
+        const [mapOld, mapNew] = await Promise.all([
+            getModelMap(hiddenA),
+            getModelMap(hiddenB)
+        ]);
+
+        const added = [];
+        const removed = [];
+        const changed = [];
+
+        mapNew.forEach((data, extId) => {
+            if (isCenterlineObject(data)) return;
+            if (!mapOld.has(extId)) {
+                added.push(data);
+            } else {
+                const oldData = mapOld.get(extId);
+                const diffs = compareProperties(oldData.properties, data.properties);
+                if (diffs.length > 0) changed.push({ ...data, oldDbId: oldData.dbId, diffs });
+            }
+        });
+
+        mapOld.forEach((data, extId) => {
+            if (isCenterlineObject(data)) return;
+            if (!mapNew.has(extId)) removed.push(data);
+        });
+
+        const filteredChanged = changed.filter(item => {
+            const props = item.differences || item.changedKeys || item.diffs;
+            return Array.isArray(props) ? props.length > 0 : Boolean(props);
+        });
+
+        if (onProgress) onProgress(100);
+        return {
+            added,
+            removed,
+            changed: filteredChanged,
+            modified: filteredChanged,
+            projectId
+        };
+    } finally {
+        try {
+            if (hiddenA) hiddenA.finish();
+        } catch (e) {}
+        try {
+            if (hiddenB) hiddenB.finish();
+        } catch (e) {}
+        host.remove();
+    }
+}
+
 // ── Color coding and Ghosting ───────────────────────────────────────────────
 export function visualizeDiff(results) {
     if (!results || viewers.length < 2) return;

@@ -471,10 +471,10 @@ service.getProjectIssues = async (containerId, accessToken) => {
 };
 
 /**
- * Global Search API for project-wide RVT files under a root folder
- * Endpoint: GET /data/v1/projects/{projectId}/folders/{rootFolderId}/search?filter[extension]=rvt
+ * Global Search API for project-wide files under a root folder.
+ * Endpoint: GET /data/v1/projects/{projectId}/folders/{rootFolderId}/search?filter[extension]={ext}
  */
-service.searchProjectRvtFiles = async (projectId, rootFolderId, accessToken) => {
+service.searchProjectFiles = async (projectId, rootFolderId, accessToken, extensions = ['rvt']) => {
     if (!rootFolderId) {
         try {
             const topFoldersResp = await dataManagementClient.getProjectTopFolders(null, projectId, { accessToken });
@@ -495,44 +495,58 @@ service.searchProjectRvtFiles = async (projectId, rootFolderId, accessToken) => 
 
     if (!rootFolderId) return [];
 
-    const url = `https://developer.api.autodesk.com/data/v1/projects/${projectId}/folders/${encodeURIComponent(rootFolderId)}/search?filter[extension]=rvt`;
-    const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-    });
-
-    if (!response.ok) {
-        console.warn(`[APS Service] Search API HTTP ${response.status}: ${response.statusText}`);
-        return [];
-    }
-
-    const resJson = await response.json();
-    const items = resJson.data || [];
-    const included = resJson.included || [];
-
-    const folderMap = new Map();
-    included.forEach(inc => {
-        if (inc.type === 'folders' || inc.type === 'items') {
-            folderMap.set(inc.id, inc.attributes?.displayName || inc.attributes?.name || '');
-        }
-    });
-
+    const normalizedExtensions = [...new Set((extensions || ['rvt'])
+        .map(ext => String(ext || '').trim().replace(/^\./, '').toLowerCase())
+        .filter(Boolean))];
+    const seen = new Set();
     const results = [];
-    for (const item of items) {
-        const displayName = item.attributes?.displayName || item.attributes?.name || item.name || '';
-        const tipId = item.relationships?.tip?.data?.id || item.id;
-        const urn = service.urnify(tipId);
 
-        const parentId = item.relationships?.parent?.data?.id;
-        const parentFolderName = parentId ? (folderMap.get(parentId) || '') : '';
-
-        results.push({
-            id: item.id,
-            displayName,
-            urn,
-            tipId,
-            parentFolderName
+    for (const extension of normalizedExtensions) {
+        const url = `https://developer.api.autodesk.com/data/v1/projects/${projectId}/folders/${encodeURIComponent(rootFolderId)}/search?filter[extension]=${encodeURIComponent(extension)}`;
+        const response = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
         });
+
+        if (!response.ok) {
+            console.warn(`[APS Service] Search API HTTP ${response.status} for .${extension}: ${response.statusText}`);
+            continue;
+        }
+
+        const resJson = await response.json();
+        const items = resJson.data || [];
+        const included = resJson.included || [];
+
+        const folderMap = new Map();
+        included.forEach(inc => {
+            if (inc.type === 'folders' || inc.type === 'items') {
+                folderMap.set(inc.id, inc.attributes?.displayName || inc.attributes?.name || '');
+            }
+        });
+
+        for (const item of items) {
+            if (seen.has(item.id)) continue;
+            seen.add(item.id);
+
+            const displayName = item.attributes?.displayName || item.attributes?.name || item.name || '';
+            const tipId = item.relationships?.tip?.data?.id || item.id;
+            const urn = service.urnify(tipId);
+            const parentId = item.relationships?.parent?.data?.id;
+            const parentFolderName = parentId ? (folderMap.get(parentId) || '') : '';
+
+            results.push({
+                id: item.id,
+                displayName,
+                urn,
+                tipId,
+                parentFolderName,
+                extension
+            });
+        }
     }
 
     return results;
+};
+
+service.searchProjectRvtFiles = async (projectId, rootFolderId, accessToken) => {
+    return service.searchProjectFiles(projectId, rootFolderId, accessToken, ['rvt']);
 };

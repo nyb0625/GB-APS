@@ -851,6 +851,8 @@
             color: #94a3b8 !important;
             border: 1px solid #334155 !important;
             padding: 8px 16px !important;
+            height: 38px !important;
+            box-sizing: border-box !important;
             border-radius: 8px !important;
             cursor: pointer !important;
             font-weight: bold !important;
@@ -926,7 +928,7 @@
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
                 <button id="main-tab-example1-btn" class="tab-btn main-tab-btn" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
-                <button id="main-tab-example2-btn" class="tab-btn main-tab-btn" onclick="switchTab('example2')"><i class="fas fa-table-columns"></i> 예시2</button>
+                <button id="main-tab-example2-btn" class="tab-btn main-tab-btn" onclick="switchTab('example2')"><i class="fas fa-cubes"></i> BIM</button>
                 <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
                 <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
                 <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
@@ -1426,13 +1428,17 @@
                 </div>
             </div>
 
-            <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
-                <div style="display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; width: 100%; height: 100%; min-height: 0;">
+            <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 10px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
+                <div style="display: grid; grid-template-columns: minmax(620px, 1.18fr) minmax(480px, 0.95fr); gap: 12px; width: 100%; height: 100%; min-height: 0;">
                     <section id="example2-left-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
                         <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
                             <i class="fas fa-calendar-check" style="color: #38bdf8; margin-right: 8px;"></i> 업무 일정
                         </div>
                         <div id="example2-work-schedule" style="flex: 1; min-height: 0;"></div>
+                    </section>
+                    <section id="example2-right-area" style="min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(300px, 0.92fr) minmax(340px, 1.08fr); gap: 12px; overflow: hidden;">
+                        <div id="example2-model-updates" style="min-height: 0;"></div>
+                        <div id="example2-project-search" style="min-height: 0;"></div>
                     </section>
                 </div>
             </div>

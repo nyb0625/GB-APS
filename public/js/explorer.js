@@ -3,6 +3,44 @@
  * FolderExplorer component for Autodesk Docs tree browsing.
  */
 
+function getProjectVersionNumber(version) {
+    const direct = version?.versionNumber ?? version?.vNumber ?? version?.attributes?.versionNumber;
+    if (direct !== null && typeof direct !== 'undefined' && direct !== '') {
+        const parsed = Number(direct);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    const text = String(version?.id || version?.urn || '');
+    const match = text.match(/[?&]version=(\d+)/i)
+        || text.match(/:v(\d+)$/i)
+        || text.match(/\.vf\..+v(\d+)$/i);
+    return match ? Number(match[1]) : null;
+}
+
+function getProjectVersionValue(version) {
+    const value = version?.formaVersionLabel
+        ?? version?.revisionDisplayLabel
+        ?? version?.extensionData?.revisionDisplayLabel
+        ?? version?.attributes?.extension?.data?.revisionDisplayLabel;
+    if (value !== null && typeof value !== 'undefined' && String(value).trim() !== '') {
+        return String(value).trim();
+    }
+    const versionNumber = getProjectVersionNumber(version);
+    return versionNumber !== null ? String(versionNumber) : '';
+}
+
+function getProjectVersionLabel(version) {
+    const value = getProjectVersionValue(version);
+    if (!value) return 'v-';
+    return /^v/i.test(value) ? value : `v${value}`;
+}
+
+function escapeSelectorValue(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+        return window.CSS.escape(String(value || ''));
+    }
+    return String(value || '').replace(/["\\]/g, '\\$&');
+}
+
 class FolderExplorer {
     constructor() {
         this.container = document.getElementById('explorer-container');
@@ -17,6 +55,7 @@ class FolderExplorer {
         this.currentFolderId = null;
         this.history = []; // Breadcrumb stack
         this.currentVersions = [];
+        this.versionBadgeBatch = 0;
 
         // Properties for sequential version comparison
         this.compareSelectMode = false;
@@ -232,7 +271,7 @@ class FolderExplorer {
                     <span class="item-name">${item.name}</span>
                 </td>
                 <td>
-                    ${item.folder ? '-' : `<span class="badge-version" data-item-id="${item.id}" data-item-name="${item.name}" title="버전 이력 보기">v${item.vNumber || 1}</span>`}
+                    ${item.folder ? '-' : `<span class="badge-version" data-item-id="${item.id}" data-item-name="${item.name}" data-item-urn="${item.urn || ''}" title="버전 이력 보기">${getProjectVersionLabel(item)}</span>`}
                 </td>
                 <td><span class="text-date">${dateStr}</span></td>
                 <td><span class="text-user">${item.lastModifiedUserName || 'Unknown'}</span></td>
@@ -266,6 +305,48 @@ class FolderExplorer {
 
             this.list.appendChild(tr);
         });
+        this.hydrateCurrentVersionBadges(items);
+    }
+
+    findCurrentVersionForItem(item, versions) {
+        const list = Array.isArray(versions) ? versions : [];
+        if (!list.length) return null;
+        const byUrn = item?.urn
+            ? list.find(version => version.urn === item.urn)
+            : null;
+        if (byUrn) return byUrn;
+        const byId = item?.versionId
+            ? list.find(version => version.id === item.versionId)
+            : null;
+        if (byId) return byId;
+        return list
+            .slice()
+            .sort((a, b) => (getProjectVersionNumber(b) || 0) - (getProjectVersionNumber(a) || 0))[0];
+    }
+
+    async hydrateCurrentVersionBadges(items) {
+        const batch = ++this.versionBadgeBatch;
+        const files = (items || []).filter(item => !item.folder && item.id);
+        if (!files.length || !this.currentHubId || !this.currentProjectId) return;
+
+        await Promise.all(files.map(async item => {
+            try {
+                const url = `/api/hubs/${this.currentHubId}/projects/${this.currentProjectId}/contents/${encodeURIComponent(item.id)}/versions`;
+                const response = await fetch(url);
+                if (!response.ok || batch !== this.versionBadgeBatch) return;
+                const versions = await response.json();
+                const currentVersion = this.findCurrentVersionForItem(item, versions);
+                if (!currentVersion) return;
+                const label = getProjectVersionLabel(currentVersion);
+                const badge = this.list.querySelector(`.badge-version[data-item-id="${escapeSelectorValue(item.id)}"]`);
+                if (badge && batch === this.versionBadgeBatch) {
+                    badge.textContent = label;
+                    badge.title = `버전 이력 보기 · 현재 ${label}`;
+                }
+            } catch (err) {
+                console.warn('[Explorer] Failed to hydrate Forma version label:', item.name, err);
+            }
+        }));
     }
 
     async handleVersionClick(itemId, itemName) {
@@ -300,6 +381,8 @@ class FolderExplorer {
         versions.forEach(v => {
             const tr = document.createElement('tr');
             const dateStr = v.name ? new Date(v.name).toLocaleString() : '-';
+            const versionLabel = getProjectVersionLabel(v);
+            const sortVersionNumber = getProjectVersionNumber(v) || 0;
 
             const isCurrent = (v.urn === window.currentUrn);
             const currentBadge = isCurrent 
@@ -307,7 +390,7 @@ class FolderExplorer {
                 : ``;
 
             tr.innerHTML = `
-                <td><span class="badge-version" title="버전 ID: ${v.id}">v${v.vNumber}</span></td>
+                <td><span class="badge-version" title="버전 ID: ${v.id}">${versionLabel}</span></td>
                 <td class="text-cell" title="${dateStr}">${dateStr}</td>
                 <td class="text-cell" title="${v.createUserName || 'Unknown'}">${v.createUserName || 'Unknown'}</td>
                 <td>
@@ -323,7 +406,7 @@ class FolderExplorer {
             `;
 
             tr.setAttribute('data-urn', v.urn);
-            tr.setAttribute('data-version-number', v.vNumber);
+            tr.setAttribute('data-version-number', sortVersionNumber);
 
             tr.onclick = (e) => {
                 // Ignore click if clicking internal interactive components like input/buttons
@@ -336,7 +419,8 @@ class FolderExplorer {
                         versionUrn: v.id,        // Diff API용 (raw URN)
                         viewerUrn: v.urn,        // Viewer loadModel용 (base64 URN)
                         name: itemName,
-                        versionNumber: v.vNumber
+                        versionNumber: getProjectVersionValue(v) || sortVersionNumber,
+                        sortVersionNumber
                     };
                     this.handleVersionRowClickForCompare(tr, versionObj);
                 }
@@ -351,7 +435,7 @@ class FolderExplorer {
                 window.currentItemId = itemId;
                 window.currentVersionId = v.id;
 
-                this.loadIntoViewer(v.urn, `${itemName} (v${v.vNumber})`);
+                this.loadIntoViewer(v.urn, `${itemName} (${versionLabel})`);
             };
 
             const memoInput = tr.querySelector('.memo-input');
@@ -632,7 +716,7 @@ class FolderExplorer {
 
         if (this.selectedCompareVersions.length === 2) {
             // Sort selected versions by versionNumber asc (Older version as verA, newer version as verB)
-            this.selectedCompareVersions.sort((x, y) => Number(x.versionNumber) - Number(y.versionNumber));
+            this.selectedCompareVersions.sort((x, y) => Number(x.sortVersionNumber ?? x.versionNumber) - Number(y.sortVersionNumber ?? y.versionNumber));
             
             const verA = this.selectedCompareVersions[0];
             const verB = this.selectedCompareVersions[1];

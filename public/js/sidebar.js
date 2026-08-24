@@ -29,6 +29,37 @@ window.findNodeById = function (nodes, id) {
 let _treeInstance = null;
 window.urnToNameMap = {}; // Global lookup for URN -> FileName
 
+function getProjectVersionNumber(version) {
+    const direct = version?.versionNumber ?? version?.vNumber ?? version?.attributes?.versionNumber;
+    if (direct !== null && typeof direct !== 'undefined' && direct !== '') {
+        const parsed = Number(direct);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    const text = String(version?.id || version?.urn || '');
+    const match = text.match(/[?&]version=(\d+)/i)
+        || text.match(/:v(\d+)$/i)
+        || text.match(/\.vf\..+v(\d+)$/i);
+    return match ? Number(match[1]) : null;
+}
+
+function getProjectVersionValue(version) {
+    const value = version?.formaVersionLabel
+        ?? version?.revisionDisplayLabel
+        ?? version?.extensionData?.revisionDisplayLabel
+        ?? version?.attributes?.extension?.data?.revisionDisplayLabel;
+    if (value !== null && typeof value !== 'undefined' && String(value).trim() !== '') {
+        return String(value).trim();
+    }
+    const versionNumber = getProjectVersionNumber(version);
+    return versionNumber !== null ? String(versionNumber) : '';
+}
+
+function getProjectVersionLabel(version) {
+    const value = getProjectVersionValue(version);
+    if (!value) return 'V-';
+    return /^v/i.test(value) ? value.replace(/^v/i, 'V') : `V${value}`;
+}
+
 async function getJSON(url) {
     const resp = await fetch(url);
     if (!resp.ok) {
@@ -67,17 +98,25 @@ async function getContents(hubId, projectId, region, folderId = null) {
         if (item.folder) {
             return createTreeNode(`folder|${hubId}|${projectId}|${region}|${item.id}`, item.name, 'icon-my-folder', true);
         } else {
-            return createTreeNode(`item|${hubId}|${projectId}|${region}|${item.id}`, item.name, 'icon-item', false, { vNumber: item.vNumber, urn: item.urn });
+            return createTreeNode(`item|${hubId}|${projectId}|${region}|${item.id}`, item.name, 'icon-item', false, {
+                vNumber: item.vNumber,
+                versionNumber: item.versionNumber,
+                formaVersionLabel: item.formaVersionLabel,
+                revisionDisplayLabel: item.revisionDisplayLabel,
+                urn: item.urn
+            });
         }
     });
 }
 
 async function getVersions(hubId, projectId, region, itemId) {
     const versions = await getJSON(`/api/hubs/${hubId}/projects/${projectId}/contents/${encodeURIComponent(itemId)}/versions`);
-    return versions.map(version => {
-        const vNum = (version.vNumber !== undefined && version.vNumber !== null) ? version.vNumber : '?';
+    return versions
+        .slice()
+        .sort((a, b) => (getProjectVersionNumber(b) || 0) - (getProjectVersionNumber(a) || 0))
+        .map(version => {
         const vUrn = Buffer.from(version.id).toString('base64').replace(/=/g, '');
-        const displayText = `V${vNum} - ${version.displayName || version.name}`;
+        const displayText = `${getProjectVersionLabel(version)} - ${version.displayName || version.name}`;
 
         // Populate map for both full URN and base64 version
         window.urnToNameMap[vUrn] = version.displayName || version.name;

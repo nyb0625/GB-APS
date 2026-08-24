@@ -1432,7 +1432,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
     const gunhwaOnly = req.query.gunhwa === '1' || categoryFilter === 'gunhwa' || categoryFilter === '\uac74\ud654';
     const workScheduleOnly = req.query.workSchedule === '1' || req.query.work_schedule === '1';
     const includeGunhwa = gunhwaOnly || req.query.includeGunhwa === '1' || req.query.include_gunhwa === '1';
-    const cacheKey = `${hubId}|${projectId}|${limit}|${includeGunhwa ? 'with-gunhwa' : 'without-gunhwa'}|${gunhwaOnly ? 'gunhwa-only' : 'all-visible'}|${workScheduleOnly ? 'work-schedule-fast-v7-location' : 'main'}`;
+    const cacheKey = `${hubId}|${projectId}|${limit}|${includeGunhwa ? 'with-gunhwa' : 'without-gunhwa'}|${gunhwaOnly ? 'gunhwa-only' : 'all-visible'}|${workScheduleOnly ? 'work-schedule-fast-v8-without-gunhwa' : 'main'}`;
     const cacheTtlMs = workScheduleOnly ? Math.max(FORMA_ISSUES_CACHE_TTL_MS, 10 * 60 * 1000) : FORMA_ISSUES_CACHE_TTL_MS;
 
     try {
@@ -1553,7 +1553,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
                         isUpdate: isUpdateIssueServer(issue, normalizedIssue)
                     };
                 })
-                .filter(item => item.isGunhwa || item.isUpdate)
+                .filter(item => !item.isGunhwa)
             : [];
         const normalizedSourceIssues = workScheduleOnly
             ? await enrichFormaIssuesWithDetails(scheduleCandidates.map(item => item.issue), projectId, containerId, token)
@@ -1570,7 +1570,7 @@ router.get('/api/issues/forma-gangbuk', authRefreshMiddleware, async (req, res) 
             })
             .filter(item => {
                 const isGunhwa = item.isGunhwa;
-                if (workScheduleOnly) return item.isGunhwa || item.isUpdate;
+                if (workScheduleOnly) return !isGunhwa;
                 if (gunhwaOnly) return isGunhwa;
                 return includeGunhwa || !isGunhwa;
             })

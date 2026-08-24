@@ -5,6 +5,37 @@
 
 import { loadModelWithTracking } from './viewer.js';
 
+function getProjectVersionNumber(version) {
+    const direct = version?.versionNumber ?? version?.vNumber ?? version?.attributes?.versionNumber;
+    if (direct !== null && typeof direct !== 'undefined' && direct !== '') {
+        const parsed = Number(direct);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    const text = String(version?.id || version?.urn || '');
+    const match = text.match(/[?&]version=(\d+)/i)
+        || text.match(/:v(\d+)$/i)
+        || text.match(/\.vf\..+v(\d+)$/i);
+    return match ? Number(match[1]) : null;
+}
+
+function getProjectVersionValue(version) {
+    const value = version?.formaVersionLabel
+        ?? version?.revisionDisplayLabel
+        ?? version?.extensionData?.revisionDisplayLabel
+        ?? version?.attributes?.extension?.data?.revisionDisplayLabel;
+    if (value !== null && typeof value !== 'undefined' && String(value).trim() !== '') {
+        return String(value).trim();
+    }
+    const versionNumber = getProjectVersionNumber(version);
+    return versionNumber !== null ? String(versionNumber) : '';
+}
+
+function getProjectVersionLabel(version) {
+    const value = getProjectVersionValue(version);
+    if (!value) return 'V-';
+    return /^v/i.test(value) ? value.replace(/^v/i, 'V') : `V${value}`;
+}
+
 /**
  * Fetches version history for an item and populates the top-bar dropdown.
  */
@@ -64,7 +95,7 @@ export async function loadVersionsDropdown(hubId, projectId, itemId, currentVers
             return;
         }
 
-        versions.sort((a, b) => b.vNumber - a.vNumber);
+        versions.sort((a, b) => (getProjectVersionNumber(b) || 0) - (getProjectVersionNumber(a) || 0));
 
         // 현재 로드된 URN을 기반으로 활성 버전 식별
         const currentUrn = window.currentUrn;
@@ -75,13 +106,14 @@ export async function loadVersionsDropdown(hubId, projectId, itemId, currentVers
         versions.forEach(v => {
             const li = document.createElement('li');
             li.className = 'version-item';
+            const versionLabel = getProjectVersionLabel(v);
 
             // URN 매칭 또는 ID 매칭 시도
             const isActive = (v.urn === currentUrn) || (v.id === currentVersionId);
 
             if (isActive) {
                 li.classList.add('active');
-                if (currentText) currentText.textContent = `V${v.vNumber}`;
+                if (currentText) currentText.textContent = versionLabel;
             }
 
             const dateStr = new Date(v.name).toLocaleDateString('ko-KR', {
@@ -89,20 +121,20 @@ export async function loadVersionsDropdown(hubId, projectId, itemId, currentVers
             });
 
             li.innerHTML = `
-                <div class="v-num">V${v.vNumber}</div>
+                <div class="v-num">${versionLabel}</div>
                 <div class="v-date">${dateStr}</div>
                 <div class="v-user">${v.displayName || 'Unknown'}</div>
             `;
 
             li.onclick = async () => {
                 const urn = v.urn;
-                const versionName = `${v.displayName} (V${v.vNumber})`;
+                const versionName = `${v.displayName} (${versionLabel})`;
                 console.log(`[VersionManager] Switching to ${versionName} | URN: ${urn}`);
 
                 // Close dropdown
                 versionList.style.display = 'none';
                 versionBtn.classList.remove('open');
-                if (currentText) currentText.textContent = `V${v.vNumber}`;
+                if (currentText) currentText.textContent = versionLabel;
 
                 const loadingOverlay = document.getElementById('viewer-loading');
                 if (loadingOverlay) loadingOverlay.style.display = 'flex';

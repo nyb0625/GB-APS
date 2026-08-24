@@ -11,6 +11,7 @@ const {
     getItemVersions,
     getIssueContainerInfo,
     getProjectIssues,
+    searchProjectFiles,
     searchProjectRvtFiles
 } = require('../services/aps.js');
 const axios = require('axios');
@@ -29,9 +30,96 @@ function extractVersionNumber(id) {
     return m ? parseInt(m[1], 10) : 1;
 }
 
+function getRevisionDisplayLabel(version) {
+    const attrs = version?.attributes || {};
+    const extData = attrs.extension?.data || {};
+    const value = extData.revisionDisplayLabel ?? extData.revisionLabel ?? extData.versionLabel;
+    if (value === null || typeof value === 'undefined' || value === '') return null;
+    return String(value);
+}
+
+function buildVersionMeta(version) {
+    const attrs = version?.attributes || {};
+    const ext = attrs.extension || {};
+    const extData = ext.data || {};
+    let vNumber = attrs.versionNumber;
+    if (vNumber == null && version?.id) vNumber = extractVersionNumber(version.id);
+    const revisionDisplayLabel = getRevisionDisplayLabel(version);
+    return {
+        vNumber,
+        versionNumber: vNumber,
+        revisionDisplayLabel,
+        formaVersionLabel: revisionDisplayLabel || (vNumber != null ? String(vNumber) : ''),
+        versionType: ext.type || '',
+        extensionData: {
+            revisionDisplayLabel,
+            stormAction: extData['storm:action'] || extData.stormAction || '',
+            sourceVersion: extData.sourceVersion || extData.sourceVersionUrn || extData.sourceFileVersionUrn || ''
+        }
+    };
+}
+
 // Convert ID string to base64 URN
 function toUrnBase64(id) {
     return Buffer.from(id).toString('base64').replace(/=/g, '');
+}
+
+function getApsDisplayName(item) {
+    const attrs = item.attributes || {};
+    const extData = attrs.extension?.data || {};
+    return attrs.displayName || attrs.title || extData.name || attrs.name || item.name || 'Unknown';
+}
+
+async function listProjectFilesByTree(hubId, projectId, accessToken, extensions, maxFiles = 1200) {
+    const allowed = new Set((extensions || []).map(ext => String(ext).replace(/^\./, '').toLowerCase()));
+    const topFolders = await getProjectContents(hubId, projectId, null, accessToken);
+    const queue = (topFolders || []).filter(item => item.type === 'folders').map(folder => ({
+        id: folder.id,
+        path: getApsDisplayName(folder)
+    }));
+    const results = [];
+    const visited = new Set();
+
+    while (queue.length && results.length < maxFiles) {
+        const folder = queue.shift();
+        if (!folder?.id || visited.has(folder.id)) continue;
+        visited.add(folder.id);
+
+        let children = [];
+        try {
+            children = await getProjectContents(hubId, projectId, folder.id, accessToken);
+        } catch (err) {
+            console.warn(`[Search Files Fallback] Folder skipped ${folder.path}:`, err.message);
+            continue;
+        }
+
+        for (const item of children || []) {
+            const name = getApsDisplayName(item);
+            if (item.type === 'folders') {
+                queue.push({ id: item.id, path: `${folder.path}/${name}` });
+                continue;
+            }
+
+            const ext = String(name.split('.').pop() || '').toLowerCase();
+            if (allowed.size && !allowed.has(ext)) continue;
+
+            const tipId = item.relationships?.tip?.data?.id || item.id;
+            results.push({
+                id: item.id,
+                displayName: name,
+                urn: toUrnBase64(tipId),
+                tipId,
+                parentFolderName: folder.path.split('/').pop() || '',
+                folderPath: folder.path,
+                extension: ext,
+                source: 'project-tree-fallback'
+            });
+
+            if (results.length >= maxFiles) break;
+        }
+    }
+
+    return results;
 }
 
 // GET /api/hubs/diagnostic/check-all - Diagnostic check for translation status of all files in 01 분배조
@@ -176,14 +264,29 @@ router.get('/:hub_id/projects/:project_id/contents', async (req, res, next) => {
             req.internalOAuthToken.access_token
         );
         
-        res.json(entries.map(item => {
+        const responseItems = await Promise.all(entries.map(async item => {
             const isFolder = item.type === 'folders';
             let vNumber = 1;
             let urn = null;
+            let versionMeta = {};
             if (!isFolder && item.relationships?.tip) {
                 const tipId = item.relationships.tip.data.id;
                 vNumber = extractVersionNumber(tipId);
                 urn = toUrnBase64(tipId);
+                try {
+                    const versions = await getItemVersions(
+                        req.params.project_id,
+                        item.id,
+                        req.internalOAuthToken.access_token
+                    );
+                    const tipVersion = (versions || []).find(version => version.id === tipId)
+                        || (versions || []).find(version => toUrnBase64(version.id) === urn);
+                    versionMeta = buildVersionMeta(tipVersion || { id: tipId, attributes: { versionNumber: vNumber } });
+                    vNumber = versionMeta.vNumber || vNumber;
+                } catch (versionErr) {
+                    console.warn('[Contents] Failed to enrich version label:', versionErr.message);
+                    versionMeta = buildVersionMeta({ id: tipId, attributes: { versionNumber: vNumber } });
+                }
             }
             
             const attrs = item.attributes || {};
@@ -195,11 +298,17 @@ router.get('/:hub_id/projects/:project_id/contents', async (req, res, next) => {
                 name: displayName,
                 folder: isFolder,
                 vNumber,
+                versionNumber: vNumber,
+                revisionDisplayLabel: versionMeta.revisionDisplayLabel || null,
+                formaVersionLabel: versionMeta.formaVersionLabel || (vNumber != null ? String(vNumber) : ''),
+                versionType: versionMeta.versionType || '',
+                extensionData: versionMeta.extensionData || null,
                 urn,
                 lastModifiedTime: attrs.lastModifiedTime || null,
                 lastModifiedUserName: attrs.lastModifiedUserName || null
             };
         }));
+        res.json(responseItems);
     } catch (err) {
         next(err);
     }
@@ -220,6 +329,28 @@ router.get('/:hub_id/projects/:project_id/search-rvt', async (req, res, next) =>
     }
 });
 
+// GET /api/hubs/:hub_id/projects/:project_id/search-files - Global Search API for project files
+router.get('/:hub_id/projects/:project_id/search-files', async (req, res, next) => {
+    try {
+        const { project_id } = req.params;
+        const token = req.internalOAuthToken.access_token;
+        const rootFolderId = req.query.root_folder_id || req.query.folder_id;
+        const extensions = String(req.query.extensions || 'rvt,dwg,pdf,doc,docx,xls,xlsx,ppt,pptx')
+            .split(',')
+            .map(ext => ext.trim())
+            .filter(Boolean);
+
+        let files = await searchProjectFiles(project_id, rootFolderId, token, extensions);
+        if (!files.length) {
+            files = await listProjectFilesByTree(hub_id, project_id, token, extensions);
+        }
+        res.json(files);
+    } catch (err) {
+        console.error('[Search Files Route Error]', err);
+        next(err);
+    }
+});
+
 // GET /api/hubs/:hub_id/projects/:project_id/contents/:item_id/versions - List file versions
 router.get('/:hub_id/projects/:project_id/contents/:item_id/versions', async (req, res, next) => {
     try {
@@ -230,15 +361,19 @@ router.get('/:hub_id/projects/:project_id/contents/:item_id/versions', async (re
         );
         const memos = readMemos();
         res.json(versions.map(v => {
-            let vNumber = v.attributes.versionNumber;
-            if (vNumber == null) vNumber = extractVersionNumber(v.id);
+            const attrs = v.attributes || {};
+            const versionMeta = buildVersionMeta(v);
+            const vNumber = versionMeta.vNumber;
             const urn = toUrnBase64(v.id);
             return {
                 id: v.id,
-                name: v.attributes.createTime,
-                displayName: v.attributes.displayName || v.attributes.createTime,
-                vNumber,
-                createUserName: v.attributes.createUserName,
+                name: attrs.createTime,
+                displayName: attrs.displayName || attrs.createTime,
+                ...versionMeta,
+                createUserName: attrs.createUserName,
+                createTime: attrs.createTime || '',
+                lastModifiedTime: attrs.lastModifiedTime || '',
+                lastModifiedUserName: attrs.lastModifiedUserName || '',
                 urn,
                 memo: memos[urn] || ''
             };
