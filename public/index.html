@@ -7,28 +7,46 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
     <!-- Autodesk Viewer CSS -->
-    <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css" type="text/css">
+    <link rel="stylesheet" href="/api/viewer-sdk/7.108.0/style.min.css" type="text/css">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+    <link rel="preload" as="image" href="/images/construction-live-new.png?v=20260824-live3">
+    <link rel="preload" as="image" href="/images/construction-live-extension.png?v=20260824-live1">
+    <link rel="preload" as="image" href="/images/construction-live-priority.png?v=20260824-live1">
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Three.js (금주 작업 시각화 3D 뷰어) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260824-layout-shell1">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260827-monthly-map20">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
+    <script>
+        try {
+            if (localStorage.getItem('aps_theme') === 'light') {
+                document.documentElement.classList.add('theme-light-pending');
+            }
+            var savedAccent = localStorage.getItem('aps_accent_color');
+            if (/^#[0-9a-fA-F]{6}$/.test(savedAccent || '')) {
+                document.documentElement.style.setProperty('--accent-color', savedAccent);
+                document.documentElement.style.setProperty('--primary-glow', 'linear-gradient(135deg, ' + savedAccent + ' 0%, ' + savedAccent + ' 100%)');
+                document.documentElement.style.setProperty('--ex1-accent', savedAccent);
+            }
+        } catch (err) {}
+    </script>
     
     <style>
         :root {
             --bg-color: #0b0f19;
+            --app-bg-color: #0b0f19;
             --header-bg: rgba(11, 15, 25, 0.85);
             --card-bg: rgba(20, 30, 48, 0.65);
             --border-color: rgba(255, 255, 255, 0.08);
             --primary-glow: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
             --accent-color: #00f2fe;
+            --accent-soft: rgba(0, 242, 254, 0.12);
+            --accent-border: rgba(0, 242, 254, 0.38);
             --text-main: #f3f4f6;
             --text-muted: #9ca3af;
             --chat-user-bg: rgba(0, 242, 254, 0.15);
@@ -113,6 +131,379 @@
             display: flex;
             align-items: center;
             gap: 1rem;
+        }
+
+        #models {
+            display: none !important;
+        }
+
+        .theme-settings {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .theme-settings-toggle {
+            width: 38px;
+            height: 38px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(17, 24, 39, 0.82);
+            color: var(--text-main);
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+        }
+
+        .theme-settings-toggle:hover,
+        .theme-settings-toggle[aria-expanded="true"] {
+            background: var(--accent-soft);
+            border-color: var(--accent-border);
+            color: var(--accent-color);
+        }
+
+        .theme-settings-toggle:active {
+            transform: scale(0.96);
+        }
+
+        .theme-settings-panel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            z-index: 1400;
+            width: min(420px, calc(100vw - 32px));
+            max-height: calc(100vh - 96px);
+            padding: 18px;
+            display: none;
+            flex-direction: column;
+            gap: 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.96);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38);
+            backdrop-filter: blur(16px);
+            transform: translate(-50%, -50%);
+            overflow: auto;
+        }
+
+        .theme-settings-panel.open {
+            display: flex;
+        }
+
+        .theme-settings-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 1390;
+            display: none;
+            background: rgba(2, 6, 23, 0.48);
+            backdrop-filter: blur(4px);
+        }
+
+        .theme-settings-backdrop.open {
+            display: block;
+        }
+
+        .settings-panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .settings-panel-title {
+            margin: 0;
+            color: var(--text-main);
+            font-size: 1rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+
+        .settings-close {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .settings-close:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .settings-field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .settings-field label,
+        .settings-field-title {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            font-weight: 800;
+        }
+
+        .theme-option-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .theme-option {
+            width: 100%;
+            min-height: 34px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 9px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-main);
+            font: inherit;
+            font-size: 0.86rem;
+            font-weight: 700;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .theme-option i {
+            width: 16px;
+            text-align: center;
+        }
+
+        .theme-option:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .theme-option.active {
+            border-color: var(--accent-border);
+            background: var(--accent-soft);
+            color: var(--accent-color);
+        }
+
+        .settings-text-input {
+            width: 100%;
+            min-width: 0;
+            height: 38px;
+            padding: 0 11px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: rgba(17, 24, 39, 0.82);
+            color: var(--text-main);
+            font: inherit;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        .settings-text-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .background-color-row {
+            display: grid;
+            grid-template-columns: 44px minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+        }
+
+        .background-color-row input[type="color"] {
+            width: 44px;
+            height: 38px;
+            padding: 2px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        .settings-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding-top: 4px;
+        }
+
+        .settings-action-btn {
+            min-height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 0 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-main);
+            font: inherit;
+            font-size: 0.86rem;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .settings-action-btn:hover {
+            border-color: var(--accent-border);
+            color: var(--accent-color);
+        }
+
+        .settings-action-btn.primary {
+            border-color: transparent;
+            background: var(--primary-glow);
+            color: #0b0f19;
+        }
+
+        html.theme-light-pending,
+        html.theme-light-pending body,
+        body.theme-light {
+            --bg-color: #f6f8fb;
+            --app-bg-color: #f6f8fb;
+            --header-bg: rgba(255, 255, 255, 0.9);
+            --card-bg: rgba(255, 255, 255, 0.78);
+            --border-color: rgba(15, 23, 42, 0.14);
+            --accent-color: #0284c7;
+            --accent-soft: rgba(2, 132, 199, 0.10);
+            --accent-border: rgba(2, 132, 199, 0.30);
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --chat-user-bg: rgba(2, 132, 199, 0.12);
+            --chat-agent-bg: rgba(15, 23, 42, 0.05);
+            --db-bg: #f3f7fb;
+            --db-panel: #ffffff;
+            --db-panel-alt: #eef4f9;
+            --db-border: rgba(15, 23, 42, 0.12);
+            --db-text: #0f172a;
+            --db-muted: #64748b;
+            --db-shadow: 0 4px 18px rgba(15, 23, 42, 0.08);
+        }
+
+        html.theme-light-pending body,
+        body.theme-light {
+            background: var(--app-bg-color);
+            color: var(--text-main);
+        }
+
+        body.custom-background {
+            --app-bg-color: var(--app-custom-bg-color);
+            background: var(--app-custom-bg-color) !important;
+        }
+
+        body.theme-light #example1-tab,
+        body.theme-light #example2-tab,
+        body.theme-light #tab-content-issue,
+        body.theme-light #tab-content-cctv,
+        body.theme-light .monthly-issue-status-tab,
+        body.theme-light .construction-bim-dashboard,
+        body.custom-background #example1-tab,
+        body.custom-background #example2-tab,
+        body.custom-background #tab-content-issue,
+        body.custom-background #tab-content-cctv,
+        body.custom-background .monthly-issue-status-tab,
+        body.custom-background .construction-bim-dashboard {
+            background: var(--app-bg-color) !important;
+        }
+
+        body.theme-light header {
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+        }
+
+        body.theme-light select,
+        body.theme-light .theme-settings-toggle {
+            background: rgba(255, 255, 255, 0.86);
+            color: var(--text-main);
+            border-color: var(--border-color);
+        }
+
+        body.theme-light .theme-settings-panel {
+            background: rgba(255, 255, 255, 0.96);
+            box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+        }
+
+        body.theme-light .theme-settings-backdrop {
+            background: rgba(15, 23, 42, 0.28);
+        }
+
+        body.theme-light .theme-option:hover {
+            background: rgba(2, 132, 199, 0.08);
+        }
+
+        body.theme-light .settings-close,
+        body.theme-light .settings-text-input,
+        body.theme-light .settings-action-btn {
+            background: rgba(255, 255, 255, 0.86);
+            color: var(--text-main);
+            border-color: var(--border-color);
+        }
+
+        body.theme-light .settings-action-btn.primary {
+            border-color: transparent;
+            background: var(--primary-glow);
+            color: #0b0f19;
+        }
+
+        body.theme-light .main-tab-btn {
+            background-color: #ffffff !important;
+            color: #475569 !important;
+            border-color: rgba(15, 23, 42, 0.14) !important;
+        }
+
+        body.theme-light .main-tab-btn:hover {
+            background-color: #eaf3fb !important;
+            color: #0f172a !important;
+        }
+
+        #example1-tab {
+            --ex1-page-bg: #0b0f19;
+            --ex1-panel-bg: rgba(15, 23, 42, 0.82);
+            --ex1-card-bg: rgba(30, 41, 59, 0.6);
+            --ex1-card-strong-bg: rgba(30, 41, 59, 0.62);
+            --ex1-header-bg: rgba(2, 6, 23, 0.22);
+            --ex1-border: rgba(56, 189, 248, 0.28);
+            --ex1-soft-border: rgba(148, 163, 184, 0.18);
+            --ex1-table-border: #334155;
+            --ex1-table-label-bg: rgba(30, 41, 59, 0.62);
+            --ex1-kpi-bg: linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(30, 41, 59, 0.56));
+            --ex1-kpi-icon-bg: rgba(8, 47, 73, 0.34);
+            --ex1-accent: var(--accent-color);
+            --ex1-accent-soft: var(--accent-soft);
+            --ex1-accent-border: var(--accent-border);
+            --ex1-text: #f8fafc;
+            --ex1-soft-text: #e2e8f0;
+            --ex1-muted: #94a3b8;
+            --ex1-subtle: #64748b;
+            --ex1-viewer-bg: #f8fafc;
+        }
+
+        body.theme-light #example1-tab,
+        body.custom-background-light #example1-tab {
+            --ex1-page-bg: var(--app-bg-color);
+            --ex1-panel-bg: #ffffff;
+            --ex1-card-bg: #f1f5f9;
+            --ex1-card-strong-bg: #eef4f9;
+            --ex1-header-bg: #f8fafc;
+            --ex1-border: rgba(15, 23, 42, 0.16);
+            --ex1-soft-border: rgba(15, 23, 42, 0.12);
+            --ex1-table-border: rgba(15, 23, 42, 0.16);
+            --ex1-table-label-bg: #e2e8f0;
+            --ex1-kpi-bg: linear-gradient(135deg, #eef8ff, #f8fafc);
+            --ex1-kpi-icon-bg: rgba(2, 132, 199, 0.08);
+            --ex1-accent: var(--accent-color);
+            --ex1-accent-soft: var(--accent-soft);
+            --ex1-accent-border: var(--accent-border);
+            --ex1-text: #0f172a;
+            --ex1-soft-text: #1e293b;
+            --ex1-muted: #334155;
+            --ex1-subtle: #475569;
+            --ex1-viewer-bg: #ffffff;
         }
 
         select {
@@ -740,6 +1131,11 @@
         .profile-name i {
             color: #00f2fe;
         }
+        body.theme-light .profile-name {
+            color: var(--text-main);
+            background: rgba(15, 23, 42, 0.05);
+            border-color: rgba(15, 23, 42, 0.14);
+        }
         .logout-btn {
             background: transparent;
             color: #9ca3af;
@@ -759,6 +1155,10 @@
             color: #ef4444;
             border-color: #ef4444;
             background: rgba(239, 68, 68, 0.1);
+        }
+        body.theme-light .logout-btn {
+            color: #64748b;
+            border-color: rgba(15, 23, 42, 0.14);
         }
 
         /* Model Comparison UI Styles */
@@ -927,13 +1327,10 @@
 
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
-                <button id="main-tab-example1-btn" class="tab-btn main-tab-btn" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
+                <button id="main-tab-example1-btn" class="tab-btn main-tab-btn active" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
                 <button id="main-tab-example2-btn" class="tab-btn main-tab-btn" onclick="switchTab('example2')"><i class="fas fa-cubes"></i> BIM</button>
                 <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
                 <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
-                <button id="main-tab-dashboard-btn" class="tab-btn main-tab-btn active" onclick="switchTab('dashboard')">
-                    <i class="fas fa-chart-line"></i> 대시보드
-                </button>
                 <button id="main-tab-project-btn" class="tab-btn main-tab-btn" onclick="switchTab('project')">
                     <i class="fas fa-cube"></i> 프로젝트
                 </button>
@@ -946,10 +1343,9 @@
             </div>
             
             <!-- Local OSS Dropdown & Upload -->
-            <select name="models" id="models">
+            <select name="models" id="models" hidden aria-hidden="true">
                 <option value="">모델 리스트 로딩 중...</option>
             </select>
-            <button class="upload-button" id="upload" title="새로운 BIM 모델 파일 업로드">업로드</button>
             <input style="display: none" type="file" id="input" accept=".rvt,.f3d,.nwd,.dwg,.zip">
 
             <!-- Back to Explorer Button for Autodesk Docs -->
@@ -961,202 +1357,78 @@
             <div id="login-profile-section">
                 <a href="/api/auth/login?force=1" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>
             </div>
+
+            <div class="theme-settings" id="theme-settings">
+                <button class="theme-settings-toggle" id="theme-settings-toggle" type="button" aria-label="화면 테마 설정" aria-expanded="false" title="화면 테마 설정">
+                    <i class="fas fa-gear" aria-hidden="true"></i>
+                </button>
+            </div>
         </div>
     </header>
 
-    <div class="dashboard-body">
-        <!-- 1. Dashboard Tab Content -->
-        <div id="tab-content-dashboard" style="display: block; position: relative; z-index: 10; flex: 1; overflow: hidden; height: calc(100vh - 70px);">
-
-          <div id="dashboard-root">
-
-            <!-- ══ 상단: 일정 및 업무 진행 현황 ══ -->
-            <div>
-              <div class="db-section-title">일정 및 업무 진행 현황</div>
-            </div>
-
-            <div class="db-top-section">
-
-              <!-- 간트 차트 카드 -->
-              <div class="db-card gantt-panel">
-                <div class="db-card-header">
-                  <span class="db-card-title"><i class="fas fa-tasks"></i> 업무 일정 (Gantt)</span>
-                  <button class="db-btn db-btn-primary" id="btn-add-schedule">
-                    <i class="fas fa-plus"></i> 일정 추가
-                  </button>
-                </div>
-                <div class="gantt-body">
-                  <!-- 좌측 테이블 -->
-                  <div class="gantt-table-wrap">
-                    <table class="gantt-table">
-                      <thead>
-                        <tr>
-                          <th style="min-width:110px">업무명</th>
-                          <th>시작일</th>
-                          <th>계획일</th>
-                          <th>종료일</th>
-                          <th style="min-width:90px">진행률</th>
-                          <th>담당자</th>
-                        </tr>
-                      </thead>
-                      <tbody id="gantt-table-body">
-                        <tr><td colspan="6" class="gantt-empty">로딩 중...</td></tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <!-- 우측 타임라인 -->
-                  <div class="gantt-timeline-wrap">
-                    <div class="gantt-timeline">
-                      <div class="gantt-header-row" id="gantt-header-days"></div>
-                      <div id="gantt-timeline-body" style="position:relative;"></div>
-                    </div>
-                  </div>
-                </div>
-                <!-- 타임라인 스크롤 슬라이더 -->
-                <div class="gantt-slider-wrap">
-                  <span class="gantt-slider-label"><i class="fas fa-sliders-h"></i> 타임라인 이동</span>
-                  <input type="range" id="gantt-scroll-slider" min="0" max="0" value="0">
-                </div>
-              </div>
-
-              <!-- KPI 2×2 -->
-              <div class="db-kpi-grid">
-                <!-- ① 금주 발생 이슈 -->
-                <div class="db-kpi-card">
-                  <div class="db-kpi-label">금주 발생 이슈</div>
-                  <div class="db-kpi-value accent" id="kpi-week-issues">00건</div>
-                  <div class="db-kpi-sub"><i class="fas fa-arrow-up" style="color:#ef4444"></i> 이번 주 신규</div>
-                </div>
-                <!-- ② 금주 이슈 해결률 -->
-                <div class="db-kpi-card">
-                  <div class="db-kpi-label">금주 이슈 해결률</div>
-                  <div class="db-kpi-value success" id="kpi-week-resolve">00%</div>
-                  <div class="db-kpi-sub"><i class="fas fa-check-circle" style="color:#10b981"></i> 해결/발생</div>
-                </div>
-                <!-- ③ 금주 투입 인원 -->
-                <div class="db-kpi-card">
-                  <div class="db-kpi-label" style="display:flex;justify-content:space-between;align-items:center">
-                    금주 투입 인원
-                    <button class="db-kpi-edit-btn" onclick="window.dashboardEditCrew()">수정</button>
-                  </div>
-                  <div class="db-kpi-value warning" id="kpi-crew">00명</div>
-                  <div class="db-kpi-sub"><i class="fas fa-users" style="color:#f59e0b"></i> 활성 인원</div>
-                </div>
-                <!-- ④ 진행중 업무 -->
-                <div class="db-kpi-card">
-                  <div class="db-kpi-label">진행중 업무</div>
-                  <div class="db-kpi-value purple" id="kpi-inprogress">00건</div>
-                  <div class="db-kpi-sub"><i class="fas fa-spinner" style="color:#8b5cf6"></i> 미완료 일정</div>
-                </div>
-              </div>
-
-            </div><!-- /db-top-section -->
-
-            <!-- ══ 하단: 프로젝트 이슈 현황 ══ -->
-            <div>
-              <div class="db-section-title">프로젝트 이슈 현황</div>
-            </div>
-
-            <div class="db-bottom-section">
-
-              <!-- 좌측: 도넛 차트 -->
-              <div class="db-card" style="display:flex;flex-direction:column;">
-                <div class="db-card-header">
-                  <span class="db-card-title"><i class="fas fa-chart-pie"></i> <span id="main-chart-title">이슈 유형</span></span>
-                </div>
-                <div class="donut-panel-body">
-                  <!-- 메인 차트 행 -->
-                  <div class="donut-main-row">
-                    <div class="donut-canvas-wrap">
-                      <canvas id="donut-chart" width="165" height="165"></canvas>
-                      <div class="donut-center-text">
-                        <div class="donut-center-num" id="donut-total">00건</div>
-                        <div class="donut-center-label">전체</div>
-                      </div>
-                    </div>
-                    <div class="donut-legend-cards" id="donut-main-legends">
-                      <!-- 동적으로 데이터가 주입됩니다. -->
-                    </div>
-                  </div>
-
-                  <!-- 구분선 -->
-                  <div class="donut-divider"></div>
-
-                  <!-- 하단 서브 차트 3개 행 -->
-                  <div class="donut-sub-row">
-                    <div class="donut-sub-item" id="sub-item-1" data-metric="">
-                      <div class="donut-sub-title" id="sub-title-1">상태별</div>
-                      <div class="sub-canvas-wrap">
-                        <canvas id="sub-chart-1" width="80" height="80"></canvas>
-                        <div class="sub-center-text" id="sub-total-1">0건</div>
-                      </div>
-                    </div>
-                    <div class="donut-sub-item" id="sub-item-2" data-metric="">
-                      <div class="donut-sub-title" id="sub-title-2">구조물별</div>
-                      <div class="sub-canvas-wrap">
-                        <canvas id="sub-chart-2" width="80" height="80"></canvas>
-                        <div class="sub-center-text" id="sub-total-2">0건</div>
-                      </div>
-                    </div>
-                    <div class="donut-sub-item" id="sub-item-3" data-metric="">
-                      <div class="donut-sub-title" id="sub-title-3">공종별</div>
-                      <div class="sub-canvas-wrap">
-                        <canvas id="sub-chart-3" width="80" height="80"></canvas>
-                        <div class="sub-center-text" id="sub-total-3">0건</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 중앙: 막대 차트 -->
-              <div class="db-card" style="display:flex;flex-direction:column;">
-                <div class="db-card-header" style="display:flex; justify-content:space-between; align-items:center;">
-                  <span class="db-card-title"><i class="fas fa-chart-bar"></i> <span id="bar-chart-title">주차별 이슈 발생 현황</span></span>
-                  <select id="bar-metric-selector" style="background:#0f172a; border:1px solid #334155; color:white; padding:4px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer; outline:none;">
-                    <option value="weekly_status">주차별 이슈 발생 현황</option>
-                    <option value="assignee_status">이슈 담당자 현황</option>
-                    <option value="structure_status">구조물별 이슈 현황</option>
-                    <option value="by_status">상태별 이슈 현황</option>
-                  </select>
-                </div>
-                <div class="bar-panel-body" style="flex:1;min-height:0;">
-                  <canvas id="bar-chart"></canvas>
-                </div>
-              </div>
-
-              <!-- 우측: 이슈 목록 -->
-              <div class="db-card" style="display:flex;flex-direction:column;">
-                <div class="db-card-header">
-                  <span class="db-card-title"><i class="fas fa-list"></i> 진행 중 이슈 목록</span>
-                  <span id="db-issue-count" style="font-size:0.75rem;color:#64748b;"></span>
-                </div>
-                <div class="issue-list-panel-body">
-                  <table class="db-issue-table">
-                    <thead>
-                      <tr>
-                        <th>제목</th>
-                        <th>유형</th>
-                        <th>구분</th>
-                        <th>구조물</th>
-                        <th>담당자</th>
-                      </tr>
-                    </thead>
-                    <tbody id="db-issue-table-body">
-                      <tr class="no-data"><td colspan="5">로딩 중...</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-            </div><!-- /db-bottom-section -->
-
-          </div><!-- /dashboard-root -->
+    <div class="theme-settings-backdrop" id="theme-settings-backdrop"></div>
+    <div class="theme-settings-panel" id="theme-settings-panel" role="dialog" aria-modal="true" aria-labelledby="theme-settings-title">
+        <div class="settings-panel-head">
+            <h2 class="settings-panel-title" id="theme-settings-title">화면 설정</h2>
+            <button class="settings-close" id="theme-settings-close" type="button" aria-label="설정 닫기">
+                <i class="fas fa-xmark" aria-hidden="true"></i>
+            </button>
         </div>
 
+        <div class="settings-field">
+            <div class="settings-field-title">테마</div>
+            <div class="theme-option-group" role="radiogroup" aria-label="화면 테마 선택">
+                <button class="theme-option" type="button" data-theme-option="dark" role="radio" aria-checked="true">
+                    <i class="fas fa-moon" aria-hidden="true"></i>
+                    <span>다크 모드</span>
+                </button>
+                <button class="theme-option" type="button" data-theme-option="light" role="radio" aria-checked="false">
+                    <i class="fas fa-sun" aria-hidden="true"></i>
+                    <span>라이트 모드</span>
+                </button>
+            </div>
+        </div>
 
+        <div class="settings-field">
+            <label for="background-color-picker">배경색 설정</label>
+            <div class="background-color-row">
+                <input id="background-color-picker" type="color" value="#0b0f19">
+                <input id="background-color-text" class="settings-text-input" type="text" value="#0b0f19" maxlength="7" spellcheck="false" aria-label="배경색 HEX 값">
+            </div>
+        </div>
+
+        <div class="settings-field">
+            <label for="accent-color-picker">강조색 설정</label>
+            <div class="background-color-row">
+                <input id="accent-color-picker" type="color" value="#00f2fe">
+                <input id="accent-color-text" class="settings-text-input" type="text" value="#00f2fe" maxlength="7" spellcheck="false" aria-label="강조색 HEX 값">
+            </div>
+        </div>
+
+        <div class="settings-field">
+            <label for="project-name-input">프로젝트 이름 설정</label>
+            <input id="project-name-input" class="settings-text-input" type="text" value="강북정수장 APS AI 플랫폼" maxlength="40">
+        </div>
+
+        <div class="settings-actions">
+            <button class="settings-action-btn" id="settings-reset" type="button">
+                <i class="fas fa-rotate-left" aria-hidden="true"></i>
+                <span>초기화</span>
+            </button>
+            <button class="settings-action-btn primary" id="settings-done" type="button">
+                <i class="fas fa-check" aria-hidden="true"></i>
+                <span>완료</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="dashboard-body">
             <!-- 예시1 탭 (3분할 레이아웃) -->
-            <div id="example1-tab" class="example1-tab" style="display:none; width: 100%; min-height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow-y: auto;">
+            <div id="example1-tab" class="example1-tab" style="display:block; width: 100%; min-height: calc(100vh - 75px); padding: 16px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
+                <div style="height:calc(100vh - 105px); display:flex; align-items:center; justify-content:center; color:#94a3b8; font-weight:900;">
+                    예시1 화면을 불러오는 중입니다.
+                </div>
+                <div hidden aria-hidden="true">
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; width: 100%; min-height: 100%;">
                     
                     <!-- Column 1: 상단(실시간 공정 D-Day 패널) & 하단(공사 개요 패널) -->
@@ -1426,6 +1698,7 @@
                     </div>
 
                 </div>
+                </div>
             </div>
 
             <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 10px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
@@ -1434,48 +1707,34 @@
                         <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
                             <i class="fas fa-calendar-check" style="color: #38bdf8; margin-right: 8px;"></i> 업무 일정
                         </div>
-                        <div id="example2-work-schedule" style="flex: 1; min-height: 0;"></div>
+                        <div id="example2-work-schedule" style="flex: 1; min-height: 0;">
+                            <div style="height:100%; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-weight:800;">업무 일정을 불러오는 중입니다.</div>
+                        </div>
                     </section>
                     <section id="example2-right-area" style="min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(300px, 0.92fr) minmax(340px, 1.08fr); gap: 12px; overflow: hidden;">
-                        <div id="example2-model-updates" style="min-height: 0;"></div>
-                        <div id="example2-project-search" style="min-height: 0;"></div>
+                        <div id="example2-model-updates" style="width:100%; height:100%; min-height: 0; overflow:hidden;">
+                            <div style="height:100%; display:flex; align-items:center; justify-content:center; border:1px solid rgba(56,189,248,0.25); border-radius:8px; background:rgba(15,23,42,0.82); color:#94a3b8; font-weight:800; box-sizing:border-box;">
+                                BIM 모델 정보를 불러오는 중입니다.
+                            </div>
+                        </div>
+                        <div id="example2-project-search" style="width:100%; height:100%; min-height: 0; overflow:hidden;">
+                            <div style="height:100%; display:flex; align-items:center; justify-content:center; border:1px solid rgba(56,189,248,0.25); border-radius:8px; background:rgba(15,23,42,0.82); color:#94a3b8; font-weight:800; box-sizing:border-box;">
+                                프로젝트 검색 대상을 준비하는 중입니다.
+                            </div>
+                        </div>
                     </section>
                 </div>
             </div>
 
             <div id="monthly-issue-status-tab" class="monthly-issue-status-tab" style="display:none;">
                 <section class="bim-db-panel monthly-issue-panel">
-                    <div class="bim-db-panel-head monthly-issue-head">
-                        <div>
-                            <div class="bim-db-panel-title"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</div>
-                            <div class="monthly-issue-subtitle">구조물별 월간 이슈 진행을 전체 구조물 기준으로 확인합니다.</div>
-                        </div>
-                        <div class="bim-db-panel-actions">
-                            <input id="monthly-issue-month" class="bim-filter-input" type="month" title="기준 월">
-                            <select id="monthly-issue-status-filter" class="bim-week-select" title="상태 필터">
-                                <option value="all">전체 상태</option>
-                                <option value="created">생성</option>
-                                <option value="review">진행/검토</option>
-                                <option value="delayed">지연</option>
-                                <option value="closed">완료</option>
-                            </select>
-                            <input id="monthly-issue-search" class="bim-filter-input" type="search" placeholder="구조물 검색">
-                            <div class="monthly-issue-view-toggle">
-                                <button type="button" id="monthly-issue-subtab-status" class="active" onclick="switchMonthlyIssueSubTab('status')" title="상태별 보기">
-                                    <i class="fas fa-tasks"></i>
-                                </button>
-                                <button type="button" id="monthly-issue-subtab-type" onclick="switchMonthlyIssueSubTab('type')" title="유형별 보기">
-                                    <i class="fas fa-tags"></i>
-                                </button>
-                            </div>
-                            <button id="monthly-issue-pdf-export" class="bim-db-refresh" type="button" title="월간 이슈 PDF 내보내기" onclick="exportMonthlyIssueReport()" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.38); color: #fca5a5; margin-left: 2px;">
-                                <i class="fas fa-file-pdf"></i>
-                            </button>
-                            <button id="monthly-issue-refresh" class="bim-db-refresh" type="button" title="새로고침">
-                                <i class="fas fa-sync-alt"></i>
-                            </button>
-                        </div>
-                    </div>
+                    <input id="monthly-issue-month" class="bim-filter-input" type="month" title="기준 월" hidden>
+                    <select id="monthly-issue-status-filter" class="bim-week-select" title="상태 필터" hidden>
+                        <option value="all">전체 상태</option>
+                        <option value="created">생성</option>
+                        <option value="review">진행/검토</option>
+                        <option value="closed">완료</option>
+                    </select>
                     <div id="monthly-issue-status-root" class="monthly-issue-status-root">
                         <div class="bim-db-placeholder">월간 이슈 데이터를 불러오는 중입니다.</div>
                     </div>
@@ -1518,7 +1777,7 @@
                         <small id="bim-inspector-structure-meta">Autodesk Docs 모델 트리 기준</small>
                     </div>
                     <div class="bim-inspector-tags">
-                        <span>폴더 내 공종 파일</span>
+                        <span>선택 폴더 공종 요약</span>
                         <div id="bim-inspector-trade-tags" class="bim-inspector-trade-tags"></div>
                     </div>
                     <button id="bim-inspector-open-model" type="button" class="bim-inspector-primary"><i class="fas fa-cube"></i> 3D 모델 보기</button>
@@ -1529,7 +1788,7 @@
                         <button type="button" data-inspector-tool="properties" title="선택한 부재의 속성 패널을 엽니다."><i class="fas fa-circle-info"></i> 부재 정보</button>
                     </div>
                     <div id="bim-inspector-structure-list" class="bim-inspector-list">
-                        <div class="bim-inspector-file-empty">공종 파일을 불러오는 중입니다.</div>
+                        <div class="bim-inspector-file-empty">폴더 구조를 불러오는 중입니다.</div>
                     </div>
                 </aside>
 
@@ -1560,9 +1819,6 @@
                             <div class="bim-progress-viewer-head">
                                 <span id="bim-progress-viewer-title">3D Viewer</span>
                                 <div class="bim-progress-viewer-tools">
-                                    <button id="bim-progress-viewer-merge" class="bim-icon-btn" type="button" title="현재 영역 모델 병합 보기">
-                                        <i class="fas fa-layer-group"></i>
-                                    </button>
                                     <button id="bim-progress-viewer-save-view" class="bim-icon-btn" type="button" title="현재 뷰 시점 저장">
                                         <i class="fas fa-camera"></i>
                                     </button>
@@ -2239,20 +2495,60 @@
             </div>
         </div>
     <!-- Autodesk Viewer Scripts -->
-    <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.js"></script>
+    <script src="/api/viewer-sdk/7.108.0/viewer3D.min.js"></script>
     <script type="module">
-        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260819-monthly-fill1';
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260827-monthly-map20';
         document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
     </script>
     <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
     <!-- Main Entry Point Module -->
-    <script src="./js/main.js?v=20260813-issue-summary-fallback1" type="module"></script>
+    <script src="./js/main.js?v=20260825-viewer-visible-guard1" type="module"></script>
 
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
         // 🚨 [오프스크린 탭 전환 엔진] 뷰어의 기절을 막는 무중단 탭 스위치 로직
+        window.preloadExample2Schedule = function() {
+            if (window._example2ScheduleModulePromise) {
+                return window._example2ScheduleModulePromise;
+            }
+            window._example2ScheduleModulePromise = import('./js/example2-schedule.js?v=20260813-work-schedule-location-field1')
+                .then(function(mod) {
+                    window._example2ScheduleModule = mod;
+                    return mod;
+                })
+                .catch(function(err) {
+                    window._example2ScheduleModulePromise = null;
+                    console.error('[Example2 Schedule] preload 실패:', err);
+                    throw err;
+                });
+            return window._example2ScheduleModulePromise;
+        };
+
+        window.ensureExample2Schedule = function() {
+            if (window._example2ScheduleInited) {
+                if (typeof window.initExample2Schedule === 'function') {
+                    window.initExample2Schedule();
+                }
+                return Promise.resolve(window._example2ScheduleModule || null);
+            }
+            window._example2ScheduleInited = true;
+            return window.preloadExample2Schedule()
+                .then(function(mod) {
+                    if (mod && typeof mod.initExample2Schedule === 'function') {
+                        mod.initExample2Schedule();
+                    } else if (typeof window.initExample2Schedule === 'function') {
+                        window.initExample2Schedule();
+                    }
+                    return mod;
+                })
+                .catch(function(err) {
+                    window._example2ScheduleInited = false;
+                    console.error('[Example2 Schedule] init 실패:', err);
+                });
+        };
+
         window.switchTab = function(tabName) {
-            tabName = tabName || 'dashboard';
+            tabName = tabName || 'example1';
             var previousMainTab = window.currentMainTab || null;
             window.currentMainTab = tabName;
             if (previousMainTab && previousMainTab !== tabName && window._initialMainTabApplied) {
@@ -2265,7 +2561,6 @@
             var activeBtn = document.getElementById('main-tab-' + tabName + '-btn') || document.querySelector('.tab-btn[onclick="switchTab(\'' + tabName + '\')"]');
             if (activeBtn) activeBtn.classList.add('active');
 
-            var dashboard = document.getElementById('tab-content-dashboard');
             var project = document.getElementById('tab-content-project');
             var issue = document.getElementById('tab-content-issue');
             var cctv = document.getElementById('tab-content-cctv');
@@ -2275,7 +2570,7 @@
             var example2 = document.getElementById('example2-tab');
 
             // 🚨 [핵심 방어막] 탭 전환 시 기존의 모든 비-프로젝트 탭들을 우선 일괄 display: none 처리하여 화면 밀림/겹침 완벽 차단
-            var allNonProjectTabs = [dashboard, issue, cctv, construction, monthlyIssues, example1, example2];
+            var allNonProjectTabs = [issue, cctv, construction, monthlyIssues, example1, example2];
             allNonProjectTabs.forEach(function(tabEl) {
                 if (tabEl) tabEl.style.display = 'none';
             });
@@ -2284,36 +2579,18 @@
                 example1.style.display = 'block';
                 example1.style.position = 'relative';
                 example1.style.zIndex = '10';
-                if (!window._example1CctvInited) {
-                    window._example1CctvInited = true;
-                    import('./js/example1-cctv.js')
-                        .then(mod => { if (typeof mod.initExample1Cctv === 'function') mod.initExample1Cctv(); })
-                        .catch(err => console.error('[Example1 CCTV] init 실패:', err));
-                } else if (typeof window.initExample1Cctv === 'function') {
-                    window.initExample1Cctv();
-                }
-                // 3D 뷰어 초기화 (최초 1회)
-                if (!window._weekly3DInited && typeof window.initWeekly3DViewer === 'function') {
-                    window._weekly3DInited = true;
-                    Promise.resolve(window.initWeekly3DViewer('weekly-3d-viewer'))
-                        .then(function(ok) {
-                            if (ok === false) window._weekly3DInited = false;
+                if (!window._example1DashboardInited) {
+                    window._example1DashboardInited = true;
+                    import('./js/example1-dashboard.js?v=20260825-example1-light1')
+                        .then(mod => {
+                            if (typeof mod.initExample1Dashboard === 'function') mod.initExample1Dashboard();
                         })
-                        .catch(function(err) {
-                            console.error('[Weekly3DViewer] init 실패:', err);
-                            window._weekly3DInited = false;
+                        .catch(err => {
+                            console.error('[Example1 Dashboard] init 실패:', err);
+                            window._example1DashboardInited = false;
                         });
-                    // 힌트 자동 페이드아웃
-                    setTimeout(() => {
-                        const hint = document.getElementById('viewer-hint');
-                        if (hint) hint.style.opacity = '0';
-                    }, 3000);
-                } else if (window._weekly3DInited) {
-                    var weeklyViewerContainer = document.getElementById('weekly-3d-viewer');
-                    var weeklyViewer = weeklyViewerContainer && weeklyViewerContainer._weeklyViewerInstance;
-                    if (weeklyViewer && typeof weeklyViewer.resize === 'function') {
-                        setTimeout(function() { weeklyViewer.resize(); }, 100);
-                    }
+                } else if (typeof window.initExample1Dashboard === 'function') {
+                    window.initExample1Dashboard();
                 }
             }
 
@@ -2321,29 +2598,7 @@
                 example2.style.display = 'block';
                 example2.style.position = 'relative';
                 example2.style.zIndex = '10';
-                if (!window._example2ScheduleInited) {
-                    window._example2ScheduleInited = true;
-                    import('./js/example2-schedule.js?v=20260813-work-schedule-location-field1')
-                        .then(mod => { if (typeof mod.initExample2Schedule === 'function') mod.initExample2Schedule(); })
-                        .catch(err => console.error('[Example2 Schedule] init 실패:', err));
-                } else if (typeof window.initExample2Schedule === 'function') {
-                    window.initExample2Schedule();
-                }
-            }
-
-            if (dashboard && tabName === 'dashboard') {
-                dashboard.style.display = 'block';
-                dashboard.style.position = 'relative';
-                dashboard.style.zIndex = '10';
-                // 대시보드 탭 최초 전환 시 dashboard.js lazy import
-                if (!window._dashboardInited) {
-                    window._dashboardInited = true;
-                    import('./js/dashboard.js?v=20260805-visible-issues1')
-                        .then(mod => { if (typeof mod.initDashboard === 'function') mod.initDashboard(); })
-                        .catch(err => console.error('[Dashboard] init 실패:', err));
-                } else if (window.refreshDashboard) {
-                    window.refreshDashboard();
-                }
+                window.ensureExample2Schedule();
             }
 
             if (construction && tabName === 'construction') {
@@ -2377,7 +2632,7 @@
                 cctv.style.zIndex = '10';
                 if (!window._cctvInited) {
                     window._cctvInited = true;
-                    import('./js/cctv.js?v=20260812-cctv-model-sync5')
+                    import('./js/cctv.js?v=20260825-viewer-fixed-sdk1')
                         .then(mod => { if (typeof mod.initCctvTab === 'function') mod.initCctvTab(); })
                         .catch(err => console.error('[CCTV] init 실패:', err));
                 }
@@ -2424,11 +2679,14 @@
             }
         };
 
-        // URL 파라미터 감지하여 초기 탭 활성화 연동 (새로고침 시 기본 탭: 대시보드 'dashboard')
+        // URL 파라미터 감지하여 초기 탭 활성화 연동
         window.addEventListener('DOMContentLoaded', function() {
             var params = new URLSearchParams(window.location.search);
-            var tabParam = params.get('tab') || 'dashboard';
-            if (tabParam && ['dashboard', 'example1', 'example2', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
+            var tabParam = params.get('tab') || 'example1';
+            if (tabParam !== 'example2' && typeof window.preloadExample2Schedule === 'function') {
+                window.preloadExample2Schedule().catch(function() {});
+            }
+            if (tabParam && ['example1', 'example2', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
                 if (typeof window.switchTab === 'function') {
                     window._initialMainTabApplied = false;
                     window.switchTab(tabParam);
@@ -2533,10 +2791,10 @@
 
         // 메인 탭 전환 오버라이딩 제거 (통합 엔진에서 이미 완벽히 처리됨)
         
-        // 로딩 직후 강제 세팅 및 대시보드 탭 유지 보장
+        // 로딩 직후 강제 세팅 및 기본 탭 유지 보장
         window.addEventListener('load', function() {
             var params = new URLSearchParams(window.location.search);
-            var targetTab = params.get('tab') || 'dashboard';
+            var targetTab = params.get('tab') || 'example1';
             var currentTab = window.currentMainTab || targetTab;
             if (typeof window.switchTab === 'function' && !window.userHasSwitchedTab && currentTab === targetTab) {
                 window._initialMainTabApplied = false;
@@ -2659,6 +2917,405 @@
     </script>
 
     <script>
+        // Screen settings: theme, background color, and project title.
+        (function () {
+            const THEME_KEY = 'aps_theme';
+            const BG_KEY = 'aps_background_color';
+            const ACCENT_KEY = 'aps_accent_color';
+            const PROJECT_NAME_KEY = 'aps_project_name';
+            const DEFAULT_PROJECT_NAME = '강북정수장 APS AI 플랫폼';
+            const DEFAULT_BG = {
+                dark: '#0b0f19',
+                light: '#f6f8fb'
+            };
+            const DEFAULT_ACCENT = {
+                dark: '#00f2fe',
+                light: '#0284c7'
+            };
+
+            function getSavedTheme() {
+                try {
+                    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+                } catch (err) {
+                    return 'dark';
+                }
+            }
+
+            function saveTheme(theme) {
+                try {
+                    localStorage.setItem(THEME_KEY, theme);
+                } catch (err) {}
+            }
+
+            function getSavedBackgroundColor() {
+                try {
+                    const color = localStorage.getItem(BG_KEY);
+                    return isHexColor(color) ? color : '';
+                } catch (err) {
+                    return '';
+                }
+            }
+
+            function saveBackgroundColor(color) {
+                try {
+                    if (isHexColor(color)) {
+                        localStorage.setItem(BG_KEY, color);
+                    }
+                } catch (err) {}
+            }
+
+            function clearBackgroundColor() {
+                try {
+                    localStorage.removeItem(BG_KEY);
+                } catch (err) {}
+            }
+
+            function getSavedAccentColor() {
+                try {
+                    const color = localStorage.getItem(ACCENT_KEY);
+                    return isHexColor(color) ? color : '';
+                } catch (err) {
+                    return '';
+                }
+            }
+
+            function saveAccentColor(color) {
+                try {
+                    if (isHexColor(color)) {
+                        localStorage.setItem(ACCENT_KEY, color);
+                    }
+                } catch (err) {}
+            }
+
+            function clearAccentColor() {
+                try {
+                    localStorage.removeItem(ACCENT_KEY);
+                } catch (err) {}
+            }
+
+            function getSavedProjectName() {
+                try {
+                    const name = (localStorage.getItem(PROJECT_NAME_KEY) || '').trim();
+                    return name || DEFAULT_PROJECT_NAME;
+                } catch (err) {
+                    return DEFAULT_PROJECT_NAME;
+                }
+            }
+
+            function saveProjectName(name) {
+                try {
+                    localStorage.setItem(PROJECT_NAME_KEY, name);
+                } catch (err) {}
+            }
+
+            function clearProjectName() {
+                try {
+                    localStorage.removeItem(PROJECT_NAME_KEY);
+                } catch (err) {}
+            }
+
+            function isHexColor(value) {
+                return /^#[0-9a-fA-F]{6}$/.test(String(value || '').trim());
+            }
+
+            function isLightHexColor(value) {
+                if (!isHexColor(value)) return false;
+                const hex = value.slice(1);
+                const r = parseInt(hex.slice(0, 2), 16);
+                const g = parseInt(hex.slice(2, 4), 16);
+                const b = parseInt(hex.slice(4, 6), 16);
+                return ((r * 299) + (g * 587) + (b * 114)) / 1000 >= 160;
+            }
+
+            function hexToRgb(value) {
+                if (!isHexColor(value)) return null;
+                const hex = value.slice(1);
+                return {
+                    r: parseInt(hex.slice(0, 2), 16),
+                    g: parseInt(hex.slice(2, 4), 16),
+                    b: parseInt(hex.slice(4, 6), 16)
+                };
+            }
+
+            function rgbaFromHex(value, alpha) {
+                const rgb = hexToRgb(value);
+                if (!rgb) return '';
+                return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+            }
+
+            function applyTheme(theme) {
+                const isLight = theme === 'light';
+                document.documentElement.classList.toggle('theme-light-pending', isLight);
+                document.body.classList.toggle('theme-light', isLight);
+                document.querySelectorAll('[data-theme-option]').forEach(option => {
+                    const active = option.dataset.themeOption === theme;
+                    option.classList.toggle('active', active);
+                    option.setAttribute('aria-checked', String(active));
+                });
+            }
+
+            function applyBackgroundColor(color) {
+                const hasCustomColor = isHexColor(color);
+                document.body.classList.toggle('custom-background', hasCustomColor);
+                document.body.classList.toggle('custom-background-light', hasCustomColor && isLightHexColor(color));
+                if (hasCustomColor) {
+                    document.body.style.setProperty('--app-custom-bg-color', color);
+                } else {
+                    document.body.style.removeProperty('--app-custom-bg-color');
+                }
+            }
+
+            function applyAccentColor(color, theme) {
+                const accent = isHexColor(color) ? color : DEFAULT_ACCENT[theme || 'dark'];
+                const soft = rgbaFromHex(accent, theme === 'light' ? 0.10 : 0.12);
+                const border = rgbaFromHex(accent, theme === 'light' ? 0.30 : 0.38);
+                const root = document.documentElement;
+                const body = document.body;
+                [root, body].forEach(target => {
+                    if (!target) return;
+                    target.style.setProperty('--accent-color', accent);
+                    target.style.setProperty('--primary-glow', `linear-gradient(135deg, ${accent} 0%, ${accent} 100%)`);
+                    target.style.setProperty('--accent-soft', soft);
+                    target.style.setProperty('--accent-border', border);
+                    target.style.setProperty('--ex1-accent', accent);
+                    target.style.setProperty('--ex1-accent-soft', soft);
+                    target.style.setProperty('--ex1-accent-border', border);
+                });
+            }
+
+            function syncBackgroundInputs(color, theme) {
+                const picker = document.getElementById('background-color-picker');
+                const text = document.getElementById('background-color-text');
+                const value = isHexColor(color) ? color : DEFAULT_BG[theme || 'dark'];
+                if (picker) picker.value = value;
+                if (text) text.value = value;
+            }
+
+            function syncAccentInputs(color, theme) {
+                const picker = document.getElementById('accent-color-picker');
+                const text = document.getElementById('accent-color-text');
+                const value = isHexColor(color) ? color : DEFAULT_ACCENT[theme || 'dark'];
+                if (picker) picker.value = value;
+                if (text) text.value = value;
+            }
+
+            function applyProjectName(name) {
+                const title = document.querySelector('.logo-title');
+                const nextName = String(name || '').trim() || DEFAULT_PROJECT_NAME;
+                if (title) title.textContent = nextName;
+            }
+
+            function closePanel(settings, toggle, panel, backdrop) {
+                settings.classList.remove('open');
+                if (panel) panel.classList.remove('open');
+                if (backdrop) backdrop.classList.remove('open');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+
+            document.addEventListener('DOMContentLoaded', function () {
+                const settings = document.getElementById('theme-settings');
+                const toggle = document.getElementById('theme-settings-toggle');
+                const panel = document.getElementById('theme-settings-panel');
+                const close = document.getElementById('theme-settings-close');
+                const backdrop = document.getElementById('theme-settings-backdrop');
+                const done = document.getElementById('settings-done');
+                const reset = document.getElementById('settings-reset');
+                const bgPicker = document.getElementById('background-color-picker');
+                const bgText = document.getElementById('background-color-text');
+                const accentPicker = document.getElementById('accent-color-picker');
+                const accentText = document.getElementById('accent-color-text');
+                const projectNameInput = document.getElementById('project-name-input');
+                if (!settings || !toggle) return;
+
+                let currentTheme = getSavedTheme();
+                let currentBackgroundColor = getSavedBackgroundColor();
+                let currentAccentColor = getSavedAccentColor();
+                let currentProjectName = getSavedProjectName();
+
+                applyTheme(currentTheme);
+                applyBackgroundColor(currentBackgroundColor);
+                applyAccentColor(currentAccentColor, currentTheme);
+                applyProjectName(currentProjectName);
+                syncBackgroundInputs(currentBackgroundColor, currentTheme);
+                syncAccentInputs(currentAccentColor, currentTheme);
+                if (projectNameInput) projectNameInput.value = currentProjectName;
+
+                toggle.addEventListener('click', function (event) {
+                    event.stopPropagation();
+                    const isOpen = settings.classList.toggle('open');
+                    if (panel) panel.classList.toggle('open', isOpen);
+                    if (backdrop) backdrop.classList.toggle('open', isOpen);
+                    toggle.setAttribute('aria-expanded', String(isOpen));
+                    if (isOpen && projectNameInput) {
+                        setTimeout(function () {
+                            projectNameInput.focus();
+                            projectNameInput.select();
+                        }, 0);
+                    }
+                });
+
+                document.querySelectorAll('[data-theme-option]').forEach(option => {
+                    option.addEventListener('click', function (event) {
+                        event.stopPropagation();
+                        const theme = option.dataset.themeOption === 'light' ? 'light' : 'dark';
+                        currentTheme = theme;
+                        applyTheme(theme);
+                        applyAccentColor(currentAccentColor, currentTheme);
+                        saveTheme(theme);
+                        syncBackgroundInputs(currentBackgroundColor, currentTheme);
+                        syncAccentInputs(currentAccentColor, currentTheme);
+                    });
+                });
+
+                if (bgPicker) {
+                    bgPicker.addEventListener('input', function () {
+                        currentBackgroundColor = bgPicker.value;
+                        applyBackgroundColor(currentBackgroundColor);
+                        saveBackgroundColor(currentBackgroundColor);
+                        syncBackgroundInputs(currentBackgroundColor, currentTheme);
+                    });
+                }
+
+                if (bgText) {
+                    bgText.addEventListener('input', function () {
+                        const color = bgText.value.trim();
+                        if (!isHexColor(color)) return;
+                        currentBackgroundColor = color;
+                        applyBackgroundColor(currentBackgroundColor);
+                        saveBackgroundColor(currentBackgroundColor);
+                        syncBackgroundInputs(currentBackgroundColor, currentTheme);
+                    });
+                }
+
+                if (accentPicker) {
+                    accentPicker.addEventListener('input', function () {
+                        currentAccentColor = accentPicker.value;
+                        applyAccentColor(currentAccentColor, currentTheme);
+                        saveAccentColor(currentAccentColor);
+                        syncAccentInputs(currentAccentColor, currentTheme);
+                    });
+                }
+
+                if (accentText) {
+                    accentText.addEventListener('input', function () {
+                        const color = accentText.value.trim();
+                        if (!isHexColor(color)) return;
+                        currentAccentColor = color;
+                        applyAccentColor(currentAccentColor, currentTheme);
+                        saveAccentColor(currentAccentColor);
+                        syncAccentInputs(currentAccentColor, currentTheme);
+                    });
+                }
+
+                if (projectNameInput) {
+                    projectNameInput.addEventListener('input', function () {
+                        currentProjectName = projectNameInput.value.trim() || DEFAULT_PROJECT_NAME;
+                        applyProjectName(currentProjectName);
+                        saveProjectName(currentProjectName);
+                    });
+                }
+
+                if (reset) {
+                    reset.addEventListener('click', function (event) {
+                        event.stopPropagation();
+                        currentTheme = 'dark';
+                        currentBackgroundColor = '';
+                        currentAccentColor = '';
+                        currentProjectName = DEFAULT_PROJECT_NAME;
+                        saveTheme(currentTheme);
+                        clearBackgroundColor();
+                        clearAccentColor();
+                        clearProjectName();
+                        applyTheme(currentTheme);
+                        applyBackgroundColor(currentBackgroundColor);
+                        applyAccentColor(currentAccentColor, currentTheme);
+                        applyProjectName(currentProjectName);
+                        syncBackgroundInputs(currentBackgroundColor, currentTheme);
+                        syncAccentInputs(currentAccentColor, currentTheme);
+                        if (projectNameInput) projectNameInput.value = currentProjectName;
+                    });
+                }
+
+                [close, backdrop, done].forEach(function (target) {
+                    if (!target) return;
+                    target.addEventListener('click', function (event) {
+                        event.stopPropagation();
+                        closePanel(settings, toggle, panel, backdrop);
+                    });
+                });
+
+                document.addEventListener('click', function (event) {
+                    if (!settings.contains(event.target) && (!panel || !panel.contains(event.target))) {
+                        closePanel(settings, toggle, panel, backdrop);
+                    }
+                });
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape') {
+                        closePanel(settings, toggle, panel, backdrop);
+                    }
+                });
+            });
+        })();
+    </script>
+
+    <script>
+        // Header auth status is intentionally independent from the main app boot flow.
+        (function () {
+            function escapeHtml(value) {
+                return String(value == null ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+            }
+
+            function renderLogin(profileSec) {
+                profileSec.innerHTML = '<a href="/api/auth/login?force=1" class="login-btn"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> Autodesk Docs 로그인</a>';
+            }
+
+            function renderProfile(profileSec, profile) {
+                var displayName = profile && (profile.name || profile.displayName || profile.email || profile.id);
+                if (!displayName) {
+                    renderLogin(profileSec);
+                    return false;
+                }
+                profileSec.innerHTML =
+                    '<span class="profile-name"><i class="fas fa-user-circle"></i> ' + escapeHtml(displayName) + '님</span>' +
+                    '<a href="/api/auth/logout" class="logout-btn" title="로그아웃"><i class="fas fa-sign-out-alt"></i> 로그아웃</a>';
+                return true;
+            }
+
+            window.refreshHeaderAuthProfile = async function () {
+                var profileSec = document.getElementById('login-profile-section');
+                if (!profileSec) return false;
+                try {
+                    var resp = await fetch('/api/auth/profile', {
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    var profile = await resp.json();
+                    return renderProfile(profileSec, profile);
+                } catch (err) {
+                    console.warn('[Auth] Header profile refresh failed:', err.message);
+                    renderLogin(profileSec);
+                    return false;
+                }
+            };
+
+            document.addEventListener('DOMContentLoaded', function () {
+                window.refreshHeaderAuthProfile();
+            });
+            window.addEventListener('pageshow', function () {
+                window.refreshHeaderAuthProfile();
+            });
+        })();
+    </script>
+
+    <script>
         // ── Chat Panel Resize & Drag ────────────────────────────────
         (function () {
             const panel = document.getElementById('ai-chat-panel');
@@ -2774,7 +3431,5 @@
             });
         })();
     </script>
-    <!-- 금주 작업 시각화 3D 뷰어 (Three.js) -->
-    <script src="/js/weekly-3d-viewer.js?v=20260821-visible-retry1"></script>
 </body>
 </html>

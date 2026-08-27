@@ -1291,6 +1291,12 @@ function renderTaskRows(tasks) {
 function renderModelUpdatePanel() {
     const root = document.getElementById('example2-model-updates');
     if (!root) return;
+    root.style.display = 'block';
+    root.style.alignItems = '';
+    root.style.justifyContent = '';
+    root.style.width = '100%';
+    root.style.height = '100%';
+    root.style.overflow = 'hidden';
     const recentModels = getRecentModels();
     const selectableModels = recentModels;
     const selected = modelUpdateState.selectedUrn && modelUpdateState.selectedModel && selectableModels.some(model => model.urn === modelUpdateState.selectedModel.urn)
@@ -1707,6 +1713,12 @@ function renderSearchTiles(groups) {
 function renderProjectSearchPanel() {
     const root = document.getElementById('example2-project-search');
     if (!root) return;
+    root.style.display = 'block';
+    root.style.alignItems = '';
+    root.style.justifyContent = '';
+    root.style.width = '100%';
+    root.style.height = '100%';
+    root.style.overflow = 'hidden';
     const activeId = document.activeElement?.id || '';
     const selectionStart = activeId === 'example2-search-input'
         ? document.activeElement.selectionStart

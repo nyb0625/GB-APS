@@ -21,8 +21,11 @@ const STATUS_GROUPS = {
     }
 };
 
-const GROUP_ORDER = ['created', 'review', 'delayed', 'closed'];
+const GROUP_ORDER = ['created', 'review', 'closed'];
+const STATUS_MATCH_ORDER = ['created', 'review', 'delayed', 'closed'];
 const monthlyIssueChartMode = 'bar'; // Change to 'dumbbell' to preview the dumbbell monthly chart.
+const MONTHLY_ISSUE_START_MONTH = '2026-04';
+const MONTHLY_ISSUE_END_MONTH = '2026-12';
 let clashStructureChart = null;
 const monthlyIssueDrilldownState = { location: '', month: '' };
 const dashboardIssueRegistry = new Map();
@@ -63,7 +66,7 @@ const CONSTRUCTION_ZONES = {
 const CONSTRUCTION_ZONE_FOLDER_KEYWORDS = {
     new: ['신설', '신설구조물', '신설 구조물'],
     extension: ['본공사', '증설', '증설구조물', '증설 구조물'],
-    priority: ['우선시공', '우선시공분', '우선 시공']
+    priority: ['우선시공', '우선시공분', '우선 시공', '가시설']
 };
 const CONSTRUCTION_TARGET_HUB_ID = 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const CONSTRUCTION_TARGET_PROJECT_ID = 'b.374bde3a-83a3-4dd5-80c2-2e01ddeac719';
@@ -184,9 +187,76 @@ function findCustomAttributeValue(source, labels) {
     return '';
 }
 
+function getIssuePlacementValue(issue) {
+    const raw = issue.rawFormaIssue || {};
+    const rawAttrs = raw.attributes && typeof raw.attributes === 'object' ? raw.attributes : {};
+    return normalizeText(
+        issue.placement ||
+        issue.placementName ||
+        issue.file ||
+        issue.fileName ||
+        issue.documentName ||
+        issue.modelName ||
+        findCustomAttributeValue(issue, ['배치', 'Placement', '파일', '파일명', '모델', '모델명']) ||
+        findCustomAttributeValue(raw, ['배치', 'Placement', '파일', '파일명', '모델', '모델명']) ||
+        raw.placement ||
+        raw.placementName ||
+        raw.file ||
+        raw.fileName ||
+        raw.documentName ||
+        raw.modelName ||
+        rawAttrs.placement ||
+        rawAttrs.placementName ||
+        rawAttrs.file ||
+        rawAttrs.fileName ||
+        rawAttrs.documentName ||
+        rawAttrs.modelName
+    );
+}
+
+function getStructureFromPlacement(placement) {
+    let name = normalizeText(placement);
+    if (!name) return '';
+
+    name = name
+        .replace(/\.(rvt|ifc|nwc|nwd|dwg|3dm|zip)$/i, '')
+        .replace(/\s*\([^)]*\)\s*$/g, '')
+        .replace(/\s+v\d+$/i, '')
+        .trim();
+
+    const parts = name.split(/[_/\\]+/).map(part => part.trim()).filter(Boolean);
+    if (!parts.length) return '';
+
+    const tradeCodes = new Set([
+        'C', 'A', 'AS', 'AM', 'E', 'M', 'S', 'L', 'T',
+        '토목', '건축', '건축구조', '건축설비', '전기', '기계',
+        '철근', '철근배근', '배근', '가설', '콘크리트', '마감'
+    ]);
+    if (parts.length > 1 && tradeCodes.has(parts[parts.length - 1].toUpperCase())) {
+        parts.pop();
+    }
+
+    const last = parts[parts.length - 1] || '';
+    const number = parts.length > 1 && /^\d+$/.test(parts[parts.length - 2]) ? parts[parts.length - 2] : '';
+    if (number && last && !/^\d+$/.test(last)) return `${number} ${last}`;
+
+    const knownStructure = CONSTRUCTION_LIVE_STRUCTURES.find(structure => name.includes(structure));
+    if (knownStructure) return knownStructure;
+
+    if (last && !/^\d+$/.test(last)) return last;
+
+    return parts.slice(-2).join('_') || name;
+}
+
+function getFacilityBaseName(facility) {
+    return normalizeText(facility).replace(/^\d+\s+/, '');
+}
+
 function getIssueLocation(issue) {
     const raw = issue.rawFormaIssue || {};
     const rawAttrs = raw.attributes && typeof raw.attributes === 'object' ? raw.attributes : {};
+    const placementStructure = getStructureFromPlacement(getIssuePlacementValue(issue));
+    if (placementStructure) return placementStructure;
     return normalizeText(
         issue.customLocation ||
         findCustomAttributeValue(issue, ['위치', '위치명', '구역', 'Location', 'LBS']) ||
@@ -236,6 +306,27 @@ function getIssueAssignee(issue) {
     return displayValue(issue.assignee || issue.assignedTo || issue.assigned_to || issue.owner || issue.responsible || '미지정') || '미지정';
 }
 
+function getIssueAuthor(issue) {
+    const raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+    return displayValue(
+        issue.author ||
+        issue.creator ||
+        issue.createdBy ||
+        issue.created_by ||
+        issue.reporter ||
+        issue.owner ||
+        raw?.author ||
+        raw?.creator ||
+        raw?.createdBy ||
+        raw?.created_by ||
+        raw?.reporter ||
+        raw?.attributes?.author ||
+        raw?.attributes?.creator ||
+        raw?.attributes?.createdBy ||
+        raw?.attributes?.created_by
+    ) || getIssueAssignee(issue);
+}
+
 function resolveKnownUserName(value) {
     const id = String(value || '').trim();
     if (id === '783606258') return '현대건설';
@@ -264,13 +355,13 @@ function getStatusGroup(issue) {
     const raw = getIssueStatus(issue);
     const compact = raw.toLowerCase().replace(/[\s_-]+/g, '');
 
-    for (const groupKey of GROUP_ORDER) {
+    for (const groupKey of STATUS_MATCH_ORDER) {
         const group = STATUS_GROUPS[groupKey];
         const matched = group.statuses.some(status => {
             const key = String(status).toLowerCase().replace(/[\s_-]+/g, '');
             return compact === key;
         });
-        if (matched) return groupKey;
+        if (matched) return groupKey === 'delayed' ? 'review' : groupKey;
     }
 
     return 'created';
@@ -291,6 +382,18 @@ function getIssueEnd(issue, start) {
     const end = parseIssueDate(issue.dueDate || issue.due_date || issue.endDate || issue.end_date || issue.updatedAt || issue.updated_at);
     if (end && end >= start) return end;
     return start;
+}
+
+function getIssuePeriodText(issue) {
+    const start = getIssueStart(issue);
+    const end = getIssueEnd(issue, start);
+    return `${formatShortDate(start)} ~ ${formatShortDate(end)}`;
+}
+
+function getIssueDurationDays(issue) {
+    const start = getIssueStart(issue);
+    const end = getIssueEnd(issue, start);
+    return Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000) + 1);
 }
 
 function getMonthKey(date) {
@@ -321,8 +424,11 @@ function buildMonthRange(issues) {
     const now = new Date();
     const min = dates.length ? new Date(Math.min(...dates.map(date => date.getTime()))) : now;
     const max = dates.length ? new Date(Math.max(...dates.map(date => date.getTime()))) : now;
-    let cursor = new Date(min.getFullYear(), min.getMonth(), 1);
-    const last = new Date(max.getFullYear(), max.getMonth(), 1);
+    const fixedStart = new Date(Number(MONTHLY_ISSUE_START_MONTH.slice(0, 4)), Number(MONTHLY_ISSUE_START_MONTH.slice(5, 7)) - 1, 1);
+    const fixedEnd = new Date(Number(MONTHLY_ISSUE_END_MONTH.slice(0, 4)), Number(MONTHLY_ISSUE_END_MONTH.slice(5, 7)) - 1, 1);
+    let cursor = min < fixedStart ? new Date(min.getFullYear(), min.getMonth(), 1) : fixedStart;
+    const dataLast = new Date(max.getFullYear(), max.getMonth(), 1);
+    const last = dataLast > fixedEnd ? dataLast : fixedEnd;
     const months = [];
 
     while (cursor <= last && months.length < 18) {
@@ -398,6 +504,182 @@ async function loadIssues() {
 }
 
 window._monthlyIssueActiveSubTab = 'status';
+window._monthlyIssueGroupFilter = 'all';
+window._monthlyIssueExpandedGroups = window._monthlyIssueExpandedGroups || {};
+window._monthlyIssueMapMode = window._monthlyIssueMapMode || 'overview';
+window._monthlyIssueSelectedMonth = window._monthlyIssueSelectedMonth || '';
+window._monthlyIssueViewerTarget = window._monthlyIssueViewerTarget || null;
+
+const MONTHLY_ISSUE_STRUCTURE_GROUPS = [
+    { key: 'all', label: '전체', title: '전체 구조물' },
+    { key: 'temporary', label: '가시설', title: '가시설' },
+    { key: 'new', label: '신설', title: '신설 구조물' },
+    { key: 'extension', label: '증설', title: '증설 구조물' },
+    { key: 'etc', label: '기타', title: '기타 구조물' }
+];
+const MONTHLY_ISSUE_MATRIX_BASELINE_ROWS = 15;
+const MONTHLY_ISSUE_MATRIX_BODY_HEIGHT = 360;
+const MONTHLY_ISSUE_MAP_IMAGES = {
+    overview: '/images/monthly-issue-map-overview.png?v=20260827-map1',
+    hover: '/images/monthly-issue-map-hover.png?v=20260827-map1',
+    new: '/images/monthly-issue-map-new.png?v=20260827-map1',
+    extension: '/images/monthly-issue-map-extension.png?v=20260827-map1'
+};
+const MONTHLY_ISSUE_MAP_ZONE_HOTSPOTS = [
+    { groupKey: 'new', label: '신설', x: 31, y: 25, w: 25, h: 42, mode: 'new' },
+    { groupKey: 'new', label: '신설', x: 29, y: 81, w: 9, h: 12, mode: 'new' },
+    { groupKey: 'temporary', label: '가시설', x: 25, y: 59, w: 18, h: 29, zone: 'priority' },
+    { groupKey: 'extension', label: '증설', x: 49, y: 82, w: 32, h: 22, mode: 'extension' },
+    { groupKey: 'etc', label: '기타', x: 95, y: 91, w: 8, h: 8, zone: 'new' }
+];
+const MONTHLY_ISSUE_MAP_POSITIONS = {
+    new: {
+        '09약품투입동': { x: 50, y: 11 },
+        '01착수정': { x: 61, y: 16 },
+        '03급속여과지': { x: 36, y: 25 },
+        '06역세척펌프동': { x: 22, y: 40 },
+        '04후오존접촉지': { x: 36, y: 47 },
+        '02응집침전지': { x: 50, y: 52 },
+        '07정수지': { x: 23, y: 63 },
+        '05활성탄흡착지': { x: 36, y: 66 },
+        '08일차농축조': { x: 79, y: 64 },
+        '10공동구': { x: 84, y: 11 },
+        '11유량계실': { x: 84, y: 18 },
+        '12밸브실': { x: 84, y: 25 },
+        '13구내배관': { x: 94, y: 11 },
+        '14기타': { x: 94, y: 18 },
+        '00대지': { x: 94, y: 25 }
+    },
+    extension: {
+        '06공급설비': { x: 91, y: 13 },
+        '04염소투입동': { x: 84, y: 41 },
+        '05배출수지': { x: 26, y: 54 },
+        '01송수펌프실': { x: 57, y: 66 },
+        '02탈수기동': { x: 10, y: 77 },
+        '03GIS실': { x: 49, y: 88 }
+    }
+};
+const MONTHLY_ISSUE_MAP_STRUCTURE_LABELS = {
+    new: [
+        '09 약품투입동',
+        '01 착수정',
+        '03 급속여과지',
+        '06 역세척펌프동',
+        '04 후오존접촉지',
+        '02 응집침전지',
+        '07 정수지',
+        '05 활성탄흡착지',
+        '08 일차농축조',
+        '10 공동구',
+        '11 유량계실',
+        '12 밸브실',
+        '13 구내배관',
+        '14 기타',
+        '00 대지'
+    ],
+    extension: [
+        '06 공급설비',
+        '04 염소투입동',
+        '05 배출수지',
+        '01 송수펌프실',
+        '02 탈수기동',
+        '03 GIS실'
+    ]
+};
+
+function getMonthlyIssueStructureNumber(location) {
+    const match = String(location || '').trim().match(/^(\d{1,2})\b/);
+    return match ? parseInt(match[1], 10) : null;
+}
+
+function getMonthlyIssueStructureGroup(location, issue = null) {
+    const text = `${getIssuePlacementValue(issue || {})} ${location || ''}`.toLowerCase();
+    if (text.includes('가시설')) return 'temporary';
+    if (text.includes('증설')) return 'extension';
+    if (text.includes('신설')) return 'new';
+    if (text.includes('기타')) return 'etc';
+
+    const number = getMonthlyIssueStructureNumber(location);
+    if (number !== null) {
+        if (number <= 2) return 'temporary';
+        if (number <= 16) return 'new';
+        if (number <= 23) return 'extension';
+    }
+
+    return 'etc';
+}
+
+function getMonthlyIssueStructureGroupMeta(groupKey) {
+    return MONTHLY_ISSUE_STRUCTURE_GROUPS.find(group => group.key === groupKey) || MONTHLY_ISSUE_STRUCTURE_GROUPS[0];
+}
+
+function getMonthlyIssueStructureLabelKey(label) {
+    return normalizeText(label).replace(/\s+/g, '');
+}
+
+function createEmptyMonthlyIssueRow(location, groupKey, months, groupBy = 'status') {
+    const monthBuckets = new Map();
+    months.forEach(month => monthBuckets.set(month, createMonthlyIssueBucket(groupBy)));
+    return {
+        location,
+        groupKey,
+        total: 0,
+        closed: 0,
+        months: monthBuckets
+    };
+}
+
+function addMonthlyIssueBaselineRows(rows, months, groupBy = 'status') {
+    const baselineByGroup = {
+        new: MONTHLY_ISSUE_MAP_STRUCTURE_LABELS.new || []
+    };
+
+    Object.entries(baselineByGroup).forEach(([groupKey, labels]) => {
+        labels.forEach(label => {
+            const labelKey = getMonthlyIssueStructureLabelKey(label);
+            const existing = Array.from(rows.values()).find(row => {
+                return row.groupKey === groupKey && getMonthlyIssueStructureLabelKey(row.location) === labelKey;
+            });
+            if (existing) {
+                existing.location = label;
+                months.forEach(month => {
+                    if (!existing.months.has(month)) existing.months.set(month, createMonthlyIssueBucket(groupBy));
+                });
+                return;
+            }
+            rows.set(`${groupKey}:${label}`, createEmptyMonthlyIssueRow(label, groupKey, months, groupBy));
+        });
+    });
+}
+
+function createMonthlyIssueBucket(groupBy = 'status') {
+    const bucket = {
+        total: 0,
+        active: { total: 0 },
+        ended: { total: 0 }
+    };
+    const keys = groupBy === 'status' ? GROUP_ORDER : ['clash', 'design', 'work'];
+    keys.forEach(key => {
+        bucket[key] = 0;
+        bucket.active[key] = 0;
+        bucket.ended[key] = 0;
+    });
+    return bucket;
+}
+
+function mergeMonthlyIssueBucket(target, source, groupBy = 'status') {
+    if (!source) return target;
+    const keys = groupBy === 'status' ? GROUP_ORDER : ['clash', 'design', 'work'];
+    target.total += source.total || 0;
+    target.active.total += source.active?.total || 0;
+    target.ended.total += source.ended?.total || 0;
+    keys.forEach(key => {
+        target[key] += source[key] || 0;
+        target.active[key] += source.active?.[key] || 0;
+        target.ended[key] += source.ended?.[key] || 0;
+    });
+    return target;
+}
 
 function getIssueTypeKey(issue) {
     const t = getIssueTypeText(issue).toLowerCase();
@@ -411,18 +693,21 @@ function summarizeByLocationAndMonth(issues, months, groupBy = 'status') {
 
     issues.forEach(issue => {
         const location = getIssueLocation(issue);
+        const groupKey = getMonthlyIssueStructureGroup(location, issue);
+        const rowKey = `${groupKey}:${location}`;
         const group = groupBy === 'status' ? getStatusGroup(issue) : getIssueTypeKey(issue);
         const endMonth = getMonthKey(getIssueEnd(issue, getIssueStart(issue)));
-        if (!rows.has(location)) {
-            rows.set(location, {
+        if (!rows.has(rowKey)) {
+            rows.set(rowKey, {
                 location,
+                groupKey,
                 total: 0,
                 closed: 0,
                 months: new Map()
             });
         }
 
-        const row = rows.get(location);
+        const row = rows.get(rowKey);
         row.total += 1;
         
         const statusGroup = getStatusGroup(issue);
@@ -437,7 +722,7 @@ function summarizeByLocationAndMonth(issues, months, groupBy = 'status') {
                     ended: { total: 0 }
                 };
                 if (groupBy === 'status') {
-                    ['created', 'review', 'delayed', 'closed'].forEach(k => {
+                    GROUP_ORDER.forEach(k => {
                         bucket[k] = 0;
                         bucket.active[k] = 0;
                         bucket.ended[k] = 0;
@@ -463,7 +748,65 @@ function summarizeByLocationAndMonth(issues, months, groupBy = 'status') {
         });
     });
 
+    addMonthlyIssueBaselineRows(rows, months, groupBy);
     return Array.from(rows.values()).sort((a, b) => b.total - a.total || a.location.localeCompare(b.location, 'ko'));
+}
+
+function summarizeMonthlyIssueRowsForDisplay(rows, months, groupBy = 'status') {
+    const groupFilter = window._monthlyIssueGroupFilter || 'all';
+    const expanded = window._monthlyIssueExpandedGroups || {};
+    const grouped = new Map();
+
+    rows.forEach(row => {
+        const groupKey = row.groupKey || getMonthlyIssueStructureGroup(row.location);
+        if (groupFilter !== 'all' && groupKey !== groupFilter) return;
+        if (!grouped.has(groupKey)) {
+            const meta = getMonthlyIssueStructureGroupMeta(groupKey);
+            grouped.set(groupKey, {
+                key: groupKey,
+                label: meta.title,
+                total: 0,
+                closed: 0,
+                count: 0,
+                months: new Map(),
+                children: []
+            });
+        }
+        const group = grouped.get(groupKey);
+        group.total += row.total || 0;
+        group.closed += row.closed || 0;
+        group.count += 1;
+        group.children.push({ ...row, groupKey, isGroup: false });
+        months.forEach(month => {
+            if (!group.months.has(month)) group.months.set(month, createMonthlyIssueBucket(groupBy));
+            mergeMonthlyIssueBucket(group.months.get(month), row.months.get(month), groupBy);
+        });
+    });
+
+    const orderedKeys = groupFilter === 'all'
+        ? MONTHLY_ISSUE_STRUCTURE_GROUPS.filter(group => group.key !== 'all').map(group => group.key)
+        : [groupFilter];
+
+    return orderedKeys.flatMap(groupKey => {
+        const group = grouped.get(groupKey);
+        if (!group) return [];
+        group.children.sort((a, b) => {
+            const aNo = getMonthlyIssueStructureNumber(a.location) ?? 9999;
+            const bNo = getMonthlyIssueStructureNumber(b.location) ?? 9999;
+            return aNo - bNo || a.location.localeCompare(b.location, 'ko');
+        });
+        const groupRow = {
+            location: group.label,
+            groupKey,
+            isGroup: true,
+            total: group.total,
+            closed: group.closed,
+            count: group.count,
+            months: group.months
+        };
+        if (groupFilter === 'all' && !expanded[groupKey]) return [groupRow];
+        return [groupRow, ...group.children];
+    });
 }
 
 function renderGantt(issues) {
@@ -497,7 +840,8 @@ function renderGantt(issues) {
         return `<div class="bim-chart-row">${cells}</div>`;
     }).join('');
 
-    const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 전체 이슈 분석 보기`)}">${getMonthLabel(month)}</button>`).join('');
+    const selectedMonth = window._monthlyIssueSelectedMonth || '';
+    const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button${selectedMonth === month ? ' active' : ''}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 이슈 목록 보기`)}">${getMonthLabel(month)}</button>`).join('');
 
     wrap.innerHTML = `
         ${renderStatusLegend()}
@@ -510,13 +854,17 @@ function renderGantt(issues) {
     `;
 }
 
-function renderStatusLegend(groupBy = 'status') {
+function renderStatusLegend(groupBy = 'status', actionsHtml = '', titleHtml = '') {
+    const title = titleHtml ? `<div class="bim-chart-legend-title">${titleHtml}</div>` : '';
+    const actions = actionsHtml ? `<div class="bim-chart-legend-actions">${actionsHtml}</div>` : '';
     if (monthlyIssueChartMode === 'dumbbell') {
         return `
             <div class="bim-chart-legend" aria-label="덤벨 차트 범례">
+                ${title}
                 <span class="bim-chart-legend-item"><span class="bim-chart-legend-dot start"></span><span>시작 이슈</span></span>
                 <span class="bim-chart-legend-item"><span class="bim-chart-legend-dot end"></span><span>종료 이슈</span></span>
                 <span class="bim-chart-legend-item"><span class="bim-chart-legend-line"></span><span>활성 기간</span></span>
+                ${actions}
             </div>
         `;
     }
@@ -538,7 +886,7 @@ function renderStatusLegend(groupBy = 'status') {
             `;
         }).join('');
 
-        return `<div class="bim-chart-legend" aria-label="이슈 유형 색상 범례">${items}</div>`;
+        return `<div class="bim-chart-legend" aria-label="이슈 유형 색상 범례">${title}${items}${actions}</div>`;
     }
 
     const items = GROUP_ORDER.map(groupKey => {
@@ -551,17 +899,20 @@ function renderStatusLegend(groupBy = 'status') {
         `;
     }).join('');
 
-    return `<div class="bim-chart-legend" aria-label="이슈 상태 색상 범례">${items}</div>`;
+    return `<div class="bim-chart-legend" aria-label="이슈 상태 색상 범례">${title}${items}${actions}</div>`;
 }
 
 function renderChartCell(bucket, location = '', month = '', groupBy = 'status') {
     if (monthlyIssueChartMode === 'dumbbell') {
         return renderDumbbellChartCell(bucket, location, month);
     }
+    const isMonthActive = !!month && window._monthlyIssueSelectedMonth === month;
+    const isStartMonth = month === MONTHLY_ISSUE_START_MONTH;
+    const cellClass = `bim-chart-cell${isMonthActive ? ' monthly-issue-cell-active' : ''}${isStartMonth ? ' monthly-issue-start-cell' : ''}`;
     const active = bucket && bucket.active ? bucket.active : bucket;
     const ended = bucket && bucket.ended ? bucket.ended : bucket;
     if (!active || !active.total) {
-        return '<div class="bim-chart-cell"><div class="bim-chart-empty"></div></div>';
+        return `<div class="${cellClass}" data-month="${escapeHtml(month)}"><div class="bim-chart-empty"></div></div>`;
     }
 
     let segments = '';
@@ -619,7 +970,7 @@ function renderChartCell(bucket, location = '', month = '', groupBy = 'status') 
     }
 
     return `
-        <div class="bim-chart-cell bim-chart-clickable" data-location="${escapeHtml(location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} · ${location} · ${label}`)}">
+        <div class="${cellClass} bim-chart-clickable" data-location="${escapeHtml(location)}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} · ${location} · ${label}`)}">
             <div class="bim-chart-bar">${segments}</div>
         </div>
     `;
@@ -912,7 +1263,6 @@ function openStructureIssueModal(location, month = '') {
                 ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
                 ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
                 ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
-                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
                 ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
                 ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
             </div>
@@ -995,7 +1345,6 @@ function openMonthIssueModal(month = '') {
                 ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
                 ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
                 ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
-                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
                 ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
                 ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
             </div>
@@ -1115,7 +1464,6 @@ function renderMonthlyIssueDrilldownPanel(location, month, months) {
                 ${renderDrilldownKpi('전체 이슈', summary.total, '#38bdf8')}
                 ${renderDrilldownKpi('생성', summary.created, '#38bdf8')}
                 ${renderDrilldownKpi('검토', summary.review, '#a78bfa')}
-                ${renderDrilldownKpi('지연', summary.delayed, '#f59e0b')}
                 ${renderDrilldownKpi('종료', summary.closed, '#10b981')}
                 ${renderDrilldownKpi('완료율', `${completion}%`, '#10b981')}
             </div>
@@ -1219,7 +1567,6 @@ function renderMonthlyIssueStatusTableLegacy(issues = []) {
             <div class="monthly-issue-kpis">
                 ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8')}
                 ${renderMonthlyIssueKpi('진행/검토', totals.review, '#a78bfa')}
-                ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b')}
                 ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981')}
             </div>
             <div class="bim-db-placeholder">${escapeHtml(getMonthLabel(monthKey))} 기준으로 표시할 구조물 이슈가 없습니다.</div>
@@ -1237,7 +1584,6 @@ function renderMonthlyIssueStatusTableLegacy(issues = []) {
                 <td><strong>${row.total}</strong></td>
                 <td>${row.created}</td>
                 <td>${row.review}</td>
-                <td>${row.delayed}</td>
                 <td>${row.closed}</td>
                 <td>
                     <div class="monthly-issue-progress" title="완료율 ${progress}%">
@@ -1255,7 +1601,6 @@ function renderMonthlyIssueStatusTableLegacy(issues = []) {
         <div class="monthly-issue-kpis">
             ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8')}
             ${renderMonthlyIssueKpi('진행/검토', totals.review, '#a78bfa')}
-            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b')}
             ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981')}
         </div>
         <div class="monthly-issue-table-wrap">
@@ -1266,7 +1611,6 @@ function renderMonthlyIssueStatusTableLegacy(issues = []) {
                         <th>전체</th>
                         <th>생성</th>
                         <th>진행/검토</th>
-                        <th>지연</th>
                         <th>완료</th>
                         <th>완료율</th>
                         <th>최근 변경</th>
@@ -1288,30 +1632,454 @@ function renderMonthlyIssueKpi(label, value, color, statusKey = '') {
     `;
 }
 
-function getMonthlyIssueRowHeight(rowCount) {
-    const fallback = rowCount >= 24 ? 24 : rowCount >= 18 ? 28 : rowCount >= 12 ? 32 : 40;
-    if (!rowCount || typeof window === 'undefined') return fallback;
-
-    const root = document.getElementById('monthly-issue-status-root');
-    const tab = document.getElementById('monthly-issue-status-tab');
-    if (!root || !tab || tab.style.display === 'none') return fallback;
-
-    const rootRect = root.getBoundingClientRect();
-    const tabRect = tab.getBoundingClientRect();
-    const bottom = tabRect.bottom > rootRect.top ? Math.min(window.innerHeight, tabRect.bottom) : window.innerHeight;
-    const reservedHeight = 90; // KPI cards, legend, month axis, panel padding.
-    const availableHeight = Math.floor(bottom - rootRect.top - reservedHeight);
-    if (availableHeight <= 0) return fallback;
-
-    return Math.max(22, Math.min(44, Math.floor(availableHeight / rowCount)));
+function getMonthlyIssueMapPositionKey(facility) {
+    return normalizeText(facility).replace(/\s+/g, '');
 }
 
-function renderMonthlyIssueStatusTab(issues = []) {
-    const root = document.getElementById('monthly-issue-status-root');
-    if (!root) return;
+function getMonthlyIssueMapRowLookup(rows) {
+    const lookup = new Map();
+    rows.forEach(row => {
+        lookup.set(getMonthlyIssueMapPositionKey(row.facility), row);
+    });
+    return lookup;
+}
 
+function getMonthlyIssueMapMode() {
+    const mode = window._monthlyIssueMapMode || 'overview';
+    return mode === 'new' || mode === 'extension' ? mode : 'overview';
+}
+
+function getMonthlyIssueViewerZoneForGroup(groupKey) {
+    if (groupKey === 'temporary') return 'priority';
+    if (groupKey === 'extension') return 'extension';
+    return 'new';
+}
+
+function getMonthlyIssueMapPosition(facility, mode = getMonthlyIssueMapMode()) {
+    const key = getMonthlyIssueMapPositionKey(facility);
+    const byMode = MONTHLY_ISSUE_MAP_POSITIONS[mode] || {};
+    if (byMode[key]) return byMode[key];
+
+    const name = getFacilityBaseName(facility);
+    const positions = {
+        '착수정': { x: 67, y: 28 },
+        '약품투입동': { x: 73, y: 18 },
+        '급속여과지': { x: 72, y: 47 },
+        '후오존접촉지': { x: 55, y: 54 },
+        '응집침전지': { x: 40, y: 30 },
+        '역세척펌프동': { x: 22, y: 58 },
+        '정수지': { x: 58, y: 76 },
+        '활성탄흡착지': { x: 76, y: 72 },
+        '공동구': { x: 48, y: 64 }
+    };
+    if (positions[name]) return positions[name];
+    let hash = 0;
+    String(facility || '').split('').forEach(char => {
+        hash = ((hash << 5) - hash) + char.charCodeAt(0);
+        hash |= 0;
+    });
+    return {
+        x: 18 + Math.abs(hash % 64),
+        y: 18 + Math.abs((hash >> 3) % 60)
+    };
+}
+
+function getMonthlyIssueDashboardRows(issues) {
+    const rows = new Map();
+    issues.forEach(issue => {
+        const facility = getIssueLocation(issue);
+        const groupKey = getMonthlyIssueStructureGroup(facility, issue);
+        const rowKey = `${groupKey}:${facility}`;
+        if (!rows.has(rowKey)) rows.set(rowKey, { facility, groupKey, total: 0, issues: [] });
+        const row = rows.get(rowKey);
+        row.total += 1;
+        row.issues.push(issue);
+    });
+    return Array.from(rows.values()).sort((a, b) => {
+        const aNo = parseInt(String(a.facility).match(/^\d+/)?.[0] || '9999', 10);
+        const bNo = parseInt(String(b.facility).match(/^\d+/)?.[0] || '9999', 10);
+        return aNo - bNo || a.facility.localeCompare(b.facility, 'ko');
+    });
+}
+
+function renderMonthlyIssueMap(rows, selectedFacility = '') {
+    const mode = getMonthlyIssueMapMode();
+    const isDetailMode = mode === 'new' || mode === 'extension';
+    const viewerTarget = window._monthlyIssueViewerTarget || null;
+    const isViewerMode = !!viewerTarget;
+    const rowLookup = getMonthlyIssueMapRowLookup(rows);
+    const mapRows = isDetailMode
+        ? (MONTHLY_ISSUE_MAP_STRUCTURE_LABELS[mode] || []).map(facility => {
+            const existing = rowLookup.get(getMonthlyIssueMapPositionKey(facility));
+            return existing || { facility, groupKey: mode, total: 0, issues: [] };
+        })
+        : [];
+    const imageSrc = MONTHLY_ISSUE_MAP_IMAGES[mode] || MONTHLY_ISSUE_MAP_IMAGES.overview;
+    const markers = mapRows.map(row => {
+        const pos = getMonthlyIssueMapPosition(row.facility, mode);
+        const active = selectedFacility && selectedFacility === row.facility;
+        return `
+            <span class="monthly-issue-map-marker-wrap ${active ? 'active' : ''}" style="--marker-x:${pos.x}%; --marker-y:${pos.y}%;">
+                <button type="button" class="monthly-issue-map-label monthly-issue-map-marker" data-monthly-facility="${escapeHtml(row.facility)}" data-monthly-map-group="${escapeHtml(row.groupKey)}" title="${escapeHtml(`${row.facility} 3D 뷰어 열기`)}">
+                    ${escapeHtml(row.facility)}
+                </button>
+                <span class="monthly-issue-map-badge ${row.total ? '' : 'is-empty'}" title="${escapeHtml(`${row.facility} 이슈 ${row.total}건`)}">${row.total}</span>
+            </span>
+        `;
+    }).join('');
+    const zones = mode === 'overview' ? MONTHLY_ISSUE_MAP_ZONE_HOTSPOTS.map(zone => `
+        <button type="button" class="monthly-issue-map-zone monthly-issue-map-zone-${escapeHtml(zone.groupKey)}" data-monthly-map-zone="${escapeHtml(zone.groupKey)}" data-monthly-viewer-zone="${escapeHtml(zone.zone || '')}" data-monthly-map-target="${escapeHtml(zone.mode || '')}" style="left:${zone.x}%; top:${zone.y}%; width:${zone.w}%; height:${zone.h}%;" title="${escapeHtml(`${zone.label} 영역 보기`)}" aria-label="${escapeHtml(`${zone.label} 영역 보기`)}"></button>
+    `).join('') : '';
+    const back = isDetailMode ? `
+        <button type="button" class="monthly-issue-map-back" data-monthly-map-back title="전체 배치도로 돌아가기">
+            <i class="fas fa-arrow-left"></i> 전체
+        </button>
+    ` : '';
+    const viewerTitle = viewerTarget?.title || '구조물 3D 뷰';
+    const viewerBack = `
+        <button type="button" class="monthly-issue-map-back" data-monthly-viewer-close title="배치도로 돌아가기">
+            <i class="fas fa-arrow-left"></i> 배치도
+        </button>
+    `;
+
+    return `
+        <section class="monthly-issue-map-panel">
+            <div class="monthly-issue-map-head">
+                <strong>구조물 3D 뷰</strong>
+                <span>${isViewerMode ? escapeHtml(viewerTitle) : (isDetailMode ? getMonthlyIssueStructureGroupMeta(mode).title : '영역별 선택')}</span>
+            </div>
+            ${isViewerMode ? `
+                <div class="monthly-issue-map-view monthly-issue-viewer-view" data-monthly-viewer-mode>
+                    <div id="monthly-issue-structure-viewer" class="monthly-issue-structure-viewer"></div>
+                    ${viewerBack}
+                    <div id="monthly-issue-viewer-status" class="monthly-issue-viewer-status">
+                        <i class="fas fa-circle-notch fa-spin"></i>
+                        <span>${escapeHtml(viewerTitle)} 모델을 준비하는 중입니다.</span>
+                    </div>
+                </div>
+            ` : `
+                <div class="monthly-issue-map-view" data-monthly-map-mode="${escapeHtml(mode)}" data-monthly-map-default="${escapeHtml(MONTHLY_ISSUE_MAP_IMAGES.overview)}" data-monthly-map-hover="${escapeHtml(MONTHLY_ISSUE_MAP_IMAGES.hover)}">
+                    <img src="${escapeHtml(imageSrc)}" alt="강북정수장 월간 이슈 구조물 배치도">
+                    ${back}
+                    ${zones}
+                    ${markers}
+                    ${isDetailMode && !markers ? '<div class="monthly-issue-map-empty">표시할 이슈가 없습니다.</div>' : ''}
+                </div>
+            `}
+        </section>
+    `;
+}
+
+function renderMonthlyIssueListTable(issues, emptyMessage = '표시할 이슈가 없습니다.') {
+    if (!issues.length) {
+        return `<div class="bim-db-placeholder">${escapeHtml(emptyMessage)}</div>`;
+    }
+    const rows = issues
+        .slice()
+        .sort((a, b) => getIssueStart(b).getTime() - getIssueStart(a).getTime())
+        .map(issue => {
+            const issueKey = getIssueKey(issue);
+            if (issueKey) dashboardIssueRegistry.set(issueKey, issue);
+            const group = STATUS_GROUPS[getStatusGroup(issue)] || STATUS_GROUPS.created;
+            return `
+                <tr class="monthly-issue-dashboard-row" data-issue-key="${escapeHtml(issueKey)}">
+                    <td title="${escapeHtml(getIssueLocation(issue))}">${escapeHtml(getIssueLocation(issue))}</td>
+                    <td class="monthly-issue-dashboard-title" title="${escapeHtml(getIssueDescription(issue) || getIssueTitle(issue))}">${escapeHtml(getIssueTitle(issue))}</td>
+                    <td>${escapeHtml(getIssuePeriodText(issue))}</td>
+                    <td>${escapeHtml(getIssueAuthor(issue))}</td>
+                    <td>${escapeHtml(getIssueReviewer(issue))}</td>
+                    <td><span class="monthly-issue-status-pill" style="--status-color:${group.color};">${escapeHtml(group.label)}</span></td>
+                </tr>
+            `;
+        }).join('');
+    return `
+        <div class="monthly-issue-dashboard-table-wrap">
+            <table class="monthly-issue-dashboard-table">
+                <thead>
+                    <tr>
+                        <th>시설</th>
+                        <th>내용</th>
+                        <th>기간</th>
+                        <th>작성자</th>
+                        <th>검토자</th>
+                        <th>상태</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+function getMonthlyIssueDashboardVisibleIssues(issues = [], options = {}) {
+    const monthKey = window._monthlyIssueSelectedMonth || '';
+    const statusFilter = document.getElementById('monthly-issue-status-filter')?.value || 'all';
+    const search = document.getElementById('monthly-issue-search')?.value || '';
+    const query = String(search || '').trim().toLowerCase();
+    const selectedFacility = window._monthlyIssueSelectedFacility || '';
+    const activeMapMode = getMonthlyIssueMapMode();
+    const activeGroupFilter = window._monthlyIssueGroupFilter || 'all';
+    const activeGroup = selectedFacility ? '' : (activeMapMode !== 'overview' ? activeMapMode : (activeGroupFilter !== 'all' ? activeGroupFilter : ''));
+    const statusKey = options.statusKey || 'all';
+
+    return (Array.isArray(issues) ? issues : []).filter(issue => {
+        if (monthKey && !issueOverlapsMonth(issue, monthKey)) return false;
+        const statusGroupKey = getStatusGroup(issue);
+        if (statusFilter && statusFilter !== 'all' && statusGroupKey !== statusFilter) return false;
+        if (statusKey === 'progress' && statusGroupKey !== 'closed') return false;
+        if (statusKey && statusKey !== 'all' && statusKey !== 'progress' && statusGroupKey !== statusKey) return false;
+        const facility = getIssueLocation(issue);
+        const structureGroupKey = getMonthlyIssueStructureGroup(facility, issue);
+        if (activeGroup && structureGroupKey !== activeGroup) return false;
+        if (selectedFacility && facility !== selectedFacility) return false;
+        if (query) {
+            const haystack = [
+                facility,
+                getIssueTitle(issue),
+                getIssueDescription(issue),
+                getIssueAuthor(issue),
+                getIssueReviewer(issue)
+            ].join(' ').toLowerCase();
+            if (!haystack.includes(query)) return false;
+        }
+        return true;
+    });
+}
+
+function renderMonthlyIssueDashboard(issues = []) {
+    const monthKey = window._monthlyIssueSelectedMonth || '';
+    const selectedFacility = window._monthlyIssueSelectedFacility || '';
+    const visibleIssues = getMonthlyIssueDashboardVisibleIssues(issues);
+    const mapRows = getMonthlyIssueDashboardRows((Array.isArray(issues) ? issues : []).filter(issue => !monthKey || issueOverlapsMonth(issue, monthKey)));
+    const summary = visibleIssues.reduce((acc, issue) => {
+        const groupKey = getStatusGroup(issue);
+        acc.total += 1;
+        acc[groupKey] += 1;
+        return acc;
+    }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
+    const progressRate = summary.total ? Math.round((summary.closed / summary.total) * 100) : 0;
+    const selectedChip = selectedFacility ? `
+        <button type="button" class="monthly-issue-selected-chip" data-monthly-clear-facility title="시설 필터 해제">
+            ${escapeHtml(selectedFacility)} <i class="fas fa-xmark"></i>
+        </button>
+    ` : '';
+    const listTitle = monthKey ? `${getMonthLabel(monthKey)} 이슈 목록` : '전체 이슈 목록';
+    const emptyMessage = monthKey ? `${getMonthLabel(monthKey)} 기준 표시할 이슈가 없습니다.` : '표시할 이슈가 없습니다.';
+
+    return `
+        <div class="monthly-issue-dashboard-shell">
+            ${renderMonthlyIssueMap(mapRows, selectedFacility)}
+            <section class="monthly-issue-dashboard-panel">
+                <div class="monthly-issue-dashboard-kpis">
+                    ${renderMonthlyIssueKpi('전체', summary.total, '#38bdf8', 'all')}
+                    ${renderMonthlyIssueKpi('진행중', summary.review, '#a78bfa', 'review')}
+                    ${renderMonthlyIssueKpi('완료', summary.closed, '#10b981', 'closed')}
+                    ${renderMonthlyIssueKpi('진행률', `${progressRate}%`, '#8b5cf6', 'progress')}
+                </div>
+                <div class="monthly-issue-dashboard-subbar">
+                    <strong>${escapeHtml(listTitle)}</strong>
+                    ${selectedChip}
+                    <span>${visibleIssues.length}건</span>
+                </div>
+                ${renderMonthlyIssueListTable(visibleIssues, emptyMessage)}
+            </section>
+        </div>
+    `;
+}
+
+function getMonthlyIssueViewerTargetKey(target = window._monthlyIssueViewerTarget) {
+    if (!target) return '';
+    return [target.type || 'structure', target.zone || '', target.structureName || '', target.groupKey || ''].join(':');
+}
+
+function setMonthlyIssueViewerStatus(message, isLoading = true) {
+    const status = document.getElementById('monthly-issue-viewer-status');
+    if (!status) return;
+    status.innerHTML = `
+        ${isLoading ? '<i class="fas fa-circle-notch fa-spin"></i>' : '<i class="fas fa-cube"></i>'}
+        <span>${escapeHtml(message)}</span>
+    `;
+    status.classList.toggle('is-done', !isLoading);
+}
+
+function hideMonthlyIssueViewerToolbar(viewer) {
+    try {
+        if (viewer && viewer.toolbar && viewer.toolbar.container) {
+            viewer.toolbar.container.style.display = 'none';
+        }
+        const container = document.getElementById('monthly-issue-structure-viewer');
+        if (container) {
+            container.querySelectorAll('.adsk-toolbar, .adsk-control-group').forEach(el => {
+                el.style.display = 'none';
+            });
+        }
+    } catch (error) {
+        console.warn('[Monthly Issue Viewer] toolbar hide skipped:', error);
+    }
+}
+
+function disposeMonthlyIssueStructureViewer() {
+    const viewer = window.monthlyIssueStructureViewer;
+    if (!viewer) return;
+    try {
+        if (typeof viewer.tearDown === 'function') viewer.tearDown();
+        if (typeof viewer.finish === 'function') viewer.finish();
+    } catch (error) {
+        console.warn('[Monthly Issue Viewer] dispose skipped:', error);
+    }
+    window.monthlyIssueStructureViewer = null;
+    window._monthlyIssueViewerContainer = null;
+    window._monthlyIssueLoadedTargetKey = '';
+}
+
+async function getMonthlyIssueStructureViewer() {
+    const container = document.getElementById('monthly-issue-structure-viewer');
+    if (!container) return null;
+
+    if (window.monthlyIssueStructureViewer && window._monthlyIssueViewerContainer !== container) {
+        disposeMonthlyIssueStructureViewer();
+    }
+    if (window.monthlyIssueStructureViewer && window.monthlyIssueStructureViewer.impl) {
+        hideMonthlyIssueViewerToolbar(window.monthlyIssueStructureViewer);
+        return window.monthlyIssueStructureViewer;
+    }
+
+    const viewerModule = await import('./viewer.js');
+    if (typeof viewerModule.initViewer !== 'function') return null;
+    const viewer = await viewerModule.initViewer(container, true);
+    if (!viewer || !viewer.impl) return null;
+    window.monthlyIssueStructureViewer = viewer;
+    window._monthlyIssueViewerContainer = container;
+    hideMonthlyIssueViewerToolbar(viewer);
+    if (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.TOOLBAR_CREATED_EVENT && typeof viewer.addEventListener === 'function') {
+        viewer.addEventListener(Autodesk.Viewing.TOOLBAR_CREATED_EVENT, () => hideMonthlyIssueViewerToolbar(viewer));
+    }
+    return viewer;
+}
+
+async function loadMonthlyIssueViewerTarget() {
+    const target = window._monthlyIssueViewerTarget;
+    if (!target) return false;
+    const targetKey = getMonthlyIssueViewerTargetKey(target);
+    const title = target.title || '선택 구조물';
+
+    try {
+        setMonthlyIssueViewerStatus(`${title} 모델을 찾는 중입니다.`);
+        const models = target.type === 'zone'
+            ? await getConstructionZoneModels(target.zone)
+            : await getConstructionStructureModels(target.structureName, target.zone);
+
+        if (getMonthlyIssueViewerTargetKey() !== targetKey) return false;
+        if (!models.length) {
+            setMonthlyIssueViewerStatus(`${title}에 연결된 RVT 파일을 찾지 못했습니다.`, false);
+            return false;
+        }
+
+        const viewer = await getMonthlyIssueStructureViewer();
+        if (!viewer || !viewer.impl) {
+            setMonthlyIssueViewerStatus('월간 이슈 3D 뷰어를 초기화하지 못했습니다.', false);
+            return false;
+        }
+
+        if (window._monthlyIssueLoadedTargetKey === targetKey && typeof viewer.fitToView === 'function') {
+            if (typeof viewer.resize === 'function') viewer.resize();
+            viewer.fitToView();
+            setMonthlyIssueViewerStatus(`${title} 모델 ${models.length}개를 표시 중입니다.`, false);
+            return true;
+        }
+
+        try {
+            if (typeof viewer.getAllModels === 'function') {
+                viewer.getAllModels().forEach(model => viewer.unloadModel(model));
+            } else if (viewer.model && typeof viewer.unloadModel === 'function') {
+                viewer.unloadModel(viewer.model);
+            }
+        } catch (error) {
+            console.warn('[Monthly Issue Viewer] failed to clear previous models:', error);
+        }
+
+        const viewerModule = await import('./viewer.js');
+        setMonthlyIssueViewerStatus(`${title} 공종별 모델 ${models.length}개를 병합하는 중입니다.`);
+        if (models.length > 1 && typeof viewerModule.loadAggregated === 'function') {
+            await viewerModule.loadAggregated(viewer, models);
+        } else if (models.length === 1 && typeof viewerModule.loadModelMulti === 'function') {
+            await viewerModule.loadModelMulti(viewer, models[0].urn, { preserveView: false });
+        } else {
+            setMonthlyIssueViewerStatus('모델 로더를 찾을 수 없습니다.', false);
+            return false;
+        }
+
+        window._monthlyIssueLoadedTargetKey = targetKey;
+        window._monthlyIssueActiveModelNames = models.map(model => model.name).filter(Boolean);
+        try {
+            if (typeof viewer.resize === 'function') viewer.resize();
+            if (typeof viewer.fitToView === 'function') viewer.fitToView();
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        } catch (error) {
+            console.warn('[Monthly Issue Viewer] fit failed:', error);
+        }
+        hideMonthlyIssueViewerToolbar(viewer);
+        setMonthlyIssueViewerStatus(`${title} 공종별 모델 ${models.length}개를 표시 중입니다.`, false);
+        return true;
+    } catch (error) {
+        console.error('[Monthly Issue Viewer] load failed:', error);
+        setMonthlyIssueViewerStatus(`${title} 3D 모델을 불러오지 못했습니다.`, false);
+        return false;
+    }
+}
+
+function openMonthlyIssueStructureViewer(facility, groupKey = 'new') {
+    const zone = getMonthlyIssueViewerZoneForGroup(groupKey);
+    const structureName = getFacilityBaseName(facility);
+    window._monthlyIssueViewerTarget = {
+        type: 'structure',
+        facility,
+        groupKey,
+        zone,
+        structureName,
+        title: `${facility} 3D 뷰`
+    };
+    renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+}
+
+function openMonthlyIssueZoneViewer(groupKey = 'temporary', zone = getMonthlyIssueViewerZoneForGroup(groupKey)) {
+    const groupMeta = getMonthlyIssueStructureGroupMeta(groupKey);
+    window._monthlyIssueViewerTarget = {
+        type: 'zone',
+        groupKey,
+        zone,
+        title: `${groupMeta.title || groupMeta.label} 병합 3D 뷰`
+    };
+    renderMonthlyIssueStatusTab(Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []);
+}
+
+function closeMonthlyIssueStructureViewer() {
+    window._monthlyIssueViewerTarget = null;
+    disposeMonthlyIssueStructureViewer();
+}
+
+function renderMonthlyIssueGroupFilter(rows = []) {
+    const active = window._monthlyIssueGroupFilter || 'all';
+    const counts = rows.reduce((acc, row) => {
+        const groupKey = row.groupKey || getMonthlyIssueStructureGroup(row.location);
+        acc.all += 1;
+        acc[groupKey] = (acc[groupKey] || 0) + 1;
+        return acc;
+    }, { all: 0, temporary: 0, new: 0, extension: 0, etc: 0 });
+
+    const buttons = MONTHLY_ISSUE_STRUCTURE_GROUPS.map(group => `
+        <button type="button" class="monthly-issue-group-filter${active === group.key ? ' active' : ''}" data-monthly-group-filter="${escapeHtml(group.key)}" title="${escapeHtml(`${group.title} 보기`)}">
+            <span>${escapeHtml(group.label)}</span>
+            <strong>${counts[group.key] || 0}</strong>
+        </button>
+    `).join('');
+
+    return `<div class="monthly-issue-group-filters" aria-label="구조물 그룹 필터">${buttons}</div>`;
+}
+
+function renderMonthlyIssueMatrix(issues = []) {
     const activeSubTab = window._monthlyIssueActiveSubTab || 'status';
-
+    const legendTitle = '<i class="fas fa-calendar-days"></i><span>구조물별 이슈 현황</span>';
     const search = document.getElementById('monthly-issue-search')?.value || '';
     const query = String(search || '').trim().toLowerCase();
     const filteredIssues = (Array.isArray(issues) ? issues : []).filter(issue => {
@@ -1319,81 +2087,88 @@ function renderMonthlyIssueStatusTab(issues = []) {
         return getIssueLocation(issue).toLowerCase().includes(query);
     });
 
-    if (!filteredIssues.length) {
-        root.innerHTML = '<div class="bim-db-placeholder">표시할 월간 이슈 데이터가 없습니다.</div>';
-        return;
-    }
-
     const months = buildMonthRange(filteredIssues);
     const rows = summarizeByLocationAndMonth(filteredIssues, months, activeSubTab);
-    
-    let kpiHtml = '';
-    
-    if (activeSubTab === 'status') {
-        const totals = filteredIssues.reduce((acc, issue) => {
-            const groupKey = getStatusGroup(issue);
-            acc.total += 1;
-            acc[groupKey] += 1;
-            return acc;
-        }, { total: 0, created: 0, review: 0, delayed: 0, closed: 0 });
-        const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
-        
-        kpiHtml = `
-            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
-            ${renderMonthlyIssueKpi('생성', totals.created, '#38bdf8', 'created')}
-            ${renderMonthlyIssueKpi('검토', totals.review, '#a78bfa', 'review')}
-            ${renderMonthlyIssueKpi('지연', totals.delayed, '#f59e0b', 'delayed')}
-            ${renderMonthlyIssueKpi('종료', totals.closed, '#10b981', 'closed')}
-            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
-        `;
-    } else {
-        const totals = filteredIssues.reduce((acc, issue) => {
-            const groupKey = getIssueTypeKey(issue);
-            acc.total += 1;
-            acc[groupKey] += 1;
-            
-            const statusGroup = getStatusGroup(issue);
-            if (statusGroup === 'closed') {
-                acc.closed += 1;
-            }
-            return acc;
-        }, { total: 0, clash: 0, design: 0, work: 0, closed: 0 });
-        const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
-
-        kpiHtml = `
-            ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
-            ${renderMonthlyIssueKpi('간섭이슈', totals.clash, '#00f2fe', 'clash')}
-            ${renderMonthlyIssueKpi('설계이슈', totals.design, '#8b5cf6', 'design')}
-            ${renderMonthlyIssueKpi('업데이트 항목', totals.work, '#f59e0b', 'work')}
-            ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
-        `;
-    }
-
-    const rowHeight = getMonthlyIssueRowHeight(rows.length);
-    const axisHeight = rowHeight <= 28 ? 26 : 30;
-    const monthWidth = Math.max(64, Math.floor(1040 / Math.max(months.length, 1)));
-    const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px; --monthly-issue-row-height:${rowHeight}px; --monthly-issue-axis-height:${axisHeight}px;`;
-    const yAxis = rows.map(row => {
+    const displayRows = summarizeMonthlyIssueRowsForDisplay(rows, months, activeSubTab);
+    if (!displayRows.length) {
         return `
-            <div class="bim-chart-yitem monthly-issue-yitem monthly-issue-structure-cell bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
-                <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
+            <div class="monthly-issue-workspace">
+                <div class="monthly-issue-chart-wrap">
+                    ${renderStatusLegend(activeSubTab, renderMonthlyIssueGroupFilter(rows), legendTitle)}
+                    <div class="bim-db-placeholder">선택한 구조물 그룹에 표시할 이슈가 없습니다.</div>
+                </div>
             </div>
         `;
-    }).join('');
+    }
+    const totals = filteredIssues.reduce((acc, issue) => {
+        const groupKey = activeSubTab === 'status' ? getStatusGroup(issue) : getIssueTypeKey(issue);
+        acc.total += 1;
+        acc[groupKey] = (acc[groupKey] || 0) + 1;
+        if (getStatusGroup(issue) === 'closed') acc.closed += 1;
+        return acc;
+    }, { total: 0, created: 0, review: 0, closed: 0, clash: 0, design: 0, work: 0 });
+    const completion = totals.total ? Math.round((totals.closed / totals.total) * 100) : 0;
+    const kpiHtml = activeSubTab === 'status' ? `
+        ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
+        ${renderMonthlyIssueKpi('생성', totals.created, '#38bdf8', 'created')}
+        ${renderMonthlyIssueKpi('검토', totals.review, '#a78bfa', 'review')}
+        ${renderMonthlyIssueKpi('종료', totals.closed, '#10b981', 'closed')}
+        ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+    ` : `
+        ${renderMonthlyIssueKpi('전체 이슈', totals.total, '#38bdf8', 'all')}
+        ${renderMonthlyIssueKpi('간섭이슈', totals.clash, '#00f2fe', 'clash')}
+        ${renderMonthlyIssueKpi('설계이슈', totals.design, '#8b5cf6', 'design')}
+        ${renderMonthlyIssueKpi('업데이트 항목', totals.work, '#f59e0b', 'work')}
+        ${renderMonthlyIssueKpi('완료율', `${completion}%`, '#10b981', 'closed')}
+    `;
 
-    const plot = rows.map(row => {
-        const cells = months.map(month => renderChartCell(row.months.get(month), row.location, month, activeSubTab)).join('');
+    const rowHeight = getMonthlyIssueRowHeight(displayRows.length);
+    const axisHeight = rowHeight <= 22 ? 22 : 24;
+    const monthWidth = Math.max(64, Math.floor(1040 / Math.max(months.length, 1)));
+    const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px; --monthly-issue-yaxis-width:220px; --monthly-issue-row-height:${rowHeight}px; --monthly-issue-axis-height:${axisHeight}px; --monthly-issue-body-height:${MONTHLY_ISSUE_MATRIX_BODY_HEIGHT}px;`;
+    const yAxis = displayRows.map(row => {
+        if (row.isGroup) {
+            const expanded = window._monthlyIssueGroupFilter !== 'all' || !!window._monthlyIssueExpandedGroups?.[row.groupKey];
+            return `
+        <button type="button" class="bim-chart-yitem monthly-issue-yitem monthly-issue-group-row" data-monthly-group="${escapeHtml(row.groupKey)}" title="${escapeHtml(`${row.location} ${expanded ? '접기' : '펼치기'}`)}">
+            <span class="monthly-issue-group-label">
+                <i class="fas fa-chevron-${expanded ? 'down' : 'right'}"></i>
+                <strong title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</strong>
+                <small title="${escapeHtml(`${row.count}개 구조물`)}">${row.count}</small>
+            </span>
+        </button>
+            `;
+        }
+        return `
+        <div class="bim-chart-yitem monthly-issue-yitem monthly-issue-structure-cell bim-chart-clickable" data-location="${escapeHtml(row.location)}" title="${escapeHtml(row.location)} 이슈 목록 보기">
+            <div class="bim-structure-name" title="${escapeHtml(row.location)}">${escapeHtml(row.location)}</div>
+        </div>
+        `;
+    }).join('');
+    const plot = displayRows.map(row => {
+        if (row.isGroup) {
+            return `
+                <div class="bim-chart-row monthly-issue-chart-row monthly-issue-group-chart-row">
+                    <div class="monthly-issue-group-fill" aria-hidden="true"></div>
+                </div>
+            `;
+        }
+        const cells = months.map(month => {
+            return renderChartCell(row.months.get(month), row.location, month, activeSubTab);
+        }).join('');
         return `<div class="bim-chart-row monthly-issue-chart-row">${cells}</div>`;
     }).join('');
-    const xAxis = months.map(month => `<button type="button" class="bim-chart-month monthly-issue-month-button" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 전체 이슈 분석 보기`)}">${getMonthLabel(month)}</button>`).join('');
+    const selectedMonth = window._monthlyIssueSelectedMonth || '';
+    const xAxis = months.map(month => {
+        const isActive = selectedMonth === month;
+        const isStartMonth = month === MONTHLY_ISSUE_START_MONTH;
+        return `<button type="button" class="bim-chart-month monthly-issue-month-button${isActive ? ' active' : ''}${isStartMonth ? ' monthly-issue-start-month' : ''}" aria-pressed="${isActive ? 'true' : 'false'}" data-month="${escapeHtml(month)}" title="${escapeHtml(`${getMonthLabel(month)} 이슈 목록 보기`)}"><span>${getMonthLabel(month)}</span>${isStartMonth ? '<small>과업 시작</small>' : ''}</button>`;
+    }).join('');
 
-    root.innerHTML = `
-        <div class="monthly-issue-kpis monthly-issue-kpis-compact">
-            ${kpiHtml}
-        </div>
+    return `
         <div class="monthly-issue-workspace">
             <div class="monthly-issue-chart-wrap">
-                ${renderStatusLegend(activeSubTab)}
+                ${renderStatusLegend(activeSubTab, renderMonthlyIssueGroupFilter(rows), legendTitle)}
                 <div class="bim-chart monthly-issue-chart" style="${chartStyle}">
                     <div class="bim-chart-yaxis">${yAxis}</div>
                     <div class="bim-chart-plot">${plot}</div>
@@ -1405,6 +2180,29 @@ function renderMonthlyIssueStatusTab(issues = []) {
             </div>
         </div>
     `;
+}
+
+function getMonthlyIssueRowHeight(rowCount) {
+    if (!rowCount) return 24;
+    const height = Math.max(16, Math.min(40, MONTHLY_ISSUE_MATRIX_BODY_HEIGHT / rowCount));
+    return Math.round(height * 100) / 100;
+}
+
+function renderMonthlyIssueStatusTab(issues = []) {
+    const root = document.getElementById('monthly-issue-status-root');
+    if (!root) return;
+
+    root.innerHTML = `
+        <div class="monthly-issue-matrix-section">
+            ${renderMonthlyIssueMatrix(issues)}
+        </div>
+        <div class="monthly-issue-lower-section">
+            ${renderMonthlyIssueDashboard(issues)}
+        </div>
+    `;
+    if (window._monthlyIssueViewerTarget) {
+        setTimeout(loadMonthlyIssueViewerTarget, 0);
+    }
 }
 
 window.switchMonthlyIssueSubTab = function(subTab) {
@@ -1465,24 +2263,89 @@ function bindMonthlyIssueStatusTab() {
     if (root && !root.dataset.monthlyIssueBound) {
         root.dataset.monthlyIssueBound = 'true';
         root.addEventListener('click', event => {
+            const mapBack = event.target.closest('[data-monthly-map-back]');
+            if (mapBack) {
+                window._monthlyIssueMapMode = 'overview';
+                window._monthlyIssueSelectedFacility = '';
+                window._monthlyIssueGroupFilter = 'all';
+                rerender();
+                return;
+            }
+            const viewerClose = event.target.closest('[data-monthly-viewer-close]');
+            if (viewerClose) {
+                closeMonthlyIssueStructureViewer();
+                rerender();
+                return;
+            }
+            const mapZone = event.target.closest('[data-monthly-map-zone]');
+            if (mapZone) {
+                const groupKey = mapZone.dataset.monthlyMapZone || 'all';
+                const targetMode = mapZone.dataset.monthlyMapTarget || '';
+                const viewerZone = mapZone.dataset.monthlyViewerZone || getMonthlyIssueViewerZoneForGroup(groupKey);
+                window._monthlyIssueSelectedFacility = '';
+                window._monthlyIssueGroupFilter = groupKey;
+                if (targetMode === 'new' || targetMode === 'extension') {
+                    window._monthlyIssueMapMode = targetMode;
+                    rerender();
+                } else {
+                    openMonthlyIssueZoneViewer(groupKey, viewerZone);
+                }
+                return;
+            }
+            const facilityBadge = event.target.closest('[data-monthly-facility]');
+            if (facilityBadge) {
+                window._monthlyIssueSelectedFacility = facilityBadge.dataset.monthlyFacility || '';
+                const groupKey = facilityBadge.dataset.monthlyMapGroup || getMonthlyIssueStructureGroup(window._monthlyIssueSelectedFacility);
+                window._monthlyIssueGroupFilter = groupKey;
+                rerender();
+                openMonthlyIssueStructureViewer(window._monthlyIssueSelectedFacility, groupKey);
+                return;
+            }
+            if (event.target.closest('[data-monthly-clear-facility]')) {
+                window._monthlyIssueSelectedFacility = '';
+                rerender();
+                return;
+            }
+            const groupFilter = event.target.closest('[data-monthly-group-filter]');
+            if (groupFilter) {
+                window._monthlyIssueGroupFilter = groupFilter.dataset.monthlyGroupFilter || 'all';
+                window._monthlyIssueMapMode = window._monthlyIssueGroupFilter === 'new' || window._monthlyIssueGroupFilter === 'extension'
+                    ? window._monthlyIssueGroupFilter
+                    : 'overview';
+                window._monthlyIssueSelectedFacility = '';
+                monthlyIssueDrilldownState.location = '';
+                monthlyIssueDrilldownState.month = '';
+                rerender();
+                return;
+            }
+            const groupRow = event.target.closest('[data-monthly-group]');
+            if (groupRow) {
+                const groupKey = groupRow.dataset.monthlyGroup || '';
+                window._monthlyIssueExpandedGroups = window._monthlyIssueExpandedGroups || {};
+                window._monthlyIssueExpandedGroups[groupKey] = !window._monthlyIssueExpandedGroups[groupKey];
+                rerender();
+                return;
+            }
+            const dashboardRow = event.target.closest('.monthly-issue-dashboard-row[data-issue-key]');
+            if (dashboardRow && !event.target.closest('button, a, input, select')) {
+                const issue = dashboardIssueRegistry.get(dashboardRow.dataset.issueKey || '');
+                if (issue && typeof window.openFormaIssueDetail === 'function') {
+                    window.openFormaIssueDetail(issue);
+                }
+                return;
+            }
             const kpi = event.target.closest('.monthly-issue-kpi[data-status]');
             if (kpi) {
                 const statusKey = kpi.dataset.status || 'all';
                 const activeSubTab = window._monthlyIssueActiveSubTab || 'status';
-                const searchValue = document.getElementById('monthly-issue-search')?.value || '';
-                const query = String(searchValue || '').trim().toLowerCase();
-                const issues = (Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : []).filter(issue => {
-                    if (query && !getIssueLocation(issue).toLowerCase().includes(query)) return false;
-                    if (statusKey === 'all') return true;
-                    if (activeSubTab === 'status') {
-                        return getStatusGroup(issue) === statusKey;
-                    } else {
-                        if (statusKey === 'closed') {
-                            return getStatusGroup(issue) === 'closed';
-                        }
+                const allIssues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+                const issues = activeSubTab === 'status'
+                    ? getMonthlyIssueDashboardVisibleIssues(allIssues, { statusKey })
+                    : getMonthlyIssueDashboardVisibleIssues(allIssues).filter(issue => {
+                        if (statusKey === 'all') return true;
+                        if (statusKey === 'closed') return getStatusGroup(issue) === 'closed';
                         return getIssueTypeKey(issue) === statusKey;
-                    }
-                });
+                    });
                 
                 let title = '이슈 목록';
                 if (activeSubTab === 'status') {
@@ -1490,8 +2353,8 @@ function bindMonthlyIssueStatusTab() {
                         all: '전체 이슈 목록',
                         created: '생성 이슈 목록',
                         review: '검토 이슈 목록',
-                        delayed: '지연 이슈 목록',
-                        closed: '종료 이슈 목록'
+                        closed: '종료 이슈 목록',
+                        progress: '완료 이슈 목록'
                     };
                     title = titleMap[statusKey] || '이슈 목록';
                 } else {
@@ -1509,12 +2372,31 @@ function bindMonthlyIssueStatusTab() {
             }
             const monthButton = event.target.closest('.monthly-issue-month-button[data-month]');
             if (monthButton) {
-                openMonthIssueModal(monthButton.dataset.month || '');
+                const monthValue = monthButton.dataset.month || '';
+                window._monthlyIssueSelectedMonth = window._monthlyIssueSelectedMonth === monthValue ? '' : monthValue;
+                const monthInput = document.getElementById('monthly-issue-month');
+                if (monthInput) monthInput.value = window._monthlyIssueSelectedMonth || getMonthKey(new Date());
+                rerender();
                 return;
             }
             const target = event.target.closest('.monthly-issue-structure-cell[data-location], .bim-chart-clickable[data-location]');
             if (!target) return;
             openStructureIssueModal(target.dataset.location || '', target.dataset.month || '');
+        });
+        root.addEventListener('mouseover', event => {
+            const mapZone = event.target.closest('[data-monthly-map-zone]');
+            if (!mapZone) return;
+            const mapView = mapZone.closest('.monthly-issue-map-view[data-monthly-map-mode="overview"]');
+            const img = mapView?.querySelector('img');
+            if (img && mapView.dataset.monthlyMapHover) img.src = mapView.dataset.monthlyMapHover;
+        });
+        root.addEventListener('mouseout', event => {
+            const mapZone = event.target.closest('[data-monthly-map-zone]');
+            if (!mapZone) return;
+            const mapView = mapZone.closest('.monthly-issue-map-view[data-monthly-map-mode="overview"]');
+            if (!mapView || mapZone.contains(event.relatedTarget)) return;
+            const img = mapView.querySelector('img');
+            if (img && mapView.dataset.monthlyMapDefault) img.src = mapView.dataset.monthlyMapDefault;
         });
     }
 }
@@ -2050,32 +2932,89 @@ function getConstructionStructureAliases(structureName) {
     return CONSTRUCTION_STRUCTURE_MODEL_ALIASES[structureName] || [structureName];
 }
 
-function isConstructionStructureFolderNode(node) {
-    if (!node || typeof node !== 'object') return false;
-    const files = collectNodeFiles(node, []);
-    if (!files.length) return false;
-    const folderName = getNodeFolderName(node);
+const CONSTRUCTION_INSPECTOR_FOLDER_GROUPS = [
+    { key: 'temporary', label: '01 가시설', aliases: ['01 가시설', '가시설'] },
+    { key: 'new', label: '02 신설구조물', aliases: ['02 신설구조물', '신설구조물'] },
+    { key: 'extension', label: '03 증설구조물', aliases: ['03 증설구조물', '증설구조물'] },
+    { key: 'etc', label: '04 기타 구조물', aliases: ['04 기타 구조물', '기타 구조물', '기타구조물'] }
+];
+
+function findConstructionInspectorGroup(node) {
+    if (!node || typeof node !== 'object') return null;
+    const nameText = normalizeFolderText(getNodeFolderName(node));
     const pathText = normalizeFolderText(node.path || '');
-    const nameText = normalizeFolderText(folderName);
-    return pathText.includes(normalizeFolderText('신설구조물')) &&
-        !nameText.includes(normalizeFolderText('신설구조물')) &&
-        files.some(file => /\.rvt$/i.test(file.name || ''));
+    return CONSTRUCTION_INSPECTOR_FOLDER_GROUPS.find(group => {
+        return group.aliases.some(alias => {
+            const normAlias = normalizeFolderText(alias);
+            return nameText.includes(normAlias) || pathText.endsWith(normAlias);
+        });
+    }) || null;
 }
 
-function collectConstructionStructureFolders(node, output = []) {
+function collectConstructionInspectorGroupNodes(node, output = []) {
     if (!node || typeof node !== 'object') return output;
-    if (isConstructionStructureFolderNode(node)) {
-        output.push({
-            name: getNodeFolderName(node),
-            path: node.path || '',
-            folderId: node.folderId || '',
-            files: dedupeModels(collectNodeFiles(node, []))
-        });
+    const group = findConstructionInspectorGroup(node);
+    if (group) {
+        output.push({ group, node });
         return output;
     }
     if (Array.isArray(node.children)) {
-        node.children.forEach(child => collectConstructionStructureFolders(child, output));
+        node.children.forEach(child => collectConstructionInspectorGroupNodes(child, output));
     }
+    return output;
+}
+
+function getConstructionInspectorChildFolders(folderNode, group) {
+    const children = Array.isArray(folderNode?.children) ? folderNode.children : [];
+    const folderName = getNodeFolderName(folderNode) || group.label;
+    const folders = [{
+        key: `${group.key}:${folderNode.folderId || folderNode.path || folderName}:self`,
+        name: folderName,
+        displayName: `${group.label} 전체`,
+        groupKey: group.key,
+        groupLabel: group.label,
+        path: folderNode.path || folderName,
+        folderId: folderNode.folderId || '',
+        childCount: children.length,
+        files: dedupeModels(collectNodeFiles(folderNode, []))
+    }];
+    children
+        .filter(child => getNodeFolderName(child))
+        .forEach((child, index) => {
+            const files = dedupeModels(collectNodeFiles(child, []));
+            const name = getNodeFolderName(child);
+            const path = child.path || [folderNode.path, name].filter(Boolean).join(' / ');
+            folders.push({
+                key: `${group.key}:${child.folderId || path || name}:${index}`,
+                name,
+                displayName: name,
+                groupKey: group.key,
+                groupLabel: group.label,
+                path,
+                folderId: child.folderId || '',
+                childCount: Array.isArray(child.children) ? child.children.length : 0,
+                files
+            });
+        });
+    return folders;
+}
+
+function collectConstructionStructureFolders(tree) {
+    const groups = collectConstructionInspectorGroupNodes(tree, []);
+    const seen = new Set();
+    const output = [];
+    CONSTRUCTION_INSPECTOR_FOLDER_GROUPS.forEach(groupMeta => {
+        groups
+            .filter(item => item.group.key === groupMeta.key)
+            .forEach(item => {
+                getConstructionInspectorChildFolders(item.node, groupMeta).forEach(folder => {
+                    const dedupeKey = `${folder.groupKey}:${folder.folderId || folder.path || folder.name}`;
+                    if (seen.has(dedupeKey)) return;
+                    seen.add(dedupeKey);
+                    output.push(folder);
+                });
+            });
+    });
     return output;
 }
 
@@ -2099,42 +3038,67 @@ function normalizeConstructionModelUrn(urn) {
     return String(urn || '').replace(/^urn:/i, '');
 }
 
-function isConstructionInspectorModelLoaded(structureName = '') {
-    return !!structureName && window._constructionActiveViewerZone === `inspector:${structureName}`;
+function getConstructionInspectorViewerZoneKey(structure) {
+    return structure ? `inspector:${structure.key || structure.name}` : '';
+}
+
+function isConstructionInspectorModelLoaded(structure) {
+    return !!structure && window._constructionActiveViewerZone === getConstructionInspectorViewerZoneKey(structure);
+}
+
+function getConstructionInspectorTradeGroups(structure) {
+    const groups = {};
+    (structure?.files || []).forEach(file => {
+        const trade = getTradeLabelFromModelName(file.name);
+        if (!groups[trade]) groups[trade] = [];
+        groups[trade].push(file);
+    });
+    return Object.entries(groups).map(([trade, files]) => ({ trade, files }));
 }
 
 function renderConstructionInspectorFiles(structure) {
     const list = document.getElementById('bim-inspector-structure-list');
     if (!list) return;
     if (!structure) {
-        list.innerHTML = '<div class="bim-inspector-file-empty">구조물을 선택하면 공종별 RVT 파일이 표시됩니다.</div>';
+        list.innerHTML = '<div class="bim-inspector-file-empty">구조물 폴더를 선택하면 하위 폴더와 공종 요약이 표시됩니다.</div>';
         return;
     }
     if (!Array.isArray(structure.files) || !structure.files.length) {
-        list.innerHTML = '<div class="bim-inspector-file-empty">선택 구조물의 RVT 파일이 없습니다.</div>';
+        list.innerHTML = `
+            <div class="bim-inspector-folder-card">
+                <strong>${escapeHtml(structure.groupLabel || 'Autodesk Docs')}</strong>
+                <span>${escapeHtml(structure.name)}</span>
+                <small>이 하위 폴더에서 불러올 RVT 파일이 없습니다.</small>
+            </div>
+        `;
         return;
     }
-    const isLoaded = isConstructionInspectorModelLoaded(structure.name);
+    const isLoaded = isConstructionInspectorModelLoaded(structure);
     const hiddenUrns = window._constructionInspectorHiddenUrns || {};
-    list.innerHTML = structure.files.map(file => {
-        const trade = getTradeLabelFromModelName(file.name);
-        const version = file.versionNumber ? `v${file.versionNumber}` : '';
-        const updated = file.lastModifiedTime ? String(file.lastModifiedTime).slice(0, 10) : '';
-        const urn = file.urn || '';
-        const isHidden = !!hiddenUrns[normalizeConstructionModelUrn(urn)];
+    const tradeGroups = getConstructionInspectorTradeGroups(structure);
+    list.innerHTML = `
+        <div class="bim-inspector-folder-card">
+            <strong>${escapeHtml(structure.groupLabel || 'Autodesk Docs')}</strong>
+            <span>${escapeHtml(structure.name)}</span>
+            <small>하위 폴더 ${structure.childCount || 0}개 · RVT ${structure.files.length}개</small>
+        </div>
+        ${tradeGroups.map(group => {
+        const hiddenCount = group.files.filter(file => hiddenUrns[normalizeConstructionModelUrn(file.urn || '')]).length;
+        const isHidden = hiddenCount === group.files.length;
         return `
-            <button type="button" class="bim-inspector-file-card ${isLoaded ? 'is-loaded' : ''} ${isHidden ? 'is-hidden' : ''}" data-model-urn="${escapeHtml(urn)}" title="${escapeHtml(file.name)}">
+            <button type="button" class="bim-inspector-file-card ${isLoaded ? 'is-loaded' : ''} ${isHidden ? 'is-hidden' : ''}" data-trade="${escapeHtml(group.trade)}" title="${escapeHtml(group.trade)} 공종 표시/숨김">
                 <span class="bim-inspector-file-main">
-                    <mark>${escapeHtml(trade)}</mark>
-                    <strong>${escapeHtml(getShortModelFileName(file.name))}</strong>
+                    <mark>${escapeHtml(group.trade)}</mark>
+                    <strong>${escapeHtml(group.trade)} 공종</strong>
                 </span>
                 <span class="bim-inspector-file-side">
-                    <small>${escapeHtml([version, updated].filter(Boolean).join(' · ') || '최신 버전')}</small>
+                    <small>${group.files.length}개 RVT</small>
                     <i class="fas ${isHidden ? 'fa-eye-slash' : 'fa-eye'}" aria-hidden="true"></i>
                 </span>
             </button>
         `;
-    }).join('');
+    }).join('')}
+    `;
 }
 
 function renderConstructionInspectorSelection(structure) {
@@ -2144,7 +3108,7 @@ function renderConstructionInspectorSelection(structure) {
     const openBtn = document.getElementById('bim-inspector-open-model');
     if (!structure) {
         if (nameEl) nameEl.textContent = '모델을 선택해주세요';
-        if (metaEl) metaEl.textContent = '구조물을 선택하면 공종 파일과 3D 통합 모델을 확인할 수 있습니다.';
+        if (metaEl) metaEl.textContent = '상위 폴더 아래 하위 폴더를 선택하면 3D 통합 모델을 확인할 수 있습니다.';
         if (tagEl) tagEl.innerHTML = '';
         if (openBtn) openBtn.disabled = true;
         renderConstructionInspectorFiles(null);
@@ -2152,7 +3116,7 @@ function renderConstructionInspectorSelection(structure) {
     }
     const trades = Array.from(new Set((structure.files || []).map(file => getTradeLabelFromModelName(file.name))));
     if (nameEl) nameEl.textContent = structure.name;
-    if (metaEl) metaEl.textContent = `${structure.files.length}개 RVT 파일 · ${structure.path || 'Autodesk Docs'}`;
+    if (metaEl) metaEl.textContent = `${structure.groupLabel || 'Autodesk Docs'} · ${structure.path || structure.name}`;
     if (tagEl) tagEl.innerHTML = trades.map(trade => `<mark>${escapeHtml(trade)}</mark>`).join('');
     if (openBtn) openBtn.disabled = !Array.isArray(structure.files) || !structure.files.length;
     renderConstructionInspectorFiles(structure);
@@ -2166,16 +3130,16 @@ function setConstructionInspectorActive(name) {
 function getSelectedConstructionInspectorStructure() {
     const select = document.getElementById('bim-inspector-structure-select');
     const structures = window._constructionInspectorStructures || [];
-    return structures.find(item => item.name === select?.value) || null;
+    return structures.find(item => item.key === select?.value) || null;
 }
 
-function selectConstructionInspectorStructure(name) {
+function selectConstructionInspectorStructure(key) {
     const select = document.getElementById('bim-inspector-structure-select');
     const structures = window._constructionInspectorStructures || [];
-    const structure = structures.find(item => item.name === name) || null;
-    if (select) select.value = structure?.name || '';
+    const structure = structures.find(item => item.key === key) || null;
+    if (select) select.value = structure?.key || '';
     renderConstructionInspectorSelection(structure);
-    setConstructionInspectorActive(structure?.name || '');
+    setConstructionInspectorActive(structure?.key || '');
 }
 
 function shouldAutoRotateConstructionFile(file) {
@@ -2465,11 +3429,11 @@ function getConstructionInspectorLoadedModel(urn) {
     return loaded[key] || null;
 }
 
-function setConstructionInspectorFileVisibility(urn, visible) {
+function setConstructionInspectorFileVisibility(urn, visible, options = {}) {
     const viewer = getConstructionInspectorActiveViewer();
     const model = getConstructionInspectorLoadedModel(urn);
     if (!viewer || !model) {
-        setConstructionProgressNote('공종별 가시성은 3D 모델 보기로 통합 모델을 불러온 뒤 조절할 수 있습니다.');
+        if (!options.silent) setConstructionProgressNote('공종별 가시성은 3D 모델 보기로 통합 모델을 불러온 뒤 조절할 수 있습니다.');
         return false;
     }
 
@@ -2488,12 +3452,14 @@ function setConstructionInspectorFileVisibility(urn, visible) {
         const key = normalizeConstructionModelUrn(urn);
         if (visible) delete window._constructionInspectorHiddenUrns[key];
         else window._constructionInspectorHiddenUrns[key] = true;
-        renderConstructionInspectorFiles(getSelectedConstructionInspectorStructure());
-        setConstructionProgressNote(`${visible ? '표시' : '숨김'} 상태를 공종 파일 카드에 반영했습니다.`);
+        if (!options.silent) {
+            renderConstructionInspectorFiles(getSelectedConstructionInspectorStructure());
+            setConstructionProgressNote(`${visible ? '표시' : '숨김'} 상태를 공종 카드에 반영했습니다.`);
+        }
         return true;
     } catch (error) {
         console.warn('[Construction Inspector] visibility toggle failed:', error);
-        setConstructionProgressNote('공종 가시성 변경 중 오류가 발생했습니다.');
+        if (!options.silent) setConstructionProgressNote('공종 가시성 변경 중 오류가 발생했습니다.');
         return false;
     }
 }
@@ -2596,7 +3562,7 @@ async function loadConstructionInspectorStructureViewer(structure = null) {
     normalizeConstructionViewerNavigation(viewer);
     window._constructionActiveModelUrns = target.files.map(file => file.urn).filter(Boolean);
     window._constructionActiveModelNames = target.files.map(file => file.name).filter(Boolean);
-    window._constructionActiveViewerZone = `inspector:${target.name}`;
+    window._constructionActiveViewerZone = getConstructionInspectorViewerZoneKey(target);
     window._constructionInspectorLoadedModels = {};
     window._constructionInspectorHiddenUrns = {};
     target.files.forEach((file, index) => {
@@ -2644,7 +3610,15 @@ async function initConstructionInspectorPanel() {
             return;
         }
         select.innerHTML = '<option value="">모델을 선택해주세요</option>' +
-            structures.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
+            CONSTRUCTION_INSPECTOR_FOLDER_GROUPS.map(group => {
+                const items = structures.filter(item => item.groupKey === group.key);
+                if (!items.length) return '';
+                return `
+                    <optgroup label="${escapeHtml(group.label)}">
+                        ${items.map(item => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.displayName || item.name)}</option>`).join('')}
+                    </optgroup>
+                `;
+            }).join('');
         selectConstructionInspectorStructure('');
     } catch (error) {
         console.warn('[Construction Inspector] failed to initialize:', error);
@@ -2658,10 +3632,13 @@ async function initConstructionInspectorPanel() {
         const btn = event.target.closest('button.bim-inspector-file-card');
         if (!btn) return;
         const structure = getSelectedConstructionInspectorStructure();
-        if (structure && isConstructionInspectorModelLoaded(structure.name)) {
-            const urn = btn.dataset.modelUrn || '';
+        if (structure && isConstructionInspectorModelLoaded(structure)) {
+            const trade = btn.dataset.trade || '';
+            const tradeFiles = (structure.files || []).filter(file => getTradeLabelFromModelName(file.name) === trade);
             const hidden = btn.classList.contains('is-hidden');
-            setConstructionInspectorFileVisibility(urn, hidden);
+            tradeFiles.forEach(file => setConstructionInspectorFileVisibility(file.urn || '', hidden, { silent: true }));
+            renderConstructionInspectorFiles(structure);
+            setConstructionProgressNote(`${trade} 공종 ${tradeFiles.length}개 모델을 ${hidden ? '표시' : '숨김'} 처리했습니다.`);
             return;
         }
         loadConstructionInspectorStructureViewer();
@@ -2717,6 +3694,25 @@ async function getConstructionStructureModel(structureName, zone = 'new') {
         console.warn('[Construction Live] structure model not found:', structureName);
     }
     return best;
+}
+
+async function getConstructionStructureModels(structureName, zone = 'new') {
+    const cacheKey = `_constructionStructureModels_${zone}_${structureName}`;
+    if (window[cacheKey]) return window[cacheKey];
+    const tree = await fetchConstructionRvtTree();
+    const allModels = collectNodeFiles(tree, []);
+    const ranked = allModels
+        .map(model => ({ model, score: scoreConstructionStructureModel(model, structureName, zone) }))
+        .filter(item => item.score >= 100)
+        .sort((a, b) => b.score - a.score || String(a.model.name || '').localeCompare(String(b.model.name || ''), 'ko'));
+    const models = dedupeModels(ranked.map(item => item.model));
+    window[cacheKey] = models;
+    if (models.length) {
+        console.log('[Construction Live] structure models:', structureName, models.map(model => model.name));
+    } else {
+        console.warn('[Construction Live] structure models not found:', structureName);
+    }
+    return models;
 }
 
 function dedupeModels(models) {
@@ -2785,16 +3781,39 @@ function getConstructionViewStateKey(zone) {
     return CONSTRUCTION_VIEW_STATE_PREFIX + String(zone || 'default');
 }
 
+function vectorToConstructionViewArray(vector) {
+    if (!vector) return null;
+    return [Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0];
+}
+
+function getConstructionViewerCameraState(viewer) {
+    const nav = viewer?.navigation;
+    if (!nav) return null;
+    try {
+        return {
+            position: vectorToConstructionViewArray(nav.getPosition && nav.getPosition()),
+            target: vectorToConstructionViewArray(nav.getTarget && nav.getTarget()),
+            up: vectorToConstructionViewArray(nav.getCameraUpVector && nav.getCameraUpVector()),
+            pivot: vectorToConstructionViewArray(nav.getPivotPoint && nav.getPivotPoint())
+        };
+    } catch (error) {
+        console.warn('[Construction Progress] camera state capture skipped:', error);
+        return null;
+    }
+}
+
 function saveConstructionViewerState(zone) {
     const viewer = window.constructionProgressViewer;
-    const zoneMeta = CONSTRUCTION_ZONES[zone];
+    const stateKey = zone || window._constructionActiveViewerZone || 'default';
+    const zoneMeta = CONSTRUCTION_ZONES[stateKey];
     if (!viewer || typeof viewer.getState !== 'function') {
         setConstructionProgressNote('저장할 3D 뷰어 시점을 찾지 못했습니다.');
         return false;
     }
     try {
-        const state = viewer.getState({ viewport: true });
-        localStorage.setItem(getConstructionViewStateKey(zone), JSON.stringify(state));
+        const state = viewer.getState();
+        state.__constructionCamera = getConstructionViewerCameraState(viewer);
+        localStorage.setItem(getConstructionViewStateKey(stateKey), JSON.stringify(state));
         setConstructionProgressNote(`${zoneMeta ? zoneMeta.label : '현재'} 뷰 시점을 저장했습니다.`);
         return true;
     } catch (error) {
@@ -2805,12 +3824,33 @@ function saveConstructionViewerState(zone) {
 }
 
 function restoreConstructionViewerState(zone, viewer) {
-    if (!viewer || typeof viewer.restoreState !== 'function') return false;
+    if (!viewer) return false;
     try {
         const raw = localStorage.getItem(getConstructionViewStateKey(zone));
         if (!raw) return false;
         const state = JSON.parse(raw);
-        return viewer.restoreState(state, null, true);
+        const restored = typeof viewer.restoreState === 'function' ? viewer.restoreState(state, null, true) : false;
+        const camera = state.__constructionCamera;
+        const THREE_NS = window.THREE || (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.THREE);
+        if (camera && viewer.navigation && THREE_NS) {
+            const toVector = arr => Array.isArray(arr) ? new THREE_NS.Vector3(arr[0], arr[1], arr[2]) : null;
+            const position = toVector(camera.position);
+            const target = toVector(camera.target);
+            const up = toVector(camera.up);
+            const pivot = toVector(camera.pivot);
+            if (position && target && typeof viewer.navigation.setView === 'function') {
+                viewer.navigation.setView(position, target);
+            }
+            if (up && typeof viewer.navigation.setCameraUpVector === 'function') {
+                viewer.navigation.setCameraUpVector(up);
+            }
+            if (pivot && typeof viewer.navigation.setPivotPoint === 'function') {
+                viewer.navigation.setPivotPoint(pivot, true, true);
+            }
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+            return true;
+        }
+        return !!restored;
     } catch (error) {
         console.warn('[Construction Progress] restore view state failed:', error);
         return false;
@@ -2852,7 +3892,7 @@ function resizeConstructionViewCube() {
 }
 
 async function getConstructionMiniViewer() {
-    const container = document.getElementById('bim-progress-mini-viewer');
+    const container = await ensureConstructionViewerHostVisible();
     if (!container) return null;
 
     if (window.constructionProgressViewer && window.constructionProgressViewer.impl) {
@@ -2865,9 +3905,10 @@ async function getConstructionMiniViewer() {
     if (typeof viewerModule.initViewer !== 'function') return null;
 
     const viewer = await viewerModule.initViewer(container, true);
+    if (!viewer || !viewer.impl) return null;
     hideConstructionMiniViewerToolbar(viewer);
     resizeConstructionViewCube();
-    if (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.TOOLBAR_CREATED_EVENT) {
+    if (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.TOOLBAR_CREATED_EVENT && typeof viewer.addEventListener === 'function') {
         viewer.addEventListener(Autodesk.Viewing.TOOLBAR_CREATED_EVENT, () => {
             hideConstructionMiniViewerToolbar(viewer);
             resizeConstructionViewCube();
@@ -2876,6 +3917,41 @@ async function getConstructionMiniViewer() {
     setTimeout(resizeConstructionViewCube, 500);
     window.constructionProgressViewer = viewer;
     return viewer;
+}
+
+async function ensureConstructionViewerHostVisible() {
+    let container = document.getElementById('bim-progress-mini-viewer');
+    const dashboard = document.getElementById('construction-bim-dashboard');
+    const isHidden = (() => {
+        try {
+            return !dashboard || window.getComputedStyle(dashboard).display === 'none';
+        } catch (error) {
+            return !!dashboard && dashboard.style.display === 'none';
+        }
+    })();
+
+    if (isHidden && typeof window.switchTab === 'function') {
+        try {
+            await Promise.resolve(window.switchTab('construction'));
+        } catch (error) {
+            console.warn('[Construction Progress] switch to viewer tab failed:', error);
+        }
+    } else if (dashboard) {
+        dashboard.style.display = 'grid';
+        dashboard.style.position = 'relative';
+        dashboard.style.zIndex = '10';
+    }
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    container = document.getElementById('bim-progress-mini-viewer');
+    if (container && typeof container.getBoundingClientRect === 'function') {
+        const rect = container.getBoundingClientRect();
+        if ((rect.width <= 0 || rect.height <= 0) && dashboard) {
+            dashboard.style.display = 'grid';
+            await new Promise(resolve => setTimeout(resolve, 80));
+        }
+    }
+    return document.getElementById('bim-progress-mini-viewer');
 }
 
 function openConstructionViewerLayer(zone) {
@@ -2964,8 +4040,8 @@ async function openConstructionStructureViewer(structureName, zone = 'new') {
     setConstructionViewerTitle(`${structureName} 3D Viewer`);
     setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>에서 ${structureName} RVT 모델을 찾는 중입니다.`);
 
-    const model = await getConstructionStructureModel(structureName, zone);
-    if (!model?.urn) {
+    const models = await getConstructionStructureModels(structureName, zone);
+    if (!models.length) {
         setConstructionProgressNote(`${structureName}과 일치하는 RVT 파일을 찾지 못해 ${zoneMeta.label} 구역 모델로 이동합니다.`);
         return openConstructionZoneViewer(zone);
     }
@@ -2987,20 +4063,30 @@ async function openConstructionStructureViewer(structureName, zone = 'new') {
     }
 
     const viewerModule = await import('./viewer.js');
-    if (typeof viewerModule.loadModelMulti !== 'function') {
+    if (models.length > 1 && typeof viewerModule.loadAggregated !== 'function') {
+        setConstructionProgressNote('모델 병합 로더를 찾을 수 없습니다.');
+        return false;
+    }
+    if (models.length === 1 && typeof viewerModule.loadModelMulti !== 'function') {
         setConstructionProgressNote('단일 모델 로더를 찾을 수 없습니다.');
         return false;
     }
 
-    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${model.name} 모델을 불러오는 중입니다.`);
-    await viewerModule.loadModelMulti(viewer, model.urn, { preserveView: false });
-    window._constructionActiveModelUrns = [model.urn];
-    window._constructionActiveModelNames = [model.name];
-    window._constructionActiveViewerZone = `structure:${structureName}`;
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${structureName} 공종별 모델 ${models.length}개를 불러오는 중입니다.`);
+    if (models.length > 1) {
+        await viewerModule.loadAggregated(viewer, models);
+    } else {
+        await viewerModule.loadModelMulti(viewer, models[0].urn, { preserveView: false });
+    }
+    window._constructionActiveModelUrns = models.map(model => model.urn || model.versionId || model.id).filter(Boolean);
+    window._constructionActiveModelNames = models.map(model => model.name).filter(Boolean);
+    const viewStateKey = `structure:${structureName}`;
+    window._constructionActiveViewerZone = viewStateKey;
 
     try {
         if (typeof viewer.resize === 'function') viewer.resize();
-        if (typeof viewer.fitToView === 'function') viewer.fitToView();
+        const restored = restoreConstructionViewerState(viewStateKey, viewer);
+        if (!restored && typeof viewer.fitToView === 'function') viewer.fitToView();
         if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
             viewer.impl.invalidate(true, true, true);
         }
@@ -3010,7 +4096,7 @@ async function openConstructionStructureViewer(structureName, zone = 'new') {
     }
 
     setConstructionViewerTitle(`${structureName} 3D Viewer`);
-    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${model.name} 모델을 표시 중입니다.`);
+    setConstructionProgressNote(`<강북정수장 증설공사 BIM 용역>의 ${structureName} 공종별 모델 ${models.length}개를 표시 중입니다.`);
     return true;
 }
 
@@ -3227,16 +4313,24 @@ async function initConstructionLiveCctvPanel() {
     }
 }
 
+function preloadConstructionLiveMaps() {
+    if (window._constructionLiveMapCache) return window._constructionLiveMapCache;
+    window._constructionLiveMapCache = {};
+    Object.entries(CONSTRUCTION_LIVE_MAPS).forEach(([zone, mapInfo]) => {
+        const image = new Image();
+        image.decoding = 'async';
+        image.loading = 'eager';
+        image.src = mapInfo.src;
+        window._constructionLiveMapCache[zone] = image;
+    });
+    return window._constructionLiveMapCache;
+}
+
 function setLiveMapZone(zone) {
     const mapInfo = CONSTRUCTION_LIVE_MAPS[zone] || CONSTRUCTION_LIVE_MAPS.new;
     const map = document.getElementById('bim-progress-map');
     const img = document.getElementById('bim-live-map-img');
-    if (img) {
-        img.src = mapInfo.src;
-        img.alt = mapInfo.alt;
-        img.style.display = '';
-        if (img.nextElementSibling) img.nextElementSibling.style.display = 'none';
-    }
+    const cache = preloadConstructionLiveMaps();
     if (map) {
         map.dataset.activeLiveZone = zone;
         map.classList.toggle('is-live-new', zone === 'new');
@@ -3246,6 +4340,13 @@ function setLiveMapZone(zone) {
     document.querySelectorAll('.bim-dashboard-zone-tabs [data-live-zone]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.liveZone === zone);
     });
+    if (img) {
+        const cachedImage = cache[zone];
+        img.src = cachedImage?.complete && cachedImage.naturalWidth ? cachedImage.src : mapInfo.src;
+        img.alt = mapInfo.alt;
+        img.style.display = '';
+        if (img.nextElementSibling) img.nextElementSibling.style.display = 'none';
+    }
     document.querySelectorAll('.bim-live-hotspot').forEach(btn => btn.classList.remove('active'));
     updateLinkedCctvPanel('');
     setConstructionProgressNote(`${mapInfo.label} 영역도를 표시 중입니다.`);
@@ -3271,6 +4372,7 @@ async function focusLiveStructure(structureName, zone = 'new') {
 }
 
 function initConstructionLivePanel() {
+    preloadConstructionLiveMaps();
     const tabs = document.querySelectorAll('.bim-dashboard-zone-tabs [data-live-zone]');
     tabs.forEach(tab => {
         if (tab.dataset.liveBound) return;
@@ -3339,7 +4441,6 @@ function initConstructionProgressPanel() {
     if (!map || map.dataset.bound) return;
     map.dataset.bound = 'true';
     const backBtn = document.getElementById('bim-progress-viewer-back');
-    const mergeBtn = document.getElementById('bim-progress-viewer-merge');
     const saveViewBtn = document.getElementById('bim-progress-viewer-save-view');
     const resetBtn = document.getElementById('bim-progress-viewer-reset');
     if (backBtn) {
@@ -3347,14 +4448,6 @@ function initConstructionProgressPanel() {
             event.preventDefault();
             event.stopPropagation();
             closeConstructionViewerLayer();
-        });
-    }
-    if (mergeBtn && !mergeBtn.dataset.bound) {
-        mergeBtn.dataset.bound = 'true';
-        mergeBtn.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            openConstructionMergePanel();
         });
     }
     if (saveViewBtn && !saveViewBtn.dataset.bound) {
@@ -4030,7 +5123,7 @@ function openModelUpdateInViewer(urn, name) {
             window.focusIssueOnViewer('', urn);
             return;
         }
-        import('./viewer.js?v=20260813-runtime-merge-rotation1')
+        import('./viewer.js?v=20260825-viewer-fixed-sdk1')
             .then(async mod => {
                 const container = document.getElementById('preview');
                 if (!container || !mod.initViewer || !mod.loadModel) return;

@@ -776,7 +776,7 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
  * main.js — Client-side orchestrator
  */
 
-import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260813-runtime-merge-rotation1';
+import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260825-viewer-fixed-sdk1';
 import { initAiPanel } from './ai-panel.js';
 import { explorer } from './explorer.js';
 import './harness-context.js';
@@ -2781,11 +2781,21 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     
     try {
-        // Initialize 3D Viewer inside the #preview container
-        viewerInstance = await initViewer(document.getElementById('preview'));
-        window.viewer = viewerInstance; // Expose to global window scope
-        window.myGlobalViewer = viewerInstance;
-        window.projectViewer = viewerInstance;
+        // Initialize the main project Viewer only when its container is visible.
+        // Other tabs such as Example1 own their own Viewer and must not be torn down here.
+        const previewEl = document.getElementById('preview');
+        const previewVisible = previewEl && previewEl.clientWidth > 0 && previewEl.clientHeight > 0 && window.currentMainTab === 'project';
+        if (previewVisible) {
+            viewerInstance = await initViewer(previewEl);
+            if (viewerInstance) {
+                window.viewer = viewerInstance; // Expose to global window scope
+                window.myGlobalViewer = viewerInstance;
+                window.projectViewer = viewerInstance;
+            }
+        } else {
+            viewerInstance = null;
+            console.log('[Main] 프로젝트 뷰어는 현재 탭에서 숨겨져 있어 초기화를 건너뜁니다.');
+        }
         window.loadModel = loadModel;
         window.onModelSelected = onModelSelected;
         console.log('[Main] Viewer initialized successfully.');
@@ -2862,13 +2872,13 @@ window.addEventListener('DOMContentLoaded', async () => {
                     explorer.showRootProjects();
                 }
 
-                // Switch to dashboard tab
+                // Switch to the default visible tab
                 if (typeof window.switchTab === 'function') {
-                    window.switchTab('dashboard');
+                    window.switchTab('example1');
                 } else {
-                    var dashboardTabBtn = document.getElementById('main-tab-dashboard-btn') || document.getElementById('nav-dashboard') || document.querySelector('.nav-item[data-tab="dashboard"]');
-                    if (dashboardTabBtn) {
-                        dashboardTabBtn.click();
+                    var defaultTabBtn = document.getElementById('main-tab-example1-btn') || document.querySelector('.nav-item[data-tab="example1"]');
+                    if (defaultTabBtn) {
+                        defaultTabBtn.click();
                     }
                 }
             });
@@ -2889,10 +2899,10 @@ window.addEventListener('DOMContentLoaded', async () => {
             window.initColumnSettings();
         }
         
-        // 🚨 [새로고침 시 대시보드 탭 메인 유지 보장 - 사용자가 수동으로 탭을 변경하지 않은 경우에만]
+        // 🚨 [새로고침 시 기본 탭 유지 보장 - 사용자가 수동으로 탭을 변경하지 않은 경우에만]
         if (!window.userHasSwitchedTab && typeof window.switchTab === 'function') {
             const urlParams = new URLSearchParams(window.location.search);
-            const targetTab = urlParams.get('tab') || 'dashboard';
+            const targetTab = urlParams.get('tab') || 'example1';
             const currentTab = window.currentMainTab || targetTab;
             if (currentTab === targetTab) {
                 window._initialMainTabApplied = false;
@@ -2912,15 +2922,24 @@ window.addEventListener('DOMContentLoaded', async () => {
 async function checkLoginStatus() {
     const profileSec = document.getElementById('login-profile-section');
     if (!profileSec) return false;
+
+    if (typeof window.refreshHeaderAuthProfile === 'function') {
+        return await window.refreshHeaderAuthProfile();
+    }
     
     try {
-        const resp = await fetch('/api/auth/profile');
-        if (!resp.ok) throw new Error();
+        const resp = await fetch('/api/auth/profile', {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const profile = await resp.json();
+        const displayName = profile.name || profile.displayName || profile.email || profile.id;
         
-        if (profile.name) {
+        if (displayName) {
             profileSec.innerHTML = `
-                <span class="profile-name"><i class="fas fa-user-circle"></i> ${profile.name}님</span>
+                <span class="profile-name"><i class="fas fa-user-circle"></i> ${displayName}님</span>
                 <a href="/api/auth/logout" class="logout-btn" title="로그아웃"><i class="fas fa-sign-out-alt"></i> 로그아웃</a>
             `;
             return true;
@@ -4338,6 +4357,11 @@ function initRegularModelIssueButton() {
     }
 
     // 선택 변경 리스너 등록
+    if (!activeViewer.container) {
+        console.warn('[Issue Button] viewer container가 아직 없어 선택 리스너 등록을 건너뜁니다.');
+        return;
+    }
+
     if (!activeViewer.container.dataset.regularIssueSelectionBound) {
         activeViewer.container.dataset.regularIssueSelectionBound = "true";
 
@@ -6048,7 +6072,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 console.warn('[focusIssueOnViewer] targetUrn 없고 뷰어도 없음 — 탭 전환만 완료.');
                 if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
             } else {
-                import('./viewer.js?v=20260813-runtime-merge-rotation1').then(function(mod) {
+                import('./viewer.js?v=20260825-viewer-fixed-sdk1').then(function(mod) {
                     if (!mod.initViewer || !mod.loadModel) return;
                     var container = document.getElementById('preview');
                     if (!container) return;

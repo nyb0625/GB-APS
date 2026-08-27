@@ -616,7 +616,7 @@ class FolderExplorer {
 
         try {
             // Import and call view load function dynamically from viewer.js
-            const { initViewer, loadModel } = await import('./viewer.js?v=20260813-runtime-merge-rotation1');
+            const { initViewer, loadModel } = await import('./viewer.js?v=20260825-viewer-fixed-sdk1');
             if (!window.projectViewer || window.projectViewer === window.cctvViewer) {
                 window.projectViewer = await initViewer(document.getElementById('preview'), false);
             }
