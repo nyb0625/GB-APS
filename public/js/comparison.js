@@ -727,7 +727,7 @@ function compareProperties(propsA, propsB) {
 export async function runHiddenDiff(projectId, prevViewerUrn, curViewerUrn, onProgress) {
     if (onProgress) onProgress(5);
     const host = document.createElement('div');
-    host.id = 'example2-hidden-comparison-host';
+    host.id = 'hidden-comparison-host';
     host.style.cssText = [
         'position:fixed',
         'left:-12000px',

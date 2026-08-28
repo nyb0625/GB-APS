@@ -4885,6 +4885,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             if (loc.viewerState && typeof v.restoreState === 'function') {
                 try {
                     v.restoreState(loc.viewerState);
+                    if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(v);
                     console.log('[applySmartIssueFocus] Forma viewerState 3D 카메라 뷰포트 복원 성공!');
                 } catch(e) {
                     console.warn('[applySmartIssueFocus] viewerState 복원 오류:', e);
@@ -4903,6 +4904,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         } else if (v.navigation && typeof v.navigation.setView === 'function' && typeof THREE !== 'undefined') {
                             v.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
                         }
+                        if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(v);
                         if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
                     } catch(e) {
                         console.warn('[applySmartIssueFocus] viewport apply error:', e);

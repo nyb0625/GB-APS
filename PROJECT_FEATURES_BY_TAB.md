@@ -8,7 +8,7 @@
 
 ### 상단 공통 영역
 
-- 메인 탭 전환: 예시1, 예시2, 월간 이슈 현황, 시공 BIM 대시보드, 대시보드, 프로젝트, 이슈, 현장 관제(CCTV)
+- 메인 탭 전환: 홈, BIM, 현장, 프로젝트, 이슈, 현장 관제(CCTV)
 - 모델 선택 드롭다운: 로컬 OSS 또는 Autodesk Docs에서 조회된 BIM 모델을 선택해 3D 뷰어에 로드
 - BIM 모델 업로드: `.rvt`, `.f3d`, `.nwd`, `.dwg`, `.zip` 파일 업로드 후 APS Model Derivative 변환 요청
 - Autodesk Docs 로그인: Autodesk OAuth 로그인, 프로필/토큰 기반 ACC 문서 및 이슈 연동
@@ -60,11 +60,12 @@
 - `GET /api/cctv/live`
 - `GET /api/cctv/proxy/:protocol/:host`
 
-## 2. 예시2 탭
+## 2. 예시2 / BIM TEST 탭
 
 ### 목적
 
-작업 일정과 CDE 업무 흐름을 나란히 배치해, 공정/업무/성과물 흐름을 함께 관리하는 샘플 화면입니다.
+이 탭은 2026-08-28 기준으로 현재 플랫폼에서 제거하고 `archived-features/BIM_TEST` 폴더에 보관했습니다.
+작업 일정, BIM 모델 업데이트, 프로젝트 파일 검색 기능을 묶어 실험하던 샘플 화면입니다.
 
 ### 작업 일정 영역
 
@@ -97,8 +98,8 @@
 
 ### 연결 모듈/API
 
-- `public/js/example2-schedule.js`
-- `public/js/example2-cde-tasks.js`
+- `archived-features/BIM_TEST/example2-schedule.js`
+- `public/js/example2-cde-tasks.js` (현재 저장소에 파일 없음)
 - `GET /api/issues/forma-gangbuk?limit=1000&workSchedule=1`
 - `GET /api/tasks/workflow`
 - `PUT /api/tasks/workflow`
@@ -133,7 +134,7 @@
 - `GET /api/issues/forma-gangbuk?limit=500`
 - `POST /api/issues/export-pdf`
 
-## 4. 시공 BIM 대시보드 탭
+## 4. 현장 탭
 
 ### 목적
 
@@ -179,6 +180,23 @@
 - 단계별 색상 강조
 - 시뮬레이션 초기화
 - 배정 데이터 localStorage 저장
+
+### 레이아웃 개편 전 기능 인벤토리
+
+- `공사 진행률`: `bim-dashboard-progress`, `bim-progress-donuts` 기반 구역별 공정률 요약 카드입니다. 현재 개편안에서는 화면에서 숨기되 DOM은 보존합니다.
+- `공사 일정`: `bim-dashboard-schedule`, `bim-construction-gantt` 기반 현재 진행 공사 Gantt입니다. 이슈 총건수, 새로고침, 주간/월간/연간 전환, 확대 모달 기능을 유지합니다.
+- `BIM 모델 간편조회`: `bim-dashboard-inspector` 기반 구조물 폴더 선택, 공종 태그, 3D 모델 열기, 부재 검색, 거리/치수 측정, 단면 보기, 부재 정보 기능입니다. 현재 개편안에서는 화면에서 숨기되 DOM은 보존합니다.
+- `현장 실시간 연동`: `bim-dashboard-live`, `bim-progress-map`, `bim-live-hotspots`, `bim-progress-mini-viewer` 기반 영역도/핫스팟/3D 미니 뷰어 연동 패널입니다.
+- `현장 CCTV`: `bim-dashboard-cctv`, `bim-live-cctv-grid` 기반 실시간 CCTV 스트림, 구조물 연계 CCTV 강조, 현장 관제 탭 이동 기능입니다.
+- `업무 운영/숨김 지표`: `bim-dashboard-operations`, `bim-dashboard-hidden-metrics` 기반 주간 업무, 검색, 통계, 타임라인, 간섭/이슈 집계 연결 DOM입니다. 현재 화면에서는 숨김 상태로 기능 연결용 DOM만 유지합니다.
+
+### 2026-08-27 레이아웃 개편 방향
+
+- 상단: `공사 일정`을 전체 폭으로 배치하고 상단 영역을 하단보다 조금 높게 가져갑니다.
+- 하단 좌측: `현장 실시간 연동` 패널을 배치합니다.
+- 하단 우측: `현장 CCTV` 패널을 배치합니다.
+- 하단 좌우 비율은 40:60으로 구성합니다.
+- `공사 진행률`과 `BIM 모델 간편조회`는 삭제하지 않고 숨김 처리해 향후 재배치 가능성을 보존합니다.
 
 ### 연결 모듈/API
 
@@ -482,8 +500,8 @@ Forma/ACC 이슈와 로컬 이슈, 비교 이슈를 통합 조회하고 PDF 보�
 - `localStorage.weekly_4d_phase_data`: 4D 시공 시뮬레이션 단계 배정
 - `localStorage.cctv_field_issues`: CCTV 현장 이슈
 - `localStorage.cctv_saved_view_*`: CCTV 채널별 3D 카메라 시점
-- `localStorage.example2_local_workflow_tasks_v3`: 예시2 CDE 업무 백업
-- `data/workflow_tasks.json`: 예시2 CDE 업무 서버 저장 파일
+- `localStorage.example2_local_workflow_tasks_v3`: 보관된 BIM TEST CDE 업무 백업
+- `data/workflow_tasks.json`: 보관된 BIM TEST CDE 업무 서버 저장 파일
 - `data/issues.json`: 로컬 이슈 저장 파일
 
 ## 참고 파일
@@ -491,11 +509,11 @@ Forma/ACC 이슈와 로컬 이슈, 비교 이슈를 통합 조회하고 PDF 보�
 - `public/index.html`: 메인 탭/화면 구조
 - `public/js/main.js`: 프로젝트, 이슈, Forma, PDF, 비교 이슈 중심 로직
 - `public/js/dashboard.js`: 메인 대시보드
-- `public/js/construction-dashboard.js`: 월간 이슈 현황 및 시공 BIM 대시보드
+- `public/js/construction-dashboard.js`: BIM/현장 탭
 - `public/js/cctv.js`: 현장 관제 탭
 - `public/js/example1-cctv.js`: 예시1 CCTV/날씨/D-Day
-- `public/js/example2-schedule.js`: 예시2 작업 일정
-- `public/js/example2-cde-tasks.js`: 예시2 CDE 업무 워크플로우
+- `archived-features/BIM_TEST/example2-schedule.js`: 보관된 BIM TEST 작업 일정/모델 업데이트/검색 모듈
+- `public/js/example2-cde-tasks.js`: 문서상 예시2 CDE 업무 모듈, 현재 저장소에 파일 없음
 - `public/js/viewer.js`: Autodesk Viewer 래퍼
 - `public/js/model-visibility.js`: 모델 가시성/병합/회전
 - `public/js/diff-viewer.js`: 버전 비교 뷰어

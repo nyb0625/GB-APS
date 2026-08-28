@@ -293,12 +293,14 @@ router.get('/:hub_id/projects/:project_id/contents', async (req, res, next) => {
             const extData = (attrs.extension && attrs.extension.data) ? attrs.extension.data : {};
             const displayName = attrs.displayName || attrs.title || extData.name || attrs.name || 'Unknown';
             
+            const tipVersionId = (!isFolder && item.relationships?.tip?.data?.id) ? item.relationships.tip.data.id : null;
             return {
                 id: item.id,
                 name: displayName,
                 folder: isFolder,
                 vNumber,
                 versionNumber: vNumber,
+                versionId: tipVersionId,
                 revisionDisplayLabel: versionMeta.revisionDisplayLabel || null,
                 formaVersionLabel: versionMeta.formaVersionLabel || (vNumber != null ? String(vNumber) : ''),
                 versionType: versionMeta.versionType || '',

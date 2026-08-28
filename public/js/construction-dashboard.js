@@ -66,7 +66,8 @@ const CONSTRUCTION_ZONES = {
 const CONSTRUCTION_ZONE_FOLDER_KEYWORDS = {
     new: ['신설', '신설구조물', '신설 구조물'],
     extension: ['본공사', '증설', '증설구조물', '증설 구조물'],
-    priority: ['우선시공', '우선시공분', '우선 시공', '가시설']
+    priority: ['우선시공', '우선시공분', '우선 시공', '가시설'],
+    etc: ['기타', '기타구조물', '기타 구조물']
 };
 const CONSTRUCTION_TARGET_HUB_ID = 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const CONSTRUCTION_TARGET_PROJECT_ID = 'b.374bde3a-83a3-4dd5-80c2-2e01ddeac719';
@@ -74,7 +75,7 @@ const CONSTRUCTION_VIEW_STATE_PREFIX = 'gangbuk_construction_progress_view_';
 const CONSTRUCTION_LIVE_MAPS = {
     new: {
         label: '신설 구조물',
-        src: '/images/construction-live-new.png?v=20260824-live3',
+        src: '/images/construction-live-new-user.png?v=20260827-user-map1',
         alt: '강북정수장 신설 구조물 영역도'
     },
     extension: {
@@ -89,6 +90,9 @@ const CONSTRUCTION_LIVE_MAPS = {
     }
 };
 const CONSTRUCTION_SCHEDULE_DATA_URL = '/data/construction-schedule.json?v=20260824-schedule1';
+const CONSTRUCTION_SCHEDULE_SOURCE_FILE_NAME = '정수처리시설_공정표.xlsx';
+const CONSTRUCTION_SCHEDULE_SOURCE_FILE_URL = `/data/${encodeURIComponent(CONSTRUCTION_SCHEDULE_SOURCE_FILE_NAME)}`;
+const CONSTRUCTION_SCHEDULE_SOURCE_STORAGE_KEY = 'aps.constructionSchedule.sourceName';
 let constructionProgressItems = CONSTRUCTION_PROGRESS_ITEMS.slice();
 const CONSTRUCTION_STRUCTURE_MODEL_ALIASES = {
     '착수정': ['착수정', '착수', 'intake'],
@@ -613,6 +617,13 @@ function getMonthlyIssueStructureGroupMeta(groupKey) {
     return MONTHLY_ISSUE_STRUCTURE_GROUPS.find(group => group.key === groupKey) || MONTHLY_ISSUE_STRUCTURE_GROUPS[0];
 }
 
+function isMonthlyIssueGroupExpanded(groupKey) {
+    if ((window._monthlyIssueGroupFilter || 'all') !== 'all') return true;
+    const expanded = window._monthlyIssueExpandedGroups || {};
+    if (Object.prototype.hasOwnProperty.call(expanded, groupKey)) return !!expanded[groupKey];
+    return groupKey !== 'new';
+}
+
 function getMonthlyIssueStructureLabelKey(label) {
     return normalizeText(label).replace(/\s+/g, '');
 }
@@ -754,7 +765,6 @@ function summarizeByLocationAndMonth(issues, months, groupBy = 'status') {
 
 function summarizeMonthlyIssueRowsForDisplay(rows, months, groupBy = 'status') {
     const groupFilter = window._monthlyIssueGroupFilter || 'all';
-    const expanded = window._monthlyIssueExpandedGroups || {};
     const grouped = new Map();
 
     rows.forEach(row => {
@@ -804,15 +814,13 @@ function summarizeMonthlyIssueRowsForDisplay(rows, months, groupBy = 'status') {
             count: group.count,
             months: group.months
         };
-        if (groupFilter === 'all' && !expanded[groupKey]) return [groupRow];
+        if (!isMonthlyIssueGroupExpanded(groupKey)) return [groupRow];
         return [groupRow, ...group.children];
     });
 }
 
 function renderGantt(issues) {
     const wrap = document.getElementById('bim-issue-gantt-wrap');
-    const total = document.getElementById('bim-dashboard-issue-total');
-    if (total) total.textContent = `이슈 ${issues.length}건`;
     window._constructionIssueCache = issues;
     if (!wrap) return;
 
@@ -2128,7 +2136,7 @@ function renderMonthlyIssueMatrix(issues = []) {
     const chartStyle = `--bim-month-count:${months.length}; --bim-month-width:${monthWidth}px; --monthly-issue-yaxis-width:220px; --monthly-issue-row-height:${rowHeight}px; --monthly-issue-axis-height:${axisHeight}px; --monthly-issue-body-height:${MONTHLY_ISSUE_MATRIX_BODY_HEIGHT}px;`;
     const yAxis = displayRows.map(row => {
         if (row.isGroup) {
-            const expanded = window._monthlyIssueGroupFilter !== 'all' || !!window._monthlyIssueExpandedGroups?.[row.groupKey];
+            const expanded = isMonthlyIssueGroupExpanded(row.groupKey);
             return `
         <button type="button" class="bim-chart-yitem monthly-issue-yitem monthly-issue-group-row" data-monthly-group="${escapeHtml(row.groupKey)}" title="${escapeHtml(`${row.location} ${expanded ? '접기' : '펼치기'}`)}">
             <span class="monthly-issue-group-label">
@@ -2322,7 +2330,7 @@ function bindMonthlyIssueStatusTab() {
             if (groupRow) {
                 const groupKey = groupRow.dataset.monthlyGroup || '';
                 window._monthlyIssueExpandedGroups = window._monthlyIssueExpandedGroups || {};
-                window._monthlyIssueExpandedGroups[groupKey] = !window._monthlyIssueExpandedGroups[groupKey];
+                window._monthlyIssueExpandedGroups[groupKey] = !isMonthlyIssueGroupExpanded(groupKey);
                 rerender();
                 return;
             }
@@ -2579,9 +2587,11 @@ function normalizeConstructionScheduleItem(item, index) {
     };
 }
 
-async function loadConstructionScheduleData() {
+async function loadConstructionScheduleData(force = false) {
+    if (force) window._constructionScheduleDataPromise = null;
     if (window._constructionScheduleDataPromise) return window._constructionScheduleDataPromise;
-    window._constructionScheduleDataPromise = fetch(CONSTRUCTION_SCHEDULE_DATA_URL, { credentials: 'same-origin' })
+    const scheduleUrl = `${CONSTRUCTION_SCHEDULE_DATA_URL}${CONSTRUCTION_SCHEDULE_DATA_URL.includes('?') ? '&' : '?'}ts=${Date.now()}`;
+    window._constructionScheduleDataPromise = fetch(scheduleUrl, { credentials: 'same-origin' })
         .then(resp => {
             if (!resp.ok) throw new Error(`construction schedule fetch failed: HTTP ${resp.status}`);
             return resp.json();
@@ -2590,6 +2600,13 @@ async function loadConstructionScheduleData() {
             const items = Array.isArray(data) ? data : (data.items || []);
             constructionProgressItems = items.map(normalizeConstructionScheduleItem);
             window._constructionScheduleSource = data.source || {};
+            const sourceName = window._constructionScheduleSource.originalFileName || window._constructionScheduleSource.sourceName;
+            const storedSourceName = localStorage.getItem(CONSTRUCTION_SCHEDULE_SOURCE_STORAGE_KEY);
+            if (sourceName && (sourceName !== CONSTRUCTION_SCHEDULE_SOURCE_FILE_NAME || !storedSourceName)) {
+                persistScheduleSourceDisplayName(sourceName);
+            } else if (storedSourceName && sourceName === CONSTRUCTION_SCHEDULE_SOURCE_FILE_NAME) {
+                window._constructionScheduleSource.originalFileName = storedSourceName;
+            }
             renderConstructionGantt(constructionScheduleState.zone || '');
             renderProgressDonuts(constructionScheduleState.zone || '');
             return constructionProgressItems;
@@ -2626,11 +2643,12 @@ function addDays(date, count) {
 
 let constructionScheduleState = {
     zone: '',
-    scale: 'week',
+    scale: 'year',
     week: formatDateKey(getMonday(new Date())),
     month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
     year: String(new Date().getFullYear())
 };
+let constructionScheduleItemRegistry = new Map();
 
 function getScheduleRange(settings = constructionScheduleState) {
     const scale = settings.scale || 'week';
@@ -2682,11 +2700,12 @@ function getScheduleRange(settings = constructionScheduleState) {
     const end = addDays(start, 6);
     end.setHours(23, 59, 59, 999);
     const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+    const weekMeta = getWeekMeta(start);
     return {
         scale: 'week',
         start,
         end,
-        label: `${formatShortDate(start)} ~ ${formatShortDate(end)}`,
+        label: `${weekMeta.label} · ${formatShortDate(start)} ~ ${formatShortDate(end)}`,
         cols: Array.from({ length: 7 }, (_, idx) => {
             const date = addDays(start, idx);
             return {
@@ -2711,6 +2730,80 @@ function getScheduleColumnIndex(range, value, fallback) {
     return date < range.start ? 0 : Math.max(0, range.cols.length - 1);
 }
 
+function getScheduleTimelinePosition(range, date) {
+    const currentDate = getStartOfDay(date);
+    if (range.scale === 'year') {
+        if (currentDate <= range.start) return 0;
+        if (currentDate > range.end) return range.cols.length;
+        const monthIndex = currentDate.getMonth();
+        return Math.max(0, Math.min(range.cols.length, currentDate.getDate() === 1 ? monthIndex : monthIndex + 1));
+    }
+
+    const start = getStartOfDay(range.start).getTime();
+    const end = addDays(getStartOfDay(range.end), 1).getTime();
+    const current = currentDate.getTime();
+    if (end <= start) return 0;
+    const ratio = Math.max(0, Math.min(1, (current - start) / (end - start)));
+    return ratio * range.cols.length;
+}
+
+function getConstructionScheduleBarSegments(range, item) {
+    const itemStart = parseIssueDate(item.startDate);
+    const itemEnd = parseIssueDate(item.endDate || item.startDate) || itemStart;
+    if (!itemStart || !itemEnd || itemStart > range.end || itemEnd < range.start) return [];
+
+    const visibleStart = itemStart < range.start ? range.start : itemStart;
+    const visibleEndExclusive = addDays(itemEnd > range.end ? range.end : itemEnd, 1);
+    const todayBoundary = addDays(new Date(), 1);
+    const segments = [];
+
+    const elapsedEnd = todayBoundary < visibleEndExclusive ? todayBoundary : visibleEndExclusive;
+    if (elapsedEnd > visibleStart) {
+        const start = getScheduleTimelinePosition(range, visibleStart);
+        const end = getScheduleTimelinePosition(range, elapsedEnd);
+        segments.push({ type: 'elapsed', start, span: Math.max(0.08, end - start) });
+    }
+
+    const futureStart = todayBoundary > visibleStart ? todayBoundary : visibleStart;
+    if (visibleEndExclusive > futureStart) {
+        const start = getScheduleTimelinePosition(range, futureStart);
+        const end = getScheduleTimelinePosition(range, visibleEndExclusive);
+        segments.push({ type: 'future', start, span: Math.max(0.08, end - start) });
+    }
+
+    return segments;
+}
+
+function getScheduleTodayColumnIndex(range) {
+    const today = getStartOfDay(new Date());
+    if (today < range.start || today > range.end) return -1;
+    if (range.scale === 'year') {
+        return today.getFullYear() === range.start.getFullYear() ? today.getMonth() : -1;
+    }
+    const todayKey = formatDateKey(today);
+    return range.cols.findIndex(col => col.key === todayKey);
+}
+
+function getScheduleRowMetrics(items, expanded = false) {
+    const groupCount = items.reduce((count, item, index) => {
+        const previous = items[index - 1];
+        return count + (index === 0 || previous?.zone !== item.zone ? 1 : 0);
+    }, 0);
+    const rowCount = Math.max(1, items.length + groupCount + 1);
+    if (expanded) {
+        return { rowCount, rowHeight: 32, headHeight: 34 };
+    }
+
+    const wrap = document.getElementById('bim-construction-gantt');
+    const availableHeight = Math.max(180, wrap?.clientHeight || 360);
+    const rowHeight = Math.max(10, Math.min(32, Math.floor(availableHeight / rowCount)));
+    return {
+        rowCount,
+        rowHeight,
+        headHeight: Math.max(16, Math.min(34, rowHeight + 4))
+    };
+}
+
 function isConstructionItemInProgress(item, now = new Date()) {
     const start = parseIssueDate(item.startDate);
     const end = parseIssueDate(item.endDate || item.startDate);
@@ -2723,18 +2816,18 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
     const wrap = document.getElementById('bim-construction-gantt');
     if (!wrap && !expanded) return '';
     const allItems = getProgressItems(activeZone);
-    const items = expanded ? allItems : allItems.filter(item => isConstructionItemInProgress(item));
-    if (!items.length) {
-        const empty = expanded
-            ? '<div class="bim-week-empty">표시할 공정 데이터가 없습니다.</div>'
-            : '<div class="bim-week-empty">현재 진행 중인 공사가 없습니다. 전체 일정은 크게 보기에서 확인하세요.</div>';
-        if (wrap && !expanded) wrap.innerHTML = empty;
-        return empty;
-    }
-
     const range = getScheduleRange(settings);
+    const isInSelectedRange = item => {
+        const itemStart = parseIssueDate(item.startDate);
+        const itemEnd = parseIssueDate(item.endDate || item.startDate) || itemStart;
+        return itemStart && itemEnd && itemStart <= range.end && itemEnd >= range.start;
+    };
+    const items = expanded ? allItems : allItems.filter(isInSelectedRange);
     const colCount = range.cols.length;
     const controlSuffix = expanded ? '-expanded' : '';
+    const todayColumnIndex = getScheduleTodayColumnIndex(range);
+    const rowMetrics = getScheduleRowMetrics(items, expanded);
+    constructionScheduleItemRegistry = new Map(items.map(item => [String(item.id), item]));
     const scaleTabs = ['week', 'month', 'year'].map(scale => {
         const meta = {
             week: { label: '주간', icon: 'fa-calendar-week' },
@@ -2754,19 +2847,38 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
                 <option value="month"${range.scale === 'month' ? ' selected' : ''}>월간</option>
                 <option value="year"${range.scale === 'year' ? ' selected' : ''}>연간</option>
             </select>
-            <input id="bim-construction-schedule-week${controlSuffix}" class="bim-filter-input" type="date" value="${escapeHtml(formatDateKey(range.start))}" style="display:${range.scale === 'week' ? 'block' : 'none'};">
+            <input id="bim-construction-schedule-week${controlSuffix}" class="bim-filter-input" type="week" value="${escapeHtml(getWeekMeta(range.start).key)}" title="기준 주차 선택" style="display:${range.scale === 'week' ? 'block' : 'none'};">
             <input id="bim-construction-schedule-month${controlSuffix}" class="bim-filter-input" type="month" value="${escapeHtml(settings.month)}" style="display:${range.scale === 'month' ? 'block' : 'none'};">
             <input id="bim-construction-schedule-year${controlSuffix}" class="bim-filter-input" type="number" min="2000" max="2100" value="${escapeHtml(settings.year)}" style="display:${range.scale === 'year' ? 'block' : 'none'};">
         </div>
-    ` : `
+    ` : '';
+    const inlineControls = `
         <div class="bim-schedule-quick-controls" role="group" aria-label="공사 일정 범위">
             ${scaleTabs}
+            <input id="bim-construction-schedule-week" class="bim-filter-input bim-schedule-range-input" type="week" value="${escapeHtml(getWeekMeta(range.start).key)}" title="기준 주차 선택" style="display:${range.scale === 'week' ? 'block' : 'none'};">
+            <input id="bim-construction-schedule-month" class="bim-filter-input bim-schedule-range-input" type="month" value="${escapeHtml(settings.month)}" title="기준 월 선택" style="display:${range.scale === 'month' ? 'block' : 'none'};">
+            <input id="bim-construction-schedule-year" class="bim-filter-input bim-schedule-range-input year" type="number" min="2000" max="2100" value="${escapeHtml(settings.year)}" title="기준 연도 선택" style="display:${range.scale === 'year' ? 'block' : 'none'};">
             <button id="bim-construction-schedule-expand" type="button" class="bim-icon-btn" title="공사 일정 크게 보기"><i class="fas fa-up-right-and-down-left-from-center"></i></button>
         </div>
     `;
 
+    if (!expanded) {
+        const title = document.getElementById('bim-construction-schedule-title');
+        const controls = document.getElementById('bim-construction-schedule-head-controls');
+        if (title) title.textContent = `공사 일정 · ${range.label}`;
+        if (controls) controls.innerHTML = inlineControls;
+    }
+
+    if (!items.length) {
+        const empty = expanded
+            ? '<div class="bim-week-empty">표시할 공정 데이터가 없습니다.</div>'
+            : '<div class="bim-week-empty">선택한 기간에 표시할 공정 데이터가 없습니다.</div>';
+        if (wrap && !expanded) wrap.innerHTML = empty;
+        return empty;
+    }
+
     const headers = range.cols.map(col => `
-        <div class="bim-schedule-cell bim-schedule-head bim-schedule-day${col.weekend ? ' weekend' : ''}">
+        <div class="bim-schedule-cell bim-schedule-head bim-schedule-day${col.weekend ? ' weekend' : ''}${todayColumnIndex >= 0 && range.cols[todayColumnIndex]?.key === col.key ? ' today' : ''}">
             <span>${escapeHtml(col.label)}</span>${col.subLabel ? `<small>${escapeHtml(col.subLabel)}</small>` : ''}
         </div>
     `).join('');
@@ -2782,25 +2894,26 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
         const itemStart = parseIssueDate(item.startDate);
         const itemEnd = parseIssueDate(item.endDate || item.startDate) || itemStart;
         const overlaps = itemStart <= range.end && itemEnd >= range.start;
-        const start = overlaps ? getScheduleColumnIndex(range, item.startDate, range.start) : 0;
-        const end = overlaps ? getScheduleColumnIndex(range, item.endDate || item.startDate, itemStart || range.start) : -1;
-        const span = Math.max(1, end - start + 1);
+        const barSegments = overlaps ? getConstructionScheduleBarSegments(range, item) : [];
+        const detailTitle = `${item.name || ''}\n${item.description || '등록된 작업내용이 없습니다.'}\n${item.startDate || '-'} ~ ${item.endDate || '-'}`;
         return `
             ${groupRow}
-            <div class="bim-schedule-cell bim-schedule-left" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
-            <div class="bim-schedule-plot" title="${escapeHtml(item.name)} ${escapeHtml(item.startDate)} ~ ${escapeHtml(item.endDate)}">
-                ${overlaps ? `<div class="bim-schedule-bar" style="--start:${start}; --span:${span}; --task-color:${item.color};"></div>` : '<div class="bim-schedule-outside">기간 외</div>'}
-            </div>
-            <div class="bim-schedule-cell bim-schedule-progress">${item.progress}%</div>
+            <button type="button" class="bim-schedule-cell bim-schedule-left bim-schedule-detail-trigger" data-schedule-item-id="${escapeHtml(item.id)}" title="${escapeHtml(detailTitle)}">${escapeHtml(item.name)}</button>
+            <button type="button" class="bim-schedule-plot bim-schedule-detail-trigger${todayColumnIndex >= 0 ? ' has-today' : ''}" data-schedule-item-id="${escapeHtml(item.id)}" title="${escapeHtml(detailTitle)}">
+                ${barSegments.length ? barSegments.map((segment, segmentIndex) => `
+                    <div class="bim-schedule-bar ${segment.type}${segmentIndex === 0 ? ' is-first' : ''}${segmentIndex === barSegments.length - 1 ? ' is-last' : ''}" style="--start:${segment.start.toFixed(3)}; --span:${segment.span.toFixed(3)}; --task-color:${item.color};"></div>
+                `).join('') : '<div class="bim-schedule-outside">기간 외</div>'}
+            </button>
+            <button type="button" class="bim-schedule-cell bim-schedule-progress bim-schedule-detail-trigger" data-schedule-item-id="${escapeHtml(item.id)}" title="${escapeHtml(detailTitle)}">${item.progress}%</button>
         `;
     }).join('');
 
     const html = `
-        <div class="bim-schedule-toolbar">
+        ${expanded ? `<div class="bim-schedule-toolbar">
             <div class="bim-schedule-title">${expanded ? '전체 공사 일정' : '현재 진행 공사'} · ${range.label}</div>
             ${scaleControl}
-        </div>
-        <div class="bim-construction-schedule${expanded ? ' expanded' : ''}" style="--schedule-days:${colCount};">
+        </div>` : ''}
+        <div class="bim-construction-schedule${expanded ? ' expanded' : ''}${todayColumnIndex >= 0 ? ' has-today' : ''}${rowMetrics.rowHeight <= 14 ? ' is-compact' : ''}" style="--schedule-days:${colCount}; --today-index:${todayColumnIndex}; --schedule-row-count:${rowMetrics.rowCount}; --schedule-row-height:${rowMetrics.rowHeight}px; --schedule-head-height:${rowMetrics.headHeight}px;">
             <div class="bim-schedule-cell bim-schedule-left bim-schedule-head">공종</div>
             ${headers}
             <div class="bim-schedule-cell bim-schedule-progress bim-schedule-head">%</div>
@@ -2813,21 +2926,21 @@ function renderConstructionSchedule(activeZone = '', settings = constructionSche
 
 function renderConstructionGantt(activeZone = '') {
     constructionScheduleState.zone = activeZone || '';
-    constructionScheduleState.scale = constructionScheduleState.scale || 'week';
+    constructionScheduleState.scale = constructionScheduleState.scale || 'year';
     renderConstructionSchedule(activeZone, constructionScheduleState, false);
 }
 
 function setConstructionScheduleScale(scale) {
     if (!['week', 'month', 'year'].includes(scale)) return;
     constructionScheduleState.scale = scale;
-    renderConstructionSchedule(constructionScheduleState.zone || '', constructionScheduleState, false);
+    updateInlineConstructionSchedule();
 }
 
 function openConstructionScheduleModal() {
     const modal = document.getElementById('bim-timeline-modal');
     const body = document.getElementById('bim-timeline-modal-body');
     if (!modal || !body) return;
-    constructionScheduleState.scale = constructionScheduleState.scale || 'week';
+    constructionScheduleState.scale = constructionScheduleState.scale || 'year';
     body.innerHTML = renderConstructionSchedule(constructionScheduleState.zone, constructionScheduleState, true);
     const title = modal.querySelector('.bim-task-dialog-head span');
     if (title) title.textContent = '간단 공사 일정';
@@ -2835,14 +2948,261 @@ function openConstructionScheduleModal() {
     modal.setAttribute('aria-hidden', 'false');
 }
 
+function getScheduleSourceModal() {
+    let modal = document.getElementById('bim-schedule-source-modal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'bim-schedule-source-modal';
+    modal.className = 'bim-schedule-source-modal';
+    modal.innerHTML = `
+        <div class="bim-schedule-source-dialog" role="dialog" aria-modal="true" aria-labelledby="bim-schedule-source-title">
+            <div class="bim-schedule-source-head">
+                <i class="fas fa-file-excel" style="color:#86efac;"></i>
+                <strong id="bim-schedule-source-title">기준 엑셀 파일</strong>
+                <button type="button" class="bim-schedule-source-close" data-schedule-source-close title="닫기" aria-label="닫기">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="bim-schedule-source-body">
+                <div class="bim-schedule-source-name">
+                    <i class="fas fa-table"></i>
+                    <span id="bim-schedule-source-display">${escapeHtml(getScheduleSourceDisplayName())}</span>
+                </div>
+                <input id="bim-schedule-source-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                <div id="bim-schedule-source-status" class="bim-schedule-source-status">교체할 .xlsx 파일을 선택하세요.</div>
+            </div>
+            <div class="bim-schedule-source-actions">
+                <a id="bim-schedule-source-download" class="bim-schedule-source-action" href="${CONSTRUCTION_SCHEDULE_SOURCE_FILE_URL}" download="${escapeHtml(getScheduleSourceDisplayName())}">
+                    <i class="fas fa-download"></i>
+                    <span>다운로드</span>
+                </a>
+                <button id="bim-schedule-source-replace" type="button" class="bim-schedule-source-action primary" disabled>
+                    <i class="fas fa-upload"></i>
+                    <span>교체</span>
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    bindScheduleSourceModal(modal);
+    return modal;
+}
+
+function getScheduleSourceDisplayName() {
+    return window._constructionScheduleSource?.originalFileName ||
+        window._constructionScheduleSource?.sourceName ||
+        localStorage.getItem(CONSTRUCTION_SCHEDULE_SOURCE_STORAGE_KEY) ||
+        CONSTRUCTION_SCHEDULE_SOURCE_FILE_NAME;
+}
+
+function persistScheduleSourceDisplayName(name) {
+    if (!name) return;
+    try {
+        localStorage.setItem(CONSTRUCTION_SCHEDULE_SOURCE_STORAGE_KEY, name);
+    } catch (err) {}
+}
+
+function setScheduleSourceDisplayName(name) {
+    const displayName = name || getScheduleSourceDisplayName();
+    persistScheduleSourceDisplayName(displayName);
+    window._constructionScheduleSource = {
+        ...(window._constructionScheduleSource || {}),
+        originalFileName: displayName
+    };
+    const label = document.getElementById('bim-schedule-source-display');
+    if (label) label.textContent = displayName;
+    const download = document.getElementById('bim-schedule-source-download');
+    if (download) {
+        download.href = `${CONSTRUCTION_SCHEDULE_SOURCE_FILE_URL}?v=${Date.now()}`;
+        download.setAttribute('download', displayName);
+        download.title = `${displayName} 다운로드`;
+    }
+}
+
+async function refreshScheduleSourceMeta() {
+    try {
+        const response = await fetch(`/api/schedule-source/status?ts=${Date.now()}`, { credentials: 'same-origin' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (data.sourceName) {
+            setScheduleSourceDisplayName(data.sourceName);
+        } else {
+            setScheduleSourceDisplayName(localStorage.getItem(CONSTRUCTION_SCHEDULE_SOURCE_STORAGE_KEY) || data.fileName);
+        }
+        return data;
+    } catch (err) {
+        console.warn('[Construction Schedule] failed to load schedule source status:', err);
+        return null;
+    }
+}
+
+function setScheduleSourceStatus(message, type = '') {
+    const status = document.getElementById('bim-schedule-source-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.classList.toggle('error', type === 'error');
+    status.classList.toggle('success', type === 'success');
+}
+
+function closeScheduleSourceModal() {
+    const modal = document.getElementById('bim-schedule-source-modal');
+    if (modal) modal.classList.remove('open');
+}
+
+function openScheduleSourceModal() {
+    const modal = getScheduleSourceModal();
+    const input = document.getElementById('bim-schedule-source-input');
+    const replace = document.getElementById('bim-schedule-source-replace');
+    if (input) input.value = '';
+    if (replace) replace.disabled = true;
+    setScheduleSourceDisplayName();
+    refreshScheduleSourceMeta();
+    setScheduleSourceStatus('교체할 .xlsx 파일을 선택하세요.');
+    modal.classList.add('open');
+}
+
+async function replaceScheduleSourceFile() {
+    const input = document.getElementById('bim-schedule-source-input');
+    const replace = document.getElementById('bim-schedule-source-replace');
+    const file = input?.files?.[0];
+    if (!file) {
+        setScheduleSourceStatus('교체할 파일을 먼저 선택해 주세요.', 'error');
+        return;
+    }
+    if (!/\.xlsx$/i.test(file.name || '')) {
+        setScheduleSourceStatus('.xlsx 파일만 교체할 수 있습니다.', 'error');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    if (replace) replace.disabled = true;
+    setScheduleSourceStatus('기준 엑셀 파일을 교체하는 중입니다...');
+
+    try {
+        const response = await fetch('/api/schedule-source/replace', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin'
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error) {
+            if (response.status === 404) {
+                throw new Error('업로드 API가 아직 서버에 반영되지 않았습니다. 서버를 재시작한 뒤 다시 시도해 주세요.');
+            }
+            throw new Error(data.error || `업로드 실패 (${response.status})`);
+        }
+        const download = document.getElementById('bim-schedule-source-download');
+        setScheduleSourceDisplayName(data.sourceName || file.name);
+        if (download) download.href = `${CONSTRUCTION_SCHEDULE_SOURCE_FILE_URL}?v=${Date.now()}`;
+        await loadConstructionScheduleData(true);
+        setScheduleSourceStatus(`교체 완료: ${data.sourceName || file.name} · 일정 ${data.itemCount || constructionProgressItems.length}건 반영`, 'success');
+        if (typeof window.showNotification === 'function') {
+            window.showNotification('기준 엑셀 파일을 교체했습니다.');
+        }
+    } catch (err) {
+        setScheduleSourceStatus(err.message || '기준 엑셀 파일 교체에 실패했습니다.', 'error');
+        if (replace) replace.disabled = false;
+    }
+}
+
+function bindScheduleSourceModal(modal) {
+    if (!modal || modal.dataset.bound) return;
+    modal.dataset.bound = 'true';
+    modal.addEventListener('click', event => {
+        if (event.target === modal || event.target.closest('[data-schedule-source-close]')) {
+            closeScheduleSourceModal();
+            return;
+        }
+        if (event.target.closest('#bim-schedule-source-replace')) {
+            replaceScheduleSourceFile();
+        }
+    });
+    modal.addEventListener('change', event => {
+        if (event.target.id !== 'bim-schedule-source-input') return;
+        const file = event.target.files?.[0];
+        const replace = document.getElementById('bim-schedule-source-replace');
+        const valid = !!file && /\.xlsx$/i.test(file.name || '');
+        if (replace) replace.disabled = !valid;
+        setScheduleSourceStatus(file
+            ? (valid ? `선택됨: ${file.name}` : '.xlsx 파일만 선택할 수 있습니다.')
+            : '교체할 .xlsx 파일을 선택하세요.',
+            file && !valid ? 'error' : '');
+    });
+}
+
+function getConstructionScheduleItem(itemId) {
+    return constructionScheduleItemRegistry.get(String(itemId || '')) || null;
+}
+
+function closeConstructionScheduleDetailPopup() {
+    const modal = document.getElementById('bim-schedule-detail-modal');
+    if (modal) modal.remove();
+}
+
+function openConstructionScheduleDetailPopup(itemId) {
+    const item = getConstructionScheduleItem(itemId);
+    if (!item) return;
+    const zoneMeta = CONSTRUCTION_ZONES[item.zone] || {};
+    const description = item.description || '등록된 작업내용이 없습니다.';
+    closeConstructionScheduleDetailPopup();
+    const modal = document.createElement('div');
+    modal.id = 'bim-schedule-detail-modal';
+    modal.className = 'bim-schedule-detail-modal open';
+    modal.innerHTML = `
+        <div class="bim-schedule-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="bim-schedule-detail-title">
+            <div class="bim-schedule-detail-head">
+                <i class="fas fa-list-check" style="color:${escapeHtml(zoneMeta.color || item.color || '#38bdf8')};"></i>
+                <strong id="bim-schedule-detail-title">${escapeHtml(item.name || '공사 일정')}</strong>
+                <button type="button" class="bim-schedule-detail-close" data-schedule-detail-close title="닫기" aria-label="닫기">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="bim-schedule-detail-body">
+                <dl>
+                    <div>
+                        <dt>구분</dt>
+                        <dd>${escapeHtml(item.category || zoneMeta.label || '-')}</dd>
+                    </div>
+                    <div>
+                        <dt>기간</dt>
+                        <dd>${escapeHtml(item.startMonth || item.startDate || '-')} ~ ${escapeHtml(item.endMonth || item.endDate || '-')}</dd>
+                    </div>
+                    <div>
+                        <dt>진행률</dt>
+                        <dd>${escapeHtml(item.progress)}%</dd>
+                    </div>
+                </dl>
+                <section>
+                    <h4>작업내용</h4>
+                    <p>${escapeHtml(description)}</p>
+                </section>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', event => {
+        if (event.target === modal || event.target.closest('[data-schedule-detail-close]')) {
+            closeConstructionScheduleDetailPopup();
+        }
+    });
+}
+
 function updateExpandedConstructionSchedule() {
     const body = document.getElementById('bim-timeline-modal-body');
     if (!body) return;
     constructionScheduleState.scale = document.getElementById('bim-construction-schedule-scale-expanded')?.value || constructionScheduleState.scale || 'week';
-    constructionScheduleState.week = formatDateKey(getMonday(parseIssueDate(document.getElementById('bim-construction-schedule-week-expanded')?.value) || new Date()));
+    constructionScheduleState.week = formatDateKey(parseWeekKey(document.getElementById('bim-construction-schedule-week-expanded')?.value));
     constructionScheduleState.month = document.getElementById('bim-construction-schedule-month-expanded')?.value || constructionScheduleState.month;
     constructionScheduleState.year = document.getElementById('bim-construction-schedule-year-expanded')?.value || constructionScheduleState.year;
     body.innerHTML = renderConstructionSchedule(constructionScheduleState.zone, constructionScheduleState, true);
+}
+
+function updateInlineConstructionSchedule() {
+    constructionScheduleState.week = formatDateKey(parseWeekKey(document.getElementById('bim-construction-schedule-week')?.value));
+    constructionScheduleState.month = document.getElementById('bim-construction-schedule-month')?.value || constructionScheduleState.month;
+    constructionScheduleState.year = document.getElementById('bim-construction-schedule-year')?.value || constructionScheduleState.year;
+    renderConstructionSchedule(constructionScheduleState.zone || '', constructionScheduleState, false);
 }
 
 function renderProgressDonuts(activeZone = '') {
@@ -3182,7 +3542,14 @@ function normalizeConstructionViewerNavigation(viewer) {
             viewer.navigation.setUpVector(up);
         }
         if (typeof viewer.navigation.setRequestTransition === 'function') {
-            viewer.navigation.setRequestTransition(true);
+            viewer.navigation.setRequestTransition(false);
+        }
+        const camera = typeof viewer.navigation.getCamera === 'function' ? viewer.navigation.getCamera() : null;
+        if (camera?.up && typeof camera.up.copy === 'function') {
+            camera.up.copy(up);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
         }
     } catch (error) {
         console.warn('[Construction Inspector] navigation normalization skipped:', error);
@@ -3661,6 +4028,7 @@ async function initConstructionInspectorPanel() {
 }
 
 function scoreConstructionStructureModel(model, structureName, zone = 'new') {
+    if (zone && !modelBelongsToZone(model, zone)) return 0;
     const aliases = getConstructionStructureAliases(structureName).map(normalizeFolderText).filter(Boolean);
     const nameText = normalizeFolderText(model.name || '');
     const folderText = normalizeFolderText(model.folderPath || '');
@@ -3793,7 +4161,7 @@ function getConstructionViewerCameraState(viewer) {
         return {
             position: vectorToConstructionViewArray(nav.getPosition && nav.getPosition()),
             target: vectorToConstructionViewArray(nav.getTarget && nav.getTarget()),
-            up: vectorToConstructionViewArray(nav.getCameraUpVector && nav.getCameraUpVector()),
+            up: [0, 0, 1],
             pivot: vectorToConstructionViewArray(nav.getPivotPoint && nav.getPivotPoint())
         };
     } catch (error) {
@@ -3848,8 +4216,10 @@ function restoreConstructionViewerState(zone, viewer) {
                 viewer.navigation.setPivotPoint(pivot, true, true);
             }
             if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+            normalizeConstructionViewerNavigation(viewer);
             return true;
         }
+        normalizeConstructionViewerNavigation(viewer);
         return !!restored;
     } catch (error) {
         console.warn('[Construction Progress] restore view state failed:', error);
@@ -4022,6 +4392,7 @@ async function openConstructionZoneViewer(zone) {
         if (typeof viewer.resize === 'function') viewer.resize();
         const restored = restoreConstructionViewerState(zone, viewer);
         if (!restored && typeof viewer.fitToView === 'function') viewer.fitToView();
+        normalizeConstructionViewerNavigation(viewer);
         if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
             viewer.impl.invalidate(true, true, true);
         }
@@ -4087,6 +4458,7 @@ async function openConstructionStructureViewer(structureName, zone = 'new') {
         if (typeof viewer.resize === 'function') viewer.resize();
         const restored = restoreConstructionViewerState(viewStateKey, viewer);
         if (!restored && typeof viewer.fitToView === 'function') viewer.fitToView();
+        normalizeConstructionViewerNavigation(viewer);
         if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
             viewer.impl.invalidate(true, true, true);
         }
@@ -4264,35 +4636,39 @@ function renderConstructionLiveCctvCards(channels = [], preferredStructure = '')
     const activeChannel = findConstructionCctvChannel(usable, activeStructure);
     const title = activeChannel.title || activeChannel.name || activeChannel.structureName;
     const poster = activeChannel.img || '/img/lapse/lapse_1.jpg';
+    const sideChannels = usable
+        .filter(channel => channel !== activeChannel)
+        .slice(0, 4);
     grid.dataset.activeStructure = activeChannel.structureName || activeStructure;
     grid.innerHTML = `
         <div class="bim-live-cctv-feature" data-cctv-structure="${escapeHtml(activeChannel.structureName || '')}" data-cctv-id="${escapeHtml(activeChannel.id || '')}">
             <div class="bim-live-cctv-stage">
                 <video class="bim-live-cctv-video" muted autoplay playsinline poster="${escapeHtml(poster)}"></video>
+                <span class="bim-live-cctv-selected-badge"><i class="fas fa-location-crosshairs"></i> 선택된 구조물 현장</span>
                 <span class="bim-live-cctv-source">출처: 경찰청 UTIC</span>
             </div>
             <div class="bim-live-cctv-caption">${escapeHtml(activeChannel.structureName || title)}<small>${escapeHtml(title)}</small></div>
         </div>
-        <label class="bim-live-cctv-switch">
-            <span>다른 뷰로 이동</span>
-            <select id="bim-live-cctv-select" aria-label="CCTV 뷰 선택">
-                ${usable.map((channel, index) => `
-                    <option value="${index}" ${channel === activeChannel ? 'selected' : ''}>
-                        ${escapeHtml(channel.structureName || channel.title || channel.name || `CCTV ${index + 1}`)}
-                    </option>
-                `).join('')}
-            </select>
-        </label>
+        <div class="bim-live-cctv-side-grid" aria-label="연계 CCTV 목록">
+            ${sideChannels.map((channel, index) => {
+                const sideTitle = channel.title || channel.name || channel.structureName || `CCTV ${index + 1}`;
+                const sidePoster = channel.img || '/img/lapse/lapse_1.jpg';
+                return `
+                    <figure data-cctv-structure="${escapeHtml(channel.structureName || '')}" data-cctv-id="${escapeHtml(channel.id || '')}" data-cctv-index="${index}">
+                        <video class="bim-live-cctv-video" muted autoplay playsinline poster="${escapeHtml(sidePoster)}"></video>
+                        <figcaption>${escapeHtml(channel.structureName || sideTitle)}<small>${escapeHtml(sideTitle)}</small></figcaption>
+                    </figure>
+                `;
+            }).join('')}
+        </div>
     `;
 
-    playConstructionCctvVideo(grid.querySelector('video'), activeChannel.streamUrl || '');
-    const select = grid.querySelector('#bim-live-cctv-select');
-    if (select) {
-        select.addEventListener('change', event => {
-            const next = usable[Number(event.target.value)] || usable[0];
-            renderConstructionLiveCctvCards(channels, next.structureName);
-        });
-    }
+    playConstructionCctvVideo(grid.querySelector('.bim-live-cctv-feature video'), activeChannel.streamUrl || '');
+    grid.querySelectorAll('.bim-live-cctv-side-grid figure').forEach((card, index) => {
+        const channel = sideChannels[index];
+        playConstructionCctvVideo(card.querySelector('video'), channel?.streamUrl || '');
+        card.addEventListener('click', () => renderConstructionLiveCctvCards(channels, channel?.structureName || ''));
+    });
 }
 
 async function initConstructionLiveCctvPanel() {
@@ -4413,12 +4789,53 @@ function initConstructionProgressPanel() {
                 setConstructionScheduleScale(scaleBtn.dataset.scheduleScale);
                 return;
             }
-            if (event.target.closest('#bim-construction-schedule-expand')) openConstructionScheduleModal();
+            if (event.target.closest('#bim-construction-schedule-expand')) {
+                openConstructionScheduleModal();
+                return;
+            }
+            const scheduleItem = event.target.closest('[data-schedule-item-id]');
+            if (scheduleItem) {
+                openConstructionScheduleDetailPopup(scheduleItem.dataset.scheduleItemId);
+            }
+        });
+        gantt.addEventListener('change', event => {
+            if (event.target.id === 'bim-construction-schedule-week' ||
+                event.target.id === 'bim-construction-schedule-month' ||
+                event.target.id === 'bim-construction-schedule-year') {
+                updateInlineConstructionSchedule();
+            }
+        });
+    }
+    const scheduleHeadControls = document.getElementById('bim-construction-schedule-head-controls');
+    if (scheduleHeadControls && !scheduleHeadControls.dataset.bound) {
+        scheduleHeadControls.dataset.bound = 'true';
+        scheduleHeadControls.addEventListener('click', event => {
+            const scaleBtn = event.target.closest('[data-schedule-scale]');
+            if (scaleBtn) {
+                setConstructionScheduleScale(scaleBtn.dataset.scheduleScale);
+                return;
+            }
+            if (event.target.closest('#bim-construction-schedule-expand')) {
+                openConstructionScheduleModal();
+            }
+        });
+        scheduleHeadControls.addEventListener('change', event => {
+            if (event.target.id === 'bim-construction-schedule-week' ||
+                event.target.id === 'bim-construction-schedule-month' ||
+                event.target.id === 'bim-construction-schedule-year') {
+                updateInlineConstructionSchedule();
+            }
         });
     }
     const timelineModalBody = document.getElementById('bim-timeline-modal-body');
     if (timelineModalBody && !timelineModalBody.dataset.constructionScheduleBound) {
         timelineModalBody.dataset.constructionScheduleBound = 'true';
+        timelineModalBody.addEventListener('click', event => {
+            const scheduleItem = event.target.closest('[data-schedule-item-id]');
+            if (scheduleItem) {
+                openConstructionScheduleDetailPopup(scheduleItem.dataset.scheduleItemId);
+            }
+        });
         timelineModalBody.addEventListener('change', event => {
             if (event.target.id === 'bim-construction-schedule-scale-expanded' ||
                 event.target.id === 'bim-construction-schedule-week-expanded' ||
@@ -5642,10 +6059,10 @@ async function refreshMonthlyIssueStatusTab(force = false) {
 }
 
 export function initConstructionBimDashboard() {
-    const refreshBtn = document.getElementById('bim-dashboard-refresh');
-    if (refreshBtn && !refreshBtn.dataset.bound) {
-        refreshBtn.dataset.bound = 'true';
-        refreshBtn.addEventListener('click', refreshConstructionBimDashboard);
+    const scheduleSourceBtn = document.getElementById('bim-schedule-source-file');
+    if (scheduleSourceBtn && !scheduleSourceBtn.dataset.bound) {
+        scheduleSourceBtn.dataset.bound = 'true';
+        scheduleSourceBtn.addEventListener('click', openScheduleSourceModal);
     }
     initWeeklyTaskBoard();
     initStructureIssueBoard();

@@ -19,7 +19,7 @@
     <!-- Three.js (금주 작업 시각화 3D 뷰어) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260827-monthly-map20">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260828-selected-cctv1">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     <script>
@@ -398,13 +398,11 @@
         }
 
         body.theme-light #example1-tab,
-        body.theme-light #example2-tab,
         body.theme-light #tab-content-issue,
         body.theme-light #tab-content-cctv,
         body.theme-light .monthly-issue-status-tab,
         body.theme-light .construction-bim-dashboard,
         body.custom-background #example1-tab,
-        body.custom-background #example2-tab,
         body.custom-background #tab-content-issue,
         body.custom-background #tab-content-cctv,
         body.custom-background .monthly-issue-status-tab,
@@ -1327,10 +1325,9 @@
 
             <!-- Main Tab Menu -->
             <div id="main-tab-menu" style="margin-right: 0.5rem;">
-                <button id="main-tab-example1-btn" class="tab-btn main-tab-btn active" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 예시1</button>
-                <button id="main-tab-example2-btn" class="tab-btn main-tab-btn" onclick="switchTab('example2')"><i class="fas fa-cubes"></i> BIM</button>
-                <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> 월간 이슈 현황</button>
-                <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 시공 BIM 대시보드</button>
+                <button id="main-tab-example1-btn" class="tab-btn main-tab-btn active" onclick="switchTab('example1')"><i class="fas fa-desktop"></i> 홈</button>
+                <button id="main-tab-construction-btn" class="tab-btn main-tab-btn" onclick="switchTab('construction')"><i class="fas fa-hard-hat"></i> 현장</button>
+                <button id="main-tab-monthly-issues-btn" class="tab-btn main-tab-btn" onclick="switchTab('monthly-issues')"><i class="fas fa-calendar-days"></i> BIM</button>
                 <button id="main-tab-project-btn" class="tab-btn main-tab-btn" onclick="switchTab('project')">
                     <i class="fas fa-cube"></i> 프로젝트
                 </button>
@@ -1701,31 +1698,6 @@
                 </div>
             </div>
 
-            <div id="example2-tab" class="example2-tab" style="display:none; width: 100%; height: calc(100vh - 75px); padding: 10px; box-sizing: border-box; background: #0b0f19; z-index: 10; position: relative; overflow: hidden;">
-                <div style="display: grid; grid-template-columns: minmax(620px, 1.18fr) minmax(480px, 0.95fr); gap: 12px; width: 100%; height: 100%; min-height: 0;">
-                    <section id="example2-left-area" style="min-width: 0; min-height: 0; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; background: rgba(15, 23, 42, 0.82); display: flex; flex-direction: column; overflow: hidden;">
-                        <div style="height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); color: #f8fafc; font-weight: 800; font-size: 0.95rem;">
-                            <i class="fas fa-calendar-check" style="color: #38bdf8; margin-right: 8px;"></i> 업무 일정
-                        </div>
-                        <div id="example2-work-schedule" style="flex: 1; min-height: 0;">
-                            <div style="height:100%; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-weight:800;">업무 일정을 불러오는 중입니다.</div>
-                        </div>
-                    </section>
-                    <section id="example2-right-area" style="min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(300px, 0.92fr) minmax(340px, 1.08fr); gap: 12px; overflow: hidden;">
-                        <div id="example2-model-updates" style="width:100%; height:100%; min-height: 0; overflow:hidden;">
-                            <div style="height:100%; display:flex; align-items:center; justify-content:center; border:1px solid rgba(56,189,248,0.25); border-radius:8px; background:rgba(15,23,42,0.82); color:#94a3b8; font-weight:800; box-sizing:border-box;">
-                                BIM 모델 정보를 불러오는 중입니다.
-                            </div>
-                        </div>
-                        <div id="example2-project-search" style="width:100%; height:100%; min-height: 0; overflow:hidden;">
-                            <div style="height:100%; display:flex; align-items:center; justify-content:center; border:1px solid rgba(56,189,248,0.25); border-radius:8px; background:rgba(15,23,42,0.82); color:#94a3b8; font-weight:800; box-sizing:border-box;">
-                                프로젝트 검색 대상을 준비하는 중입니다.
-                            </div>
-                        </div>
-                    </section>
-                </div>
-            </div>
-
             <div id="monthly-issue-status-tab" class="monthly-issue-status-tab" style="display:none;">
                 <section class="bim-db-panel monthly-issue-panel">
                     <input id="monthly-issue-month" class="bim-filter-input" type="month" title="기준 월" hidden>
@@ -1751,11 +1723,11 @@
 
                 <section class="bim-db-panel bim-dashboard-card bim-dashboard-schedule">
                     <div class="bim-db-panel-head">
-                        <div class="bim-db-panel-title"><i class="fas fa-calendar-days"></i> 공사 일정</div>
+                        <div class="bim-db-panel-title"><i class="fas fa-calendar-days"></i> <span id="bim-construction-schedule-title">공사 일정</span></div>
                         <div class="bim-db-panel-actions">
-                            <span id="bim-dashboard-issue-total" class="bim-db-total">이슈 0건</span>
-                            <button id="bim-dashboard-refresh" class="bim-db-refresh" type="button" title="이슈 새로고침">
-                                <i class="fas fa-sync-alt"></i>
+                            <div id="bim-construction-schedule-head-controls" class="bim-schedule-head-controls"></div>
+                            <button id="bim-schedule-source-file" class="bim-schedule-source-file" type="button" title="기준 엑셀 파일 관리" aria-label="기준 엑셀 파일 관리">
+                                <i class="fas fa-file-excel"></i>
                             </button>
                         </div>
                     </div>
@@ -2131,6 +2103,40 @@
             </div>
         </div>
 
+        <!-- Video Media Player Modal -->
+        <div id="media-player-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.75); z-index: 10000; justify-content: center; align-items: center; backdrop-filter: blur(6px);">
+            <div style="background: #0f172a; border: 1px solid #334155; border-radius: 12px; width: 85%; max-width: 960px; display: flex; flex-direction: column; box-shadow: 0 20px 40px rgba(0,0,0,0.6); overflow: hidden;">
+                <div style="padding: 1rem 1.5rem; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+                    <div style="display: flex; align-items: center; gap: 0.6rem;">
+                        <i class="fas fa-film" style="color: #38bdf8; font-size: 1.2rem;"></i>
+                        <h3 id="media-player-title" style="margin: 0; font-size: 1.05rem; font-weight: 600; color: #f8fafc;">동영상 재생</h3>
+                    </div>
+                    <span id="media-player-close-x" style="cursor: pointer; font-size: 1.4rem; color: #94a3b8; line-height: 1;" title="닫기">&times;</span>
+                </div>
+                <div style="position: relative; background: #000; display: flex; justify-content: center; align-items: center; min-height: 380px; max-height: 70vh;">
+                    <video id="media-player-video" controls autoplay playsinline style="width: 100%; max-height: 70vh; background: #000; display: block; outline: none;"></video>
+                    <div id="media-player-loading" style="display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.7); flex-direction: column; justify-content: center; align-items: center; gap: 12px; color: #38bdf8;">
+                        <i class="fas fa-spinner fa-spin" style="font-size: 2.5rem;"></i>
+                        <span id="media-player-loading-text" style="font-size: 0.95rem; font-weight: 500;">동영상 스트림을 변환 및 로딩 중입니다...</span>
+                    </div>
+                </div>
+                <div style="padding: 0.9rem 1.5rem; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; background: #0f172a;">
+                    <div id="media-player-info" style="font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+                        <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-weight: 600;">실시간 스트리밍</span>
+                        <span id="media-player-status-desc">브라우저 실시간 트랜스코딩 재생</span>
+                    </div>
+                    <div style="display: flex; gap: 0.6rem;">
+                        <a id="media-player-download-btn" href="#" target="_blank" download class="upload-button" style="background: #0284c7; color: #fff; border: none; padding: 0.45rem 1rem; font-size: 0.85rem; border-radius: 6px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; cursor: pointer;">
+                            <i class="fas fa-download"></i> 원본 다운로드
+                        </a>
+                        <button id="media-player-close-btn" class="upload-button" style="background: rgba(255, 255, 255, 0.08); color: #cbd5e1; border: 1px solid #334155; padding: 0.45rem 1rem; font-size: 0.85rem; border-radius: 6px; cursor: pointer;">
+                            닫기
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Issue Creation Modal -->
         <div id="dynamic-standalone-issue-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 999999; align-items: center; justify-content: center; font-family: sans-serif; overflow-x: hidden;">
             <div style="background: #1e293b; color: white; width: 520px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; padding: 24px; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); box-sizing: border-box;">
@@ -2497,7 +2503,7 @@
     <!-- Autodesk Viewer Scripts -->
     <script src="/api/viewer-sdk/7.108.0/viewer3D.min.js"></script>
     <script type="module">
-        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260827-monthly-map20';
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260828-selected-cctv1';
         document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
     </script>
     <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
@@ -2507,46 +2513,6 @@
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
         // 🚨 [오프스크린 탭 전환 엔진] 뷰어의 기절을 막는 무중단 탭 스위치 로직
-        window.preloadExample2Schedule = function() {
-            if (window._example2ScheduleModulePromise) {
-                return window._example2ScheduleModulePromise;
-            }
-            window._example2ScheduleModulePromise = import('./js/example2-schedule.js?v=20260813-work-schedule-location-field1')
-                .then(function(mod) {
-                    window._example2ScheduleModule = mod;
-                    return mod;
-                })
-                .catch(function(err) {
-                    window._example2ScheduleModulePromise = null;
-                    console.error('[Example2 Schedule] preload 실패:', err);
-                    throw err;
-                });
-            return window._example2ScheduleModulePromise;
-        };
-
-        window.ensureExample2Schedule = function() {
-            if (window._example2ScheduleInited) {
-                if (typeof window.initExample2Schedule === 'function') {
-                    window.initExample2Schedule();
-                }
-                return Promise.resolve(window._example2ScheduleModule || null);
-            }
-            window._example2ScheduleInited = true;
-            return window.preloadExample2Schedule()
-                .then(function(mod) {
-                    if (mod && typeof mod.initExample2Schedule === 'function') {
-                        mod.initExample2Schedule();
-                    } else if (typeof window.initExample2Schedule === 'function') {
-                        window.initExample2Schedule();
-                    }
-                    return mod;
-                })
-                .catch(function(err) {
-                    window._example2ScheduleInited = false;
-                    console.error('[Example2 Schedule] init 실패:', err);
-                });
-        };
-
         window.switchTab = function(tabName) {
             tabName = tabName || 'example1';
             var previousMainTab = window.currentMainTab || null;
@@ -2567,10 +2533,9 @@
             var construction = document.getElementById('construction-bim-dashboard');
             var monthlyIssues = document.getElementById('monthly-issue-status-tab');
             var example1 = document.getElementById('example1-tab');
-            var example2 = document.getElementById('example2-tab');
 
             // 🚨 [핵심 방어막] 탭 전환 시 기존의 모든 비-프로젝트 탭들을 우선 일괄 display: none 처리하여 화면 밀림/겹침 완벽 차단
-            var allNonProjectTabs = [issue, cctv, construction, monthlyIssues, example1, example2];
+            var allNonProjectTabs = [issue, cctv, construction, monthlyIssues, example1];
             allNonProjectTabs.forEach(function(tabEl) {
                 if (tabEl) tabEl.style.display = 'none';
             });
@@ -2592,13 +2557,6 @@
                 } else if (typeof window.initExample1Dashboard === 'function') {
                     window.initExample1Dashboard();
                 }
-            }
-
-            if (example2 && tabName === 'example2') {
-                example2.style.display = 'block';
-                example2.style.position = 'relative';
-                example2.style.zIndex = '10';
-                window.ensureExample2Schedule();
             }
 
             if (construction && tabName === 'construction') {
@@ -2683,10 +2641,7 @@
         window.addEventListener('DOMContentLoaded', function() {
             var params = new URLSearchParams(window.location.search);
             var tabParam = params.get('tab') || 'example1';
-            if (tabParam !== 'example2' && typeof window.preloadExample2Schedule === 'function') {
-                window.preloadExample2Schedule().catch(function() {});
-            }
-            if (tabParam && ['example1', 'example2', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
+            if (tabParam && ['example1', 'monthly-issues', 'construction', 'project', 'issue', 'cctv'].includes(tabParam)) {
                 if (typeof window.switchTab === 'function') {
                     window._initialMainTabApplied = false;
                     window.switchTab(tabParam);

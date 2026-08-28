@@ -130,6 +130,8 @@ app.use('/api/chatbot', require('./routes/chatbot.js'));
 app.use('/api/hubs', require('./routes/hubs.js'));
 app.use('/api/cctv', require('./routes/cctv.js'));
 app.use('/api/tasks', require('./routes/tasks.js'));
+app.use('/api/media', require('./routes/media.js'));
+app.use('/api/schedule-source', require('./routes/schedule-source.js'));
 app.use(require('./routes/issues.js'));
 
 // Error Handling Middleware

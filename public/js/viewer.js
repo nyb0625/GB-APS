@@ -95,8 +95,10 @@ export function initViewer(container, isComparisonViewer = false, retryCount = 0
             }
 
             applyLightBackground(viewer);
+            normalizeViewerNavigation(viewer);
             viewer.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, () => {
                 applyLightBackground(viewer);
+                normalizeViewerNavigation(viewer);
                 try {
                     // 1. 조명 세팅 (밝게 유지)
                     viewer.setLightPreset(1); 
@@ -165,6 +167,37 @@ function applyLightBackground(viewer) {
     }
 }
 
+export function normalizeViewerNavigation(viewer) {
+    const THREE_NS = window.THREE || (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.THREE);
+    if (!viewer || !viewer.navigation || !THREE_NS) return;
+    try {
+        const up = new THREE_NS.Vector3(0, 0, 1);
+        if (typeof viewer.navigation.setWorldUpVector === 'function') {
+            viewer.navigation.setWorldUpVector(up, true);
+        }
+        if (typeof viewer.navigation.setCameraUpVector === 'function') {
+            viewer.navigation.setCameraUpVector(up);
+        }
+        if (typeof viewer.navigation.setUpVector === 'function') {
+            viewer.navigation.setUpVector(up);
+        }
+        const camera = typeof viewer.navigation.getCamera === 'function' ? viewer.navigation.getCamera() : null;
+        if (camera?.up && typeof camera.up.copy === 'function') {
+            camera.up.copy(up);
+        }
+        if (typeof viewer.navigation.setRequestTransition === 'function') {
+            viewer.navigation.setRequestTransition(false);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
+        }
+    } catch (e) {
+        console.warn('[Viewer] navigation normalization skipped:', e.message || e);
+    }
+}
+
+window.normalizeViewerNavigation = normalizeViewerNavigation;
+
 /**
  * Load a model by its Base64 URN
  */
@@ -209,6 +242,7 @@ export function loadModel(viewer, urn) {
             viewer.loadDocumentNode(doc, viewables, { globalOffset: { x: 0, y: 0, z: 0 } }).then((model) => {
                 // Re-apply background after node loads (light preset may reset it)
                 applyLightBackground(viewer);
+                normalizeViewerNavigation(viewer);
 
                 // Register the currently opened main model so the visibility popup can rotate it too.
                 try {
@@ -426,6 +460,7 @@ export function loadModelMulti(viewer, urn, options = {}) {
             }
             viewer.loadDocumentNode(doc, viewables, loadOptions).then((model) => {
                 applyLightBackground(viewer);
+                normalizeViewerNavigation(viewer);
                 resolve(model);
             }).catch((err) => {
                 console.error('[Viewer] 왼쪽 뷰어 로드 실패: loadDocumentNode 오류 — ' + err);
@@ -475,6 +510,7 @@ export async function loadAggregated(viewer, models = []) {
         }
     }
 
+    normalizeViewerNavigation(viewer);
     return loadedModels;
 }
 

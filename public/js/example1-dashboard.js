@@ -12,6 +12,11 @@ let mergedViewer = null;
 let loadingModels = false;
 let currentViewerMode = 'new';
 const optionalLoadedModels = new Map();
+let monthlyScheduleKpiState = {
+    monthKey: '',
+    sourceLabel: '',
+    cards: []
+};
 
 function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -256,6 +261,114 @@ function renderKpiSkeleton() {
     `).join('');
 }
 
+function schedulePeriodLabel(item) {
+    return `${item.startMonth || item.startDate || '-'} ~ ${item.endMonth || item.endDate || '-'}`;
+}
+
+function getScheduleZoneLabel(item) {
+    if (item.zone === 'priority') return '우선시공분';
+    if (item.zone === 'extension') return '본공사';
+    return item.category || '기타';
+}
+
+function uniqueBy(list, getKey) {
+    const seen = new Set();
+    return list.filter(item => {
+        const key = getKey(item);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function renderScheduleKpiPopupList(card) {
+    if (!card?.items?.length) {
+        return `<div style="padding:18px; border:1px solid rgba(148,163,184,0.28); border-radius:8px; background:#111827; color:var(--ex1-subtle); font-weight:900; text-align:center;">표시할 항목이 없습니다.</div>`;
+    }
+
+    if (card.kind === 'structure') {
+        return card.items.map(item => `
+            <article style="padding:12px; border:1px solid rgba(148,163,184,0.28); border-radius:8px; background:#111827; box-shadow:0 8px 18px rgba(2,6,23,0.22);">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <strong style="min-width:0; color:var(--ex1-text); font-size:0.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(item.name)}</strong>
+                    <span style="flex:0 0 auto; color:var(--ex1-accent); font-size:0.74rem; font-weight:950;">${item.count}건</span>
+                </div>
+                <div style="margin-top:6px; color:var(--ex1-subtle); font-size:0.74rem; font-weight:800;">${escapeHtml(item.categories.join(' · ') || '공종 정보 없음')}</div>
+            </article>
+        `).join('');
+    }
+
+    if (card.kind === 'category') {
+        return card.items.map(item => `
+            <article style="padding:12px; border:1px solid rgba(148,163,184,0.28); border-radius:8px; background:#111827; box-shadow:0 8px 18px rgba(2,6,23,0.22);">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <strong style="min-width:0; color:var(--ex1-text); font-size:0.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(item.category.replace(/^[0-9.]+/, '') || item.category)}</strong>
+                    <span style="flex:0 0 auto; color:var(--ex1-accent); font-size:0.74rem; font-weight:950;">${item.count}건</span>
+                </div>
+                <div style="margin-top:6px; color:var(--ex1-subtle); font-size:0.74rem; font-weight:800;">${escapeHtml(item.names.join(' · ') || '공정 정보 없음')}</div>
+            </article>
+        `).join('');
+    }
+
+    return card.items.map(item => `
+        <article style="padding:12px; border:1px solid rgba(148,163,184,0.28); border-radius:8px; background:#111827; box-shadow:0 8px 18px rgba(2,6,23,0.22);">
+            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px;">
+                <div style="min-width:0;">
+                    <strong style="display:block; color:var(--ex1-text); font-size:0.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(item.name || '공정명 없음')}</strong>
+                    <span style="display:block; margin-top:5px; color:var(--ex1-subtle); font-size:0.72rem; font-weight:850;">${escapeHtml(getScheduleZoneLabel(item))} · ${escapeHtml(schedulePeriodLabel(item))}</span>
+                </div>
+                <span style="flex:0 0 auto; padding:3px 8px; border:1px solid rgba(56,189,248,0.34); border-radius:999px; background:rgba(56,189,248,0.12); color:var(--ex1-accent); font-size:0.68rem; font-weight:950;">${escapeHtml(item.status || '일정')}</span>
+            </div>
+            <p style="margin:8px 0 0; color:var(--ex1-soft-text); font-size:0.76rem; line-height:1.45; font-weight:800;">${escapeHtml(item.description || '작업내용 없음')}</p>
+        </article>
+    `).join('');
+}
+
+function closeScheduleKpiPopup() {
+    document.getElementById('example1-schedule-kpi-modal')?.remove();
+}
+
+function openScheduleKpiPopup(cardKey) {
+    const card = monthlyScheduleKpiState.cards.find(item => item.key === cardKey);
+    if (!card) return;
+    closeScheduleKpiPopup();
+    const modal = document.createElement('div');
+    modal.id = 'example1-schedule-kpi-modal';
+    modal.style.cssText = 'position:fixed; inset:0; z-index:32000; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(2,6,23,0.78); backdrop-filter:blur(5px);';
+    modal.innerHTML = `
+        <div role="dialog" aria-modal="true" aria-labelledby="example1-schedule-kpi-title" style="width:min(680px,calc(100vw - 32px)); max-height:min(720px,calc(100vh - 40px)); display:flex; flex-direction:column; border:1px solid rgba(148,163,184,0.34); border-radius:8px; background:#0f172a; color:var(--ex1-text); box-shadow:0 22px 54px rgba(0,0,0,0.58); overflow:hidden;">
+            <div style="height:50px; flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:0 14px; border-bottom:1px solid rgba(148,163,184,0.22); background:#111827;">
+                <i class="fas ${card.icon}" style="color:var(--ex1-accent);"></i>
+                <div style="min-width:0; flex:1;">
+                    <h3 id="example1-schedule-kpi-title" style="margin:0; color:var(--ex1-text); font-size:1rem; font-weight:950; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(monthLabel(monthlyScheduleKpiState.monthKey))} ${escapeHtml(card.label)}</h3>
+                    <div style="margin-top:3px; color:var(--ex1-subtle); font-size:0.7rem; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(monthlyScheduleKpiState.sourceLabel || PROJECT_LABEL)}</div>
+                </div>
+                <button type="button" data-example1-kpi-close title="닫기" aria-label="닫기" style="width:30px; height:30px; border:1px solid rgba(148,163,184,0.28); border-radius:6px; background:#020617; color:var(--ex1-text); cursor:pointer;"><i class="fas fa-xmark"></i></button>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 14px; border-bottom:1px solid rgba(148,163,184,0.18); background:#0b1220;">
+                <span style="color:var(--ex1-soft-text); font-size:0.78rem; font-weight:900;">${escapeHtml(card.sub)}</span>
+                <strong style="color:var(--ex1-accent); font-size:1.1rem;">${card.value}<span style="margin-left:3px; color:var(--ex1-text); font-size:0.78rem;">${escapeHtml(card.unit)}</span></strong>
+            </div>
+            <div style="min-height:0; overflow:auto; display:flex; flex-direction:column; gap:8px; padding:12px; background:#0b1220;">
+                ${renderScheduleKpiPopupList(card)}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', event => {
+        if (event.target === modal || event.target.closest('[data-example1-kpi-close]')) closeScheduleKpiPopup();
+    });
+}
+
+function bindScheduleKpiCards(target) {
+    if (!target || target.dataset.kpiBound) return;
+    target.dataset.kpiBound = 'true';
+    target.addEventListener('click', event => {
+        const card = event.target.closest('[data-example1-kpi-card]');
+        if (card) openScheduleKpiPopup(card.dataset.example1KpiCard);
+    });
+}
+
 function renderScheduleKpis(items, monthKey) {
     const target = document.getElementById('example1-month-kpis');
     const title = document.getElementById('example1-month-title');
@@ -264,19 +377,35 @@ function renderScheduleKpis(items, monthKey) {
     if (source) source.textContent = `${PROJECT_LABEL} · 공정표 기준`;
     if (!target) return;
 
+    bindScheduleKpiCards(target);
+    const structureItems = uniqueBy(items, item => item.name).map(item => ({
+        name: item.name,
+        count: items.filter(next => next.name === item.name).length,
+        categories: uniqueBy(items.filter(next => next.name === item.name), next => next.category).map(next => next.category.replace(/^[0-9.]+/, '') || next.category).filter(Boolean)
+    }));
+    const categoryItems = uniqueBy(items, item => item.category).map(item => ({
+        category: item.category,
+        count: items.filter(next => next.category === item.category).length,
+        names: uniqueBy(items.filter(next => next.category === item.category), next => next.name).map(next => next.name).filter(Boolean)
+    }));
     const structures = new Set(items.map(item => item.name).filter(Boolean));
     const categories = new Set(items.map(item => item.category).filter(Boolean));
-    const zones = new Set(items.map(item => item.zone).filter(Boolean));
-    const longRunning = items.filter(item => String(item.startMonth) < monthKey && String(item.endMonth) > monthKey).length;
+    const zoneLabels = new Set(items.map(getScheduleZoneLabel).filter(Boolean));
+    const longRunningItems = items.filter(item => String(item.startMonth) < monthKey && String(item.endMonth) > monthKey);
     const cards = [
-        { icon: 'fa-building', label: '대상 구조물', value: structures.size, unit: '개소', sub: [...zones].join(' · ') || '월간 대상' },
-        { icon: 'fa-calendar-check', label: `${monthLabel(monthKey)} 예정 공정`, value: items.length, unit: '건', sub: '공정표 월간 겹침 기준' },
-        { icon: 'fa-screwdriver-wrench', label: '주요 공종', value: categories.size, unit: '종', sub: [...categories].map(v => v.replace(/^[0-9.]+/, '')).join(' · ') },
-        { icon: 'fa-arrows-rotate', label: '계속 진행 공정', value: longRunning, unit: '건', sub: '전월부터 이어지는 작업' }
+        { key: 'structures', kind: 'structure', icon: 'fa-building', label: '대상 구조물', value: structures.size, unit: '개소', sub: [...zoneLabels].join(' · ') || '월간 대상', items: structureItems },
+        { key: 'scheduled', kind: 'schedule', icon: 'fa-calendar-check', label: `${monthLabel(monthKey)} 예정 공정`, value: items.length, unit: '건', sub: '공정표 월간 겹침 기준', items },
+        { key: 'categories', kind: 'category', icon: 'fa-screwdriver-wrench', label: '주요 공종', value: categories.size, unit: '종', sub: [...categories].map(v => v.replace(/^[0-9.]+/, '')).join(' · '), items: categoryItems },
+        { key: 'continuing', kind: 'schedule', icon: 'fa-arrows-rotate', label: '계속 진행 공정', value: longRunningItems.length, unit: '건', sub: '전월부터 이어지는 작업', items: longRunningItems }
     ];
+    monthlyScheduleKpiState = {
+        monthKey,
+        sourceLabel: source?.textContent || `${PROJECT_LABEL} · 공정표 기준`,
+        cards
+    };
 
     target.innerHTML = cards.map(card => `
-        <div style="min-width:0; display:flex; flex-direction:column; justify-content:space-between; gap:7px; padding:10px; border:1px solid var(--ex1-border); border-radius:8px; background:var(--ex1-kpi-bg); box-shadow:0 0 16px rgba(14,165,233,0.08) inset;">
+        <button type="button" data-example1-kpi-card="${escapeHtml(card.key)}" title="${escapeHtml(card.label)} 상세 보기" style="min-width:0; display:flex; flex-direction:column; justify-content:space-between; gap:7px; padding:10px; border:1px solid var(--ex1-border); border-radius:8px; background:var(--ex1-kpi-bg); box-shadow:0 0 16px rgba(14,165,233,0.08) inset; text-align:left; cursor:pointer; font-family:inherit;">
             <div style="width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; color:var(--ex1-accent); border:1px solid var(--ex1-accent-border); background:var(--ex1-kpi-icon-bg); font-size:0.94rem;">
                 <i class="fas ${card.icon}"></i>
             </div>
@@ -285,7 +414,7 @@ function renderScheduleKpis(items, monthKey) {
                 <div style="margin-top:4px; color:var(--ex1-accent); font-size:1.58rem; line-height:1; font-weight:950;">${card.value}<span style="margin-left:3px; color:var(--ex1-text); font-size:0.78rem;">${escapeHtml(card.unit)}</span></div>
                 <div style="margin-top:5px; color:var(--ex1-subtle); font-size:0.68rem; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(card.sub)}">${escapeHtml(card.sub)}</div>
             </div>
-        </div>
+        </button>
     `).join('');
 }
 
@@ -829,14 +958,23 @@ function normalizeExample1ViewerOrientation(viewer) {
         if (viewer.navigation && typeof viewer.navigation.setWorldUpVector === 'function') {
             viewer.navigation.setWorldUpVector(up, true);
         }
+        if (viewer.navigation && typeof viewer.navigation.setCameraUpVector === 'function') {
+            viewer.navigation.setCameraUpVector(up);
+        }
+        if (viewer.navigation && typeof viewer.navigation.setUpVector === 'function') {
+            viewer.navigation.setUpVector(up);
+        }
         if (viewer.navigation && typeof viewer.navigation.getCamera === 'function') {
             const camera = viewer.navigation.getCamera();
             if (camera && camera.up && typeof camera.up.copy === 'function') {
                 camera.up.copy(up);
             }
         }
-        if (typeof viewer.setViewCube === 'function') {
-            viewer.setViewCube('front top right');
+        if (viewer.navigation && typeof viewer.navigation.setRequestTransition === 'function') {
+            viewer.navigation.setRequestTransition(false);
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
         }
     } catch (err) {
         console.warn('[Example1] viewer orientation normalize skipped:', err.message);
@@ -948,6 +1086,7 @@ async function loadMergedViewer(mode = 'new', options = {}) {
             try {
                 mergedViewer.resize();
                 restoreExample1ViewState(mergedViewer);
+                normalizeExample1ViewerOrientation(mergedViewer);
                 setTimeout(() => {
                     try {
                         mergedViewer.resize();

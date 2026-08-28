@@ -41,6 +41,11 @@ function escapeSelectorValue(value) {
     return String(value || '').replace(/["\\]/g, '\\$&');
 }
 
+function isVideoFile(fileName) {
+    const ext = String(fileName || '').split('.').pop().toLowerCase();
+    return ['avi', 'mp4', 'mov', 'mkv', 'webm', 'wmv', 'flv', 'm4v', 'ts', '3gp'].includes(ext);
+}
+
 class FolderExplorer {
     constructor() {
         this.container = document.getElementById('explorer-container');
@@ -291,6 +296,17 @@ class FolderExplorer {
                     window.currentItemId = item.id;
                     window.currentVersionId = item.id;
 
+                    if (isVideoFile(item.name)) {
+                        this.openVideoPlayerModal({
+                            name: item.name,
+                            hubId: this.currentHubId,
+                            projectId: this.currentProjectId,
+                            itemId: item.id,
+                            versionId: item.versionId || item.id
+                        });
+                        return;
+                    }
+
                     this.loadIntoViewer(item.urn, item.name);
                 };
 
@@ -434,6 +450,17 @@ class FolderExplorer {
                 window.currentProjectId = this.currentProjectId;
                 window.currentItemId = itemId;
                 window.currentVersionId = v.id;
+
+                if (isVideoFile(itemName)) {
+                    this.openVideoPlayerModal({
+                        name: `${itemName} (${versionLabel})`,
+                        hubId: this.currentHubId,
+                        projectId: this.currentProjectId,
+                        itemId: itemId,
+                        versionId: v.id
+                    });
+                    return;
+                }
 
                 this.loadIntoViewer(v.urn, `${itemName} (${versionLabel})`);
             };
@@ -604,6 +631,154 @@ class FolderExplorer {
 
     renderError(msg) {
         this.list.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:40px; color:#ef4444;">${msg}</td></tr>`;
+    }
+
+    openVideoPlayerModal({ name, hubId, projectId, itemId, versionId }) {
+        const modal = document.getElementById('media-player-modal');
+        const titleEl = document.getElementById('media-player-title');
+        const video = document.getElementById('media-player-video');
+        const loading = document.getElementById('media-player-loading');
+        const loadingText = document.getElementById('media-player-loading-text');
+        const downloadBtn = document.getElementById('media-player-download-btn');
+        const statusDesc = document.getElementById('media-player-status-desc');
+        const closeBtn = document.getElementById('media-player-close-btn');
+        const closeX = document.getElementById('media-player-close-x');
+
+        if (!modal || !video) return;
+
+        const ext = String(name || '').split('.').pop().toLowerCase();
+        if (titleEl) titleEl.textContent = name || '동영상 재생';
+        if (statusDesc) {
+            statusDesc.textContent = ext === 'avi'
+                ? '.avi 실시간 H.264 트랜스코딩 스트리밍 중'
+                : `${ext.toUpperCase()} 스트리밍 재생 중`;
+        }
+
+        const closeModal = () => {
+            modal.style.display = 'none';
+            try {
+                if (video._mediaPlayerHls) {
+                    video._mediaPlayerHls.destroy();
+                    video._mediaPlayerHls = null;
+                }
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+            } catch (e) {}
+        };
+
+        if (closeBtn) closeBtn.onclick = closeModal;
+        if (closeX) closeX.onclick = closeModal;
+        modal.onclick = (e) => {
+            if (e.target === modal) closeModal();
+        };
+
+        if (downloadBtn) {
+            downloadBtn.onclick = async (e) => {
+                e.preventDefault();
+                try {
+                    const resp = await fetch(`/api/media/download-url?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId || '')}&item_id=${encodeURIComponent(itemId || '')}`);
+                    if (!resp.ok) throw new Error('Download URL fetch failed');
+                    const json = await resp.json();
+                    if (json.url) {
+                        const a = document.createElement('a');
+                        a.href = json.url;
+                        a.download = name || json.fileName || 'video';
+                        a.target = '_blank';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                } catch (err) {
+                    console.error('[Media Player] Download failed:', err);
+                    alert('다운로드 URL을 가져오지 못했습니다.');
+                }
+            };
+        }
+
+        if (loading) {
+            loading.style.display = 'flex';
+            if (loadingText) loadingText.textContent = `${ext.toUpperCase()} 동영상 스트림 로딩 중...`;
+        }
+
+        if (video._mediaPlayerHls) {
+            video._mediaPlayerHls.destroy();
+            video._mediaPlayerHls = null;
+        }
+        video.muted = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.preload = 'auto';
+
+        video.onloadeddata = () => {
+            if (loading) loading.style.display = 'none';
+        };
+        video.oncanplay = () => {
+            if (loading) loading.style.display = 'none';
+            video.play().catch(() => {});
+        };
+        video.onerror = () => {
+            if (loading) {
+                loading.style.display = 'flex';
+                if (loadingText) loadingText.innerHTML = '<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> 동영상 스트리밍 로드 실패</span>';
+            }
+        };
+
+        modal.style.display = 'flex';
+
+        const nativeStreamUrl = `/api/media/stream?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId || '')}&item_id=${encodeURIComponent(itemId || '')}&t=${Date.now()}`;
+        const hlsSessionUrl = `/api/media/hls-session?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId || '')}&item_id=${encodeURIComponent(itemId || '')}&t=${Date.now()}`;
+        const useHlsTranscode = !['mp4', 'webm'].includes(ext);
+
+        if (!useHlsTranscode) {
+            video.src = nativeStreamUrl;
+            video.load();
+            video.play().catch(() => {});
+            return;
+        }
+
+        if (loadingText) loadingText.textContent = `${ext.toUpperCase()} HLS 변환 세션 준비 중...`;
+        fetch(hlsSessionUrl, { credentials: 'same-origin' })
+            .then(resp => {
+                if (!resp.ok) throw new Error(`HLS session HTTP ${resp.status}`);
+                return resp.json();
+            })
+            .then(payload => {
+                const playlistUrl = payload.playlistUrl;
+                if (!playlistUrl) throw new Error('HLS playlist URL is missing');
+                if (loadingText) loadingText.textContent = '재생 가능한 영상 조각을 불러오는 중...';
+
+                if (window.Hls && window.Hls.isSupported()) {
+                    const hls = new window.Hls({
+                        lowLatencyMode: false,
+                        backBufferLength: 30
+                    });
+                    video._mediaPlayerHls = hls;
+                    hls.loadSource(playlistUrl);
+                    hls.attachMedia(video);
+                    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+                        video.play().catch(() => {});
+                    });
+                    hls.on(window.Hls.Events.ERROR, (event, data) => {
+                        if (data && data.fatal) {
+                            console.error('[Media Player] HLS fatal error:', data);
+                            if (loading) loading.style.display = 'flex';
+                            if (loadingText) loadingText.innerHTML = '<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> HLS 재생 로드 실패</span>';
+                        }
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = playlistUrl;
+                    video.load();
+                    video.play().catch(() => {});
+                } else {
+                    throw new Error('HLS playback is not supported in this browser');
+                }
+            })
+            .catch(err => {
+                console.error('[Media Player] HLS playback failed:', err);
+                if (loading) loading.style.display = 'flex';
+                if (loadingText) loadingText.innerHTML = '<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> AVI 재생 세션 생성 실패</span>';
+            });
     }
 
     async loadIntoViewer(urn, name) {
