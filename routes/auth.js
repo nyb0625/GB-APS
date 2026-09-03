@@ -2,9 +2,8 @@ const express = require('express');
 const { 
     getAuthorizationUrl, 
     authCallbackMiddleware, 
-    authRefreshMiddleware, 
-    getUserProfile, 
-    getViewerToken 
+    authRefreshMiddleware,
+    getUserProfile
 } = require('../services/aps.js');
 const { APS_CALLBACK_URL } = require('../config.js');
 
@@ -56,27 +55,15 @@ router.get('/logout', (req, res) => {
     res.set('Pragma', 'no-cache');
     req.session.destroy((err) => {
         if (err) console.error('[Auth] session destroy error:', err);
+        res.clearCookie('gangbuk.aps.sid', { path: '/' });
         res.clearCookie('connect.sid', { path: '/' });
         res.redirect('/');
     });
 });
 
-// GET /api/auth/token - Get public Viewer token (3-legged session token OR fallback 2-legged token)
-router.get('/token', async (req, res) => {
-    // If user has a 3-legged session, check/refresh and return it
-    if (req.session && req.session.refresh_token) {
-        return authRefreshMiddleware(req, res, () => {
-            res.json(req.publicOAuthToken);
-        });
-    }
-    
-    // Fallback: 2-legged credentials for local bucket models
-    try {
-        const token = await getViewerToken();
-        res.json(token);
-    } catch (err) {
-        res.status(500).json({ error: 'Token generation failed', message: err.message });
-    }
+// GET /api/auth/token - Get public Viewer token for the logged-in Autodesk session only.
+router.get('/token', authRefreshMiddleware, async (req, res) => {
+    res.json(req.publicOAuthToken);
 });
 
 // GET /api/auth/profile - Fetch logged-in user profile details

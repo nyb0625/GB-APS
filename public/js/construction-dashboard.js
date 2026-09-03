@@ -1209,6 +1209,105 @@ window.exportMonthlyIssueReport = function() {
     exportMonthlyIssuesToPdf(filteredIssues);
 };
 
+function getMonthlyDashboardVisibleIssuesForExport() {
+    const issues = Array.isArray(window._constructionIssueCache) ? window._constructionIssueCache : [];
+    return getMonthlyIssueDashboardVisibleIssues(issues);
+}
+
+function mapMonthlyIssueToHwpxPayload(issue, index) {
+    const raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+    const includeAfterImages = window.HWPX_EXPORT_INCLUDE_AFTER_IMAGES !== false;
+    const includeBeforeImages = window.HWPX_EXPORT_INCLUDE_BEFORE_IMAGES === true;
+    const reportCapture = typeof window.getFormaIssueReportCapture === 'function' ? (window.getFormaIssueReportCapture(issue) || {}) : {};
+    const suppressReportImages = !!reportCapture.suppressReportImages;
+    const savedAfterImage = suppressReportImages ? '' : (reportCapture.afterImage || issue.afterImage || issue.imageAfter || issue.imgAfter || '');
+    const savedBeforeImage = suppressReportImages ? '' : (reportCapture.beforeImage || issue.beforeImage || issue.imageBefore || issue.imgBefore || '');
+    const imageNote = reportCapture.imageNote || issue.imageNote || issue.hwpxImageNote || issue.reportImageNote || '';
+    const specialNote = reportCapture.specialNote || issue.specialNote || issue.hwpxSpecialNote || issue.reportSpecialNote || '';
+    const snapshotUrn = issue.snapshotUrn || issue.snapshotURN || issue.thumbnailUrn ||
+        raw?.snapshotUrn || raw?.snapshotURN || raw?.thumbnailUrn ||
+        raw?.attributes?.snapshotUrn || raw?.attributes?.snapshotURN || raw?.thumbnailUrn ||
+        raw?.snapshot?.urn || raw?.thumbnail?.urn || '';
+    return {
+        _sourceIssue: issue,
+        no: index + 1,
+        id: getIssueDisplayId(issue),
+        title: getIssueTitle(issue),
+        type: getIssueTypeText(issue),
+        issueType: getIssueTypeText(issue),
+        category: getIssueTypeText(issue),
+        exportIssueType: getIssueTypeKey(issue) === 'work' ? '업데이트' : getIssueTypeText(issue),
+        status: getIssueStatus(issue),
+        assignee: getIssueAssignee(issue),
+        reviewer: getIssueReviewer(issue),
+        location: getIssueLocation(issue),
+        placement: getIssuePlacementValue(issue),
+        startDate: getMonthKey(getIssueStart(issue)),
+        dueDate: getMonthKey(getIssueEnd(issue, getIssueStart(issue))),
+        thumbnailSnapshotUrn: includeAfterImages ? snapshotUrn : '',
+        snapshotUrn: includeAfterImages ? snapshotUrn : '',
+        afterSnapshotUrn: '',
+        afterImage: includeAfterImages ? savedAfterImage : '',
+        beforeImage: savedBeforeImage || (includeBeforeImages ? (issue.beforeImage || issue.imageBefore || issue.imgBefore || '') : ''),
+        imageNote,
+        afterImageNote: imageNote,
+        beforeImageNote: reportCapture.beforeImageNote || issue.beforeImageNote || '',
+        specialNote,
+        hwpxSpecialNote: specialNote,
+        reportSpecialNote: specialNote,
+        description: getIssueDescription(issue),
+        mainChange: getIssueDescription(issue)
+    };
+}
+
+async function exportMonthlyDashboardHwpxReport(issuesToExport) {
+    let updateIssues = (Array.isArray(issuesToExport) ? issuesToExport : [])
+        .filter(issue => getIssueTypeKey(issue) === 'work')
+        .map(mapMonthlyIssueToHwpxPayload);
+    if (!updateIssues.length) {
+        alert('내보낼 업데이트 항목이 없습니다.');
+        return;
+    }
+    if (typeof window.prepareHwpxIssueReportImages === 'function') {
+        updateIssues = await window.prepareHwpxIssueReportImages(updateIssues);
+    } else {
+        updateIssues = updateIssues.map(issue => {
+            const clean = {};
+            Object.keys(issue || {}).forEach(key => {
+                if (key !== '_sourceIssue') clean[key] = issue[key];
+            });
+            return clean;
+        });
+    }
+
+    const resp = await fetch('/api/issues/export-hwpx', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            title: '업데이트 이슈 보고서',
+            filter: 'update',
+            issues: updateIssues
+        })
+    });
+    if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(errText || `HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    a.href = url;
+    a.download = `업데이트_이슈_보고서_${stamp}.hwpx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        URL.revokeObjectURL(url);
+        if (a.parentNode) a.parentNode.removeChild(a);
+    }, 1000);
+}
+
 function openMonthlyIssueListModal(titleText, issues = []) {
     const modal = document.getElementById('bim-timeline-modal');
     const body = document.getElementById('bim-timeline-modal-body');
@@ -1887,6 +1986,12 @@ function renderMonthlyIssueDashboard(issues = []) {
                 <div class="monthly-issue-dashboard-subbar">
                     <strong>${escapeHtml(listTitle)}</strong>
                     ${selectedChip}
+                    <button type="button" class="monthly-issue-export-btn" data-monthly-dashboard-export="pdf" title="PDF 내보내기">
+                        <i class="fas fa-file-pdf"></i>
+                    </button>
+                    <button type="button" class="monthly-issue-export-btn" data-monthly-dashboard-export="hwpx" title="업데이트 항목 한글(.hwpx) 내보내기">
+                        <i class="fas fa-file-word"></i>
+                    </button>
                     <span>${visibleIssues.length}건</span>
                 </div>
                 ${renderMonthlyIssueListTable(visibleIssues, emptyMessage)}
@@ -2312,6 +2417,25 @@ function bindMonthlyIssueStatusTab() {
             if (event.target.closest('[data-monthly-clear-facility]')) {
                 window._monthlyIssueSelectedFacility = '';
                 rerender();
+                return;
+            }
+            const exportButton = event.target.closest('[data-monthly-dashboard-export]');
+            if (exportButton) {
+                const exportType = exportButton.dataset.monthlyDashboardExport || '';
+                const visibleIssues = getMonthlyDashboardVisibleIssuesForExport();
+                if (exportType === 'pdf') {
+                    exportMonthlyIssuesToPdf(visibleIssues);
+                } else if (exportType === 'hwpx') {
+                    exportButton.disabled = true;
+                    exportMonthlyDashboardHwpxReport(visibleIssues)
+                        .catch(error => {
+                            console.error('[Monthly Issue HWPX Export] failed:', error);
+                            alert('한글 파일 생성 중 오류가 발생했습니다: ' + error.message);
+                        })
+                        .finally(() => {
+                            exportButton.disabled = false;
+                        });
+                }
                 return;
             }
             const groupFilter = event.target.closest('[data-monthly-group-filter]');
@@ -5540,7 +5664,7 @@ function openModelUpdateInViewer(urn, name) {
             window.focusIssueOnViewer('', urn);
             return;
         }
-        import('./viewer.js?v=20260825-viewer-fixed-sdk1')
+        import('./viewer.js?v=20260902-unconsolidated-opacity1')
             .then(async mod => {
                 const container = document.getElementById('preview');
                 if (!container || !mod.initViewer || !mod.loadModel) return;

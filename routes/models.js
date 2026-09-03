@@ -1,8 +1,9 @@
 const express = require('express');
 const formidable = require('express-formidable');
-const { getInternalToken, authRefreshMiddleware, getHubs, getProjects, getProjectContents, getItemVersions, listObjects, uploadObject, translateObject, getManifest, urnify } = require('../services/aps.js');
+const { authRefreshMiddleware, getHubs, getProjects, getProjectContents, getItemVersions, listObjects, uploadObject, translateObject, getManifest, urnify } = require('../services/aps.js');
 
 const router = express.Router();
+router.use(authRefreshMiddleware);
 
 const GANGBUK_HUB_ID = process.env.GANGBUK_HUB_ID || 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const GANGBUK_PROJECT_ID = process.env.GANGBUK_PROJECT_ID || 'b.d005cd39-4a35-4843-b350-81da491266ef';
@@ -10,7 +11,7 @@ const GANGBUK_PROJECT_NAME = '강북정수장 증설공사 BIM 용역';
 const MODEL_TREE_CACHE_TTL_MS = Number(process.env.MODEL_TREE_CACHE_TTL_MS || 5 * 60 * 1000);
 const MODEL_TREE_MAX_DEPTH = Number(process.env.MODEL_TREE_MAX_DEPTH || 8);
 const MODEL_TREE_MAX_FOLDERS = Number(process.env.MODEL_TREE_MAX_FOLDERS || 220);
-let modelTreeCache = null;
+const modelTreeCache = new Map();
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -62,18 +63,9 @@ async function optionalRefreshSessionToken(req) {
 
 async function getDocsTokens(req) {
     const tokens = [];
-    const sessionToken = await optionalRefreshSessionToken(req).catch(() => null);
-    if (sessionToken) tokens.push({ token: sessionToken, source: '3-legged-session' });
-    if (req.session?.internal_token && !tokens.some(t => t.token === req.session.internal_token)) {
-        tokens.push({ token: req.session.internal_token, source: '3-legged-session-cached' });
-    }
-    try {
-        const twoLegged = await getInternalToken();
-        if (twoLegged && !tokens.some(t => t.token === twoLegged)) {
-            tokens.push({ token: twoLegged, source: '2-legged-service' });
-        }
-    } catch (err) {
-        console.warn('[Models Tree] 2-legged token fallback unavailable:', err.message);
+    const sessionToken = req.internalOAuthToken?.access_token || await optionalRefreshSessionToken(req).catch(() => null);
+    if (sessionToken) {
+        tokens.push({ token: sessionToken, source: '3-legged-session' });
     }
     return tokens;
 }
@@ -136,13 +128,13 @@ function findProjectByName(projects) {
         });
 }
 
-async function resolveTargetProject(hubId, preferredProjectId, token) {
+async function resolveTargetProject(hubId, preferredProjectId, token, allowNameFallback = false) {
     const projects = await withRetry('hub-projects', () => getProjects(hubId, token));
     const byId = (projects || []).find(project => project.id === preferredProjectId || project.id === preferredProjectId.replace(/^b\./, '') || `b.${project.id}` === preferredProjectId);
-    const byName = findProjectByName(projects);
+    const byName = allowNameFallback ? findProjectByName(projects) : null;
     const project = byId || byName;
     if (!project) {
-        throw new Error(`Target project not found in hub ${hubId}: ${GANGBUK_PROJECT_NAME} (${preferredProjectId})`);
+        throw new Error(`Target project not found in hub ${hubId}: ${preferredProjectId}`);
     }
     return {
         id: project.id,
@@ -250,14 +242,17 @@ async function buildRvtTree(hubId, projectId, folder, folderPath, token, depth =
 }
 
 async function buildLiveGangbukModelTree(req, options = {}) {
-    const hubId = options.hubId || req.query.hubId || req.query.hub_id || GANGBUK_HUB_ID;
-    const preferredProjectId = options.projectId || req.query.projectId || req.query.project_id || GANGBUK_PROJECT_ID;
+    const requestedHubId = options.hubId || req.query.hubId || req.query.hub_id || '';
+    const requestedProjectId = options.projectId || req.query.projectId || req.query.project_id || '';
+    const hubId = requestedHubId || GANGBUK_HUB_ID;
+    const preferredProjectId = requestedProjectId || GANGBUK_PROJECT_ID;
+    const allowNameFallback = !requestedProjectId;
     const tokens = await getDocsTokens(req);
     const errors = [];
 
     for (const candidate of tokens) {
         try {
-            const project = await resolveTargetProject(hubId, preferredProjectId, candidate.token);
+            const project = await resolveTargetProject(hubId, preferredProjectId, candidate.token, allowNameFallback);
             const topFolders = await getContentsSafe(hubId, project.id, null, candidate.token, 'top-folders');
             const projectFiles = findProjectFilesFolder(topFolders);
             if (!projectFiles) throw new Error(`Project Files folder not found in project ${project.id}`);
@@ -291,26 +286,30 @@ async function buildLiveGangbukModelTree(req, options = {}) {
     throw new Error(errors.length ? errors.join(' | ') : 'No Autodesk token available. Please login first.');
 }
 
-// GET /api/models/tree - Live Autodesk Docs RVT model tree for <강북정수장 증설공사 BIM 용역>
+// GET /api/models/tree - Live Autodesk Docs RVT model tree for the selected project.
 router.get('/tree', async (req, res) => {
     const force = req.query.force === '1' || req.query.refresh === '1';
     const now = Date.now();
-    if (!force && modelTreeCache && modelTreeCache.expiresAt > now) {
-        return res.json({ ...modelTreeCache.data, cache: true });
+    const hubId = req.query.hubId || req.query.hub_id || GANGBUK_HUB_ID;
+    const projectId = req.query.projectId || req.query.project_id || GANGBUK_PROJECT_ID;
+    const cacheKey = `${hubId}:${projectId}`;
+    const cached = modelTreeCache.get(cacheKey);
+    if (!force && cached && cached.expiresAt > now) {
+        return res.json({ ...cached.data, cache: true });
     }
 
     try {
         const data = await buildLiveGangbukModelTree(req);
-        modelTreeCache = { data, expiresAt: now + MODEL_TREE_CACHE_TTL_MS };
+        modelTreeCache.set(cacheKey, { data, expiresAt: now + MODEL_TREE_CACHE_TTL_MS });
         return res.json({ ...data, cache: false });
     } catch (err) {
         console.error('[Models Tree] Live Autodesk Docs model tree failed:', err.message);
         return res.status(502).json({
             error: 'AutodeskDocsModelTreeFailed',
             message: err.message,
-            projectName: GANGBUK_PROJECT_NAME,
-            hubId: req.query.hubId || req.query.hub_id || GANGBUK_HUB_ID,
-            projectId: req.query.projectId || req.query.project_id || GANGBUK_PROJECT_ID,
+            projectName: req.query.projectName || GANGBUK_PROJECT_NAME,
+            hubId,
+            projectId,
             live: false,
             fallbackUsed: false
         });

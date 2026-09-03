@@ -6410,6 +6410,14 @@ input:checked+.slider:before {
 }
 
 /* ── Issue Creation Markers ─────────────────────────────────── */
+.custom-issue-pushpin,
+.active-target-marker {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
 .issue-temp-marker,
 .issue-marker {
     position: absolute;

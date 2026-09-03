@@ -119,6 +119,35 @@ let currentDiffData = null;
 let isSyncing = false;
 let rAF = null;
 
+function loadComparisonModel(viewer, urn) {
+    if (!viewer || !urn) return Promise.resolve(null);
+    const finalUrn = String(urn).startsWith('urn:') ? String(urn) : 'urn:' + String(urn);
+    return new Promise((resolve, reject) => {
+        Autodesk.Viewing.Document.load(finalUrn, (doc) => {
+            const viewable = doc.getRoot().getDefaultGeometry();
+            if (!viewable) {
+                reject(new Error('Document contains no viewable geometry.'));
+                return;
+            }
+            viewer.loadDocumentNode(doc, viewable, {
+                keepCurrentModels: false,
+                preserveView: false,
+                globalOffset: { x: 0, y: 0, z: 0 }
+            }).then((model) => {
+                try {
+                    if (typeof viewer.showAll === 'function') viewer.showAll();
+                    if (typeof viewer.fitToView === 'function') viewer.fitToView(null, model);
+                    if (typeof viewer.resize === 'function') viewer.resize();
+                    if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+                } catch (e) {}
+                resolve(model);
+            }).catch(reject);
+        }, (code, message, errors) => {
+            reject({ code, message, errors });
+        });
+    });
+}
+
 // Revit elements to exclude from diff (centerlines, axes, separators, etc.)
 const REVIT_EXCLUDE_KEYWORDS = [
     'centerline', 'center line', 'centre line',
@@ -476,12 +505,19 @@ function forceUpdateModelUI(viewer, index) {
 // ── Versions Loading ────────────────────────────────────────────────────────
 export async function loadVersions(urnA, urnB) {
     if (typeof window !== 'undefined') window.loadVersions = loadVersions;
+    if (typeof window !== 'undefined') {
+        window.__nextProjectPanelMode = 'comparison';
+        window.__projectPanelMode = 'comparison';
+        if (typeof window.showProjectComparisonPanel === 'function') {
+            window.showProjectComparisonPanel();
+        }
+    }
     await initSplitViewers();
     if (!viewers[0] || !viewers[1]) {
         console.warn('[Viewer] Cannot load models because split viewers are not ready.');
         return;
     }
-    await Promise.all([loadModel(viewers[0], urnA), loadModel(viewers[1], urnB)]);
+    await Promise.all([loadComparisonModel(viewers[0], urnA), loadComparisonModel(viewers[1], urnB)]);
 
     [0, 1].forEach(idx => {
         const v = viewers[idx];

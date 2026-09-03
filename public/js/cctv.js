@@ -2,8 +2,8 @@
    cctv.js — CCTV & BIM Monitoring Tab Logic (ES6 Module)
    ========================================================================== */
 
-import { initViewer, loadModel } from './viewer.js?v=20260825-viewer-fixed-sdk1';
-import { refreshGlobalVisibilityPopup, initModelVisibilityPopupEvents } from './model-visibility.js?v=20260804-tab-preserve1';
+import { initViewer, loadModel } from './viewer.js?v=20260902-unconsolidated-opacity1';
+import { refreshGlobalVisibilityPopup, initModelVisibilityPopupEvents } from './model-visibility.js?v=20260902-opacity-material5';
 
 // Predefined camera state corresponding to CCTV camera view angle for model alignment
 const CCTV_CAMERA_STATE = {

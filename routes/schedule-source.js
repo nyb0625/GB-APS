@@ -3,8 +3,10 @@ const formidable = require('express-formidable');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { authRefreshMiddleware } = require('../services/aps.js');
 
 const router = express.Router();
+router.use(authRefreshMiddleware);
 
 const SCHEDULE_FILE_NAME = '정수처리시설_공정표.xlsx';
 const SCHEDULE_FILE_PATH = path.resolve(__dirname, '..', 'public', 'data', SCHEDULE_FILE_NAME);

@@ -43,7 +43,7 @@ const config = {
     // 세션
     session: {
         secret: process.env.SERVER_SESSION_SECRET || 'aps-ai-platform-default-secret-key',
-        maxAge: 24 * 60 * 60 * 1000, // 24시간
+        maxAge: (parseInt(process.env.SESSION_MAX_AGE_DAYS, 10) || 30) * 24 * 60 * 60 * 1000,
     },
 
     // AI 서비스

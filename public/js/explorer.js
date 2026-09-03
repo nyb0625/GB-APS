@@ -184,6 +184,11 @@ class FolderExplorer {
         this.currentHubId = hubId;
         this.currentProjectId = projectId;
         this.currentFolderId = folderId;
+        window.currentHubId = hubId || '';
+        window.currentProjectId = projectId || '';
+        window.currentProjectName = folderName || '';
+        if (hubId) localStorage.setItem('aps_last_hub_id', hubId);
+        if (projectId) localStorage.setItem('aps_last_project_id', projectId);
 
         // Rebuild history list for breadcrumbs
         const hasRoot = this.history.some(h => h.type === 'projects-root');
@@ -293,6 +298,7 @@ class FolderExplorer {
                     
                     window.currentHubId = this.currentHubId;
                     window.currentProjectId = this.currentProjectId;
+                    window.currentProjectName = this.history.find(h => h.type === 'project')?.name || window.currentProjectName || '';
                     window.currentItemId = item.id;
                     window.currentVersionId = item.id;
 
@@ -729,6 +735,12 @@ class FolderExplorer {
         const nativeStreamUrl = `/api/media/stream?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId || '')}&item_id=${encodeURIComponent(itemId || '')}&t=${Date.now()}`;
         const hlsSessionUrl = `/api/media/hls-session?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId || '')}&item_id=${encodeURIComponent(itemId || '')}&t=${Date.now()}`;
         const useHlsTranscode = !['mp4', 'webm'].includes(ext);
+        const playMp4TranscodeFallback = () => {
+            if (loadingText) loadingText.textContent = `${ext.toUpperCase()} MP4 변환 스트림으로 다시 시도 중...`;
+            video.src = nativeStreamUrl;
+            video.load();
+            video.play().catch(() => {});
+        };
 
         if (!useHlsTranscode) {
             video.src = nativeStreamUrl;
@@ -739,8 +751,17 @@ class FolderExplorer {
 
         if (loadingText) loadingText.textContent = `${ext.toUpperCase()} HLS 변환 세션 준비 중...`;
         fetch(hlsSessionUrl, { credentials: 'same-origin' })
-            .then(resp => {
-                if (!resp.ok) throw new Error(`HLS session HTTP ${resp.status}`);
+            .then(async resp => {
+                if (!resp.ok) {
+                    let details = '';
+                    try {
+                        const payload = await resp.json();
+                        details = payload.details || payload.error || '';
+                    } catch (e) {}
+                    const err = new Error(`HLS session HTTP ${resp.status}${details ? `: ${details}` : ''}`);
+                    err.details = details;
+                    throw err;
+                }
                 return resp.json();
             })
             .then(payload => {
@@ -776,8 +797,7 @@ class FolderExplorer {
             })
             .catch(err => {
                 console.error('[Media Player] HLS playback failed:', err);
-                if (loading) loading.style.display = 'flex';
-                if (loadingText) loadingText.innerHTML = '<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> AVI 재생 세션 생성 실패</span>';
+                playMp4TranscodeFallback();
             });
     }
 
@@ -791,7 +811,7 @@ class FolderExplorer {
 
         try {
             // Import and call view load function dynamically from viewer.js
-            const { initViewer, loadModel } = await import('./viewer.js?v=20260825-viewer-fixed-sdk1');
+            const { initViewer, loadModel } = await import('./viewer.js?v=20260902-unconsolidated-opacity1');
             if (!window.projectViewer || window.projectViewer === window.cctvViewer) {
                 window.projectViewer = await initViewer(document.getElementById('preview'), false);
             }

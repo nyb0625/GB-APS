@@ -68,7 +68,10 @@ export function initViewer(container, isComparisonViewer = false, retryCount = 0
             }
 
             // 3. 뷰어 생성
-            const viewer = new Autodesk.Viewing.GuiViewer3D(container, { extensions: [] });
+            const viewer = new Autodesk.Viewing.GuiViewer3D(container, {
+                extensions: [],
+                useConsolidation: false
+            });
 
             // Track in window.viewer only when it is the main (non-comparison) viewer
             if (!isComparisonViewer) {

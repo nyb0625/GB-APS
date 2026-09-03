@@ -457,7 +457,7 @@
       await ensureAutodeskInitialized();
 
       container.innerHTML = '';
-      const viewer = new Autodesk.Viewing.GuiViewer3D(container, { extensions: [] });
+      const viewer = new Autodesk.Viewing.GuiViewer3D(container, { extensions: [], useConsolidation: false });
       container._weeklyViewerInstance = viewer;
 
       const startCode = viewer.start();

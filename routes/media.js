@@ -31,11 +31,15 @@ function getMediaCacheKey(projectId, itemId, versionId) {
         .digest('hex');
 }
 
-function waitForFile(filePath, timeoutMs = 20000) {
+function waitForHlsPlaylist(job, timeoutMs = 20000) {
     const startedAt = Date.now();
     return new Promise((resolve, reject) => {
         const tick = () => {
-            fs.stat(filePath, (err, stat) => {
+            if (job.status === 'failed') {
+                reject(new Error(job.error || 'HLS transcoding failed'));
+                return;
+            }
+            fs.stat(job.playlistPath, (err, stat) => {
                 if (!err && stat.size > 0) {
                     resolve(true);
                     return;
@@ -65,6 +69,7 @@ function startHlsJob(cacheKey, signedUrl, displayName) {
         dir,
         playlistPath,
         error: null,
+        stderr: '',
         command: null
     };
     hlsJobs.set(cacheKey, job);
@@ -104,8 +109,9 @@ function startHlsJob(cacheKey, signedUrl, displayName) {
         .on('error', (err, stdout, stderr) => {
             job.status = 'failed';
             job.error = err.message;
+            job.stderr = stderr ? String(stderr).slice(-2000) : '';
             console.error(`[Media HLS] FFmpeg error for ${displayName}:`, err.message);
-            if (stderr) console.error('[Media HLS] FFmpeg stderr:', String(stderr).slice(-2000));
+            if (job.stderr) console.error('[Media HLS] FFmpeg stderr:', job.stderr);
         })
         .on('end', () => {
             job.status = 'ready';
@@ -325,7 +331,7 @@ router.get('/hls-session', async (req, res) => {
             return res.status(500).json({ error: 'HLS transcoding failed', details: job.error || 'Unknown error' });
         }
 
-        await waitForFile(job.playlistPath, 25000);
+        await waitForHlsPlaylist(job, 60000);
 
         res.json({
             mode: 'hls',
@@ -335,7 +341,10 @@ router.get('/hls-session', async (req, res) => {
         });
     } catch (err) {
         console.error('[Media HLS Session Error]', err.message);
-        res.status(500).json({ error: 'Failed to start HLS playback session', details: err.message });
+        const cacheKey = getMediaCacheKey(project_id, item_id, version_id);
+        const job = hlsJobs.get(cacheKey);
+        const details = job?.stderr || job?.error || err.message;
+        res.status(500).json({ error: 'Failed to start HLS playback session', details });
     }
 });
 

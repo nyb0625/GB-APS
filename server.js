@@ -18,6 +18,8 @@ const config = require('./config.js');
 
 const authRouter = require('./routes/auth.js');
 const diffRouter = require('./routes/diff');
+const { requireAutodeskSession, requireAutodeskSessionForAsset } = require('./utils/auth-guard.js');
+const FileSessionStore = require('./utils/file-session-store.js');
 
 const app = express();
 app.disable('x-powered-by');
@@ -31,8 +33,35 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '75mb' }));
+app.use(express.urlencoded({ extended: true, limit: '75mb' }));
+
+// Session must be available before static/API guards.
+app.use(session({
+    name: 'gangbuk.aps.sid',
+    secret: config.SERVER_SESSION_SECRET || 'kunhwa-bim-secret-key',
+    store: new FileSessionStore({
+        dir: path.join(__dirname, 'data', 'sessions'),
+        ttlMs: config.session.maxAge
+    }),
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+        secure: false,
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: config.session.maxAge
+    }
+}));
+
+const protectedPublicAssetPattern = /^\/(?:data\/|images\/(?:construction-|example1-)|img\/lapse\/)/i;
+app.use((req, res, next) => {
+    if (protectedPublicAssetPattern.test(req.path)) {
+        return requireAutodeskSessionForAsset(req, res, next);
+    }
+    return next();
+});
 
 // Static assets
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -43,14 +72,6 @@ app.use(express.static(path.join(__dirname, 'public'), {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
   }
-}));
-
-// 🚨 [필수] 라우터보다 먼저 세션 금고를 전역에 깔아야 함
-app.use(session({
-    secret: config.SERVER_SESSION_SECRET || 'kunhwa-bim-secret-key',
-    resave: false,
-    saveUninitialized: true,
-    cookie: { secure: false, httpOnly: true }
 }));
 
 // Basic health check route
@@ -123,15 +144,16 @@ app.get(/^\/api\/viewer-sdk\/([^/]+)\/(.+)$/, (req, res) => {
 
 // Mount Routes (세션을 공유받을 라우터들을 연결)
 app.use('/api/auth', authRouter);
-app.use('/api/diff', diffRouter);
+app.use('/api/diff', requireAutodeskSession, diffRouter);
 app.use('/api/models', require('./routes/models.js'));
-app.use('/api/ai', require('./routes/ai.js'));
-app.use('/api/chatbot', require('./routes/chatbot.js'));
+app.use('/api/ai', requireAutodeskSession, require('./routes/ai.js'));
+app.use('/api/chatbot', requireAutodeskSession, require('./routes/chatbot.js'));
 app.use('/api/hubs', require('./routes/hubs.js'));
-app.use('/api/cctv', require('./routes/cctv.js'));
-app.use('/api/tasks', require('./routes/tasks.js'));
+app.use('/api/cctv', requireAutodeskSession, require('./routes/cctv.js'));
+app.use('/api/tasks', requireAutodeskSession, require('./routes/tasks.js'));
 app.use('/api/media', require('./routes/media.js'));
 app.use('/api/schedule-source', require('./routes/schedule-source.js'));
+app.use('/api/issues', requireAutodeskSession);
 app.use(require('./routes/issues.js'));
 
 // Error Handling Middleware
@@ -141,7 +163,15 @@ app.use((req, res) => {
 
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+    if (res.headersSent) {
+        return next(err);
+    }
+    const status = err.statusCode || err.status || 500;
+    res.status(status).json({
+        error: status >= 500 ? 'Internal Server Error' : err.message,
+        message: err.message,
+        code: err.code || undefined
+    });
 });
 
 // Start Server

@@ -15,8 +15,16 @@ const pdfRateLimit = rateLimit({
     max: 10,
     message: 'PDF 내보내기 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
 });
+const hwpxRateLimit = rateLimit({
+    windowMs: 60_000,
+    max: 10,
+    message: '한글 내보내기 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
+});
 
 const router = express.Router();
+const HWPX_TEMPLATE_PATH = path.join(__dirname, '..', 'issue_report_template.hwpx');
+const BIM_REVIEW_OPEN_HWPX_TEMPLATE_PATH = path.join(__dirname, '..', 'bim_review_open_template.hwpx');
+const BIM_REVIEW_CLOSED_HWPX_TEMPLATE_PATH = path.join(__dirname, '..', 'bim_review_closed_template.hwpx');
 
 const GANGBUK_HUB_ID = process.env.GANGBUK_HUB_ID || 'b.4efd43ab-93fa-4448-918b-091d81dbfd75';
 const GANGBUK_PROJECT_ID = process.env.GANGBUK_PROJECT_ID || 'b.d005cd39-4a35-4843-b350-81da491266ef';
@@ -84,6 +92,1048 @@ function getCustomValue(issue, names) {
         if (lowered.includes(title)) return item.value ?? item.text ?? item.displayValue ?? '';
     }
     return '';
+}
+
+function xmlEscape(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+function attrEscape(value) {
+    return xmlEscape(value);
+}
+
+function stripVersionInfo(value) {
+    return String(value || '')
+        .split(/\r?\n/)
+        .filter(line => !isVersionOnlyLine(line))
+        .map(line => line
+            .replace(/(?:^|\s)(?:이전|현재|작성\s*당시|직전\s*작성|변경\s*전|변경\s*후)?\s*(?:버전|version|ver\.?|v)\s*[:=\-]?\s*\d+(?:\.\d+)?\s*(?:→|->|~|\/|,)?\s*(?:v|ver\.?|version|버전)?\s*\d*(?:\.\d+)?/ig, ' ')
+            .replace(/\b[A-Za-z]{1,4}\s*[-:]\s*V?\s*\.?\s*\d+\b/g, ' ')
+            .replace(/\bV\s*\.?\s*\d+\s*\.?\b/ig, ' ')
+            .replace(/^[\s,;/|~→-]+$/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim())
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+}
+
+function stripLeadingBulletMarkers(value) {
+    return String(value || '')
+        .split(/\r?\n/)
+        .map(line => line.replace(/^\s*-\s*/, '').trimEnd())
+        .join('\n')
+        .trim();
+}
+
+function normalizeHwpxDescriptionLine(line) {
+    return String(line || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[`*_]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function isVersionOnlyLine(line) {
+    const cleaned = normalizeHwpxDescriptionLine(line);
+    return !cleaned ||
+        /^(?:버전|version|ver\.?|v)\s*[:=\-]?\s*\d+(?:\.\d+)?\.?$/i.test(cleaned) ||
+        /^(?:[A-Za-z]{1,6}\s*[-_:]?\s*(?:v|ver\.?|version)?\s*\d+(?:\.\d+)?\s*,?\s*)+$/i.test(cleaned) ||
+        /^(?:[A-Za-z0-9가-힣_()\/\s]+?\s*[-_:]?\s*(?:v|ver\.?|version)\s*\d+(?:\.\d+)?\s*,?\s*)+$/i.test(cleaned);
+}
+
+function parseUpdateIssueDescription(issue) {
+    const source = issue.description || issue.mainChange || issue.desc || '';
+    const result = { reason: '', changes: '' };
+    const changes = [];
+
+    String(source || '').split(/\r?\n/).forEach(rawLine => {
+        if (isVersionOnlyLine(rawLine)) return;
+        let line = normalizeHwpxDescriptionLine(rawLine);
+        if (!line) return;
+
+        const bulletMatch = line.match(/^(?:[-*•]\s*)?(?:\\?-+\s*)(.+)$/);
+        if (bulletMatch) {
+            const item = normalizeHwpxDescriptionLine(bulletMatch[1]);
+            if (item) changes.push(item);
+            return;
+        }
+
+        const withoutVersion = stripVersionInfo(line);
+        if (!withoutVersion) return;
+        if (!result.reason) result.reason = withoutVersion;
+    });
+
+    result.changes = changes.join('\n');
+    return result;
+}
+
+const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+        let c = i;
+        for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c >>> 0;
+    }
+    return table;
+})();
+
+function crc32(buffer) {
+    let crc = 0xffffffff;
+    for (const byte of buffer) crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(date = new Date()) {
+    const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+    const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+    return { time, day };
+}
+
+function createZip(entries) {
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    const { time, day } = dosDateTime();
+    for (const entry of entries) {
+        const name = Buffer.from(entry.name, 'utf8');
+        const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data), 'utf8');
+        const crc = crc32(data);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0x0800, 6);
+        local.writeUInt16LE(0, 8);
+        local.writeUInt16LE(time, 10);
+        local.writeUInt16LE(day, 12);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(data.length, 18);
+        local.writeUInt32LE(data.length, 22);
+        local.writeUInt16LE(name.length, 26);
+        local.writeUInt16LE(0, 28);
+        localParts.push(local, name, data);
+
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0);
+        central.writeUInt16LE(20, 4);
+        central.writeUInt16LE(20, 6);
+        central.writeUInt16LE(0x0800, 8);
+        central.writeUInt16LE(0, 10);
+        central.writeUInt16LE(time, 12);
+        central.writeUInt16LE(day, 14);
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(data.length, 20);
+        central.writeUInt32LE(data.length, 24);
+        central.writeUInt16LE(name.length, 28);
+        central.writeUInt16LE(0, 30);
+        central.writeUInt16LE(0, 32);
+        central.writeUInt16LE(0, 34);
+        central.writeUInt16LE(0, 36);
+        central.writeUInt32LE(0, 38);
+        central.writeUInt32LE(offset, 42);
+        centralParts.push(central, name);
+        offset += local.length + name.length + data.length;
+    }
+    const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(0, 4);
+    end.writeUInt16LE(0, 6);
+    end.writeUInt16LE(entries.length, 8);
+    end.writeUInt16LE(entries.length, 10);
+    end.writeUInt32LE(centralSize, 12);
+    end.writeUInt32LE(offset, 16);
+    end.writeUInt16LE(0, 20);
+    return Buffer.concat([...localParts, ...centralParts, end]);
+}
+
+function contentTypeToImageExt(contentType = '') {
+    const type = String(contentType || '').toLowerCase();
+    if (type.includes('png')) return 'png';
+    if (type.includes('jpg') || type.includes('jpeg')) return 'jpg';
+    return '';
+}
+
+function imageExtFromBuffer(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 12) return '';
+    if (buffer[0] === 0x89 && buffer.slice(1, 4).toString('ascii') === 'PNG') return 'png';
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'jpg';
+    return '';
+}
+
+function getImageSize(buffer, ext = '') {
+    const type = String(ext || '').toLowerCase();
+    if ((type === 'png' || buffer.slice(1, 4).toString('ascii') === 'PNG') && buffer.length >= 24) {
+        return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+    }
+    if ((type === 'jpg' || type === 'jpeg' || (buffer[0] === 0xff && buffer[1] === 0xd8)) && buffer.length > 4) {
+        let offset = 2;
+        while (offset < buffer.length - 9) {
+            if (buffer[offset] !== 0xff) {
+                offset += 1;
+                continue;
+            }
+            const marker = buffer[offset + 1];
+            const length = buffer.readUInt16BE(offset + 2);
+            if (marker >= 0xc0 && marker <= 0xc3) {
+                return { width: buffer.readUInt16BE(offset + 7), height: buffer.readUInt16BE(offset + 5) };
+            }
+            offset += 2 + length;
+        }
+    }
+    return { width: 1200, height: 900 };
+}
+
+function dataUrlToImage(dataUrl) {
+    const match = String(dataUrl || '').match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (!match) return null;
+    const buffer = Buffer.from(match[2], 'base64');
+    const ext = contentTypeToImageExt(match[1]) || imageExtFromBuffer(buffer);
+    if (!ext) return null;
+    return {
+        buffer,
+        contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+        ext
+    };
+}
+
+function readZipEntries(buffer) {
+    const eocdSig = 0x06054b50;
+    let eocd = -1;
+    for (let i = buffer.length - 22; i >= 0; i -= 1) {
+        if (buffer.readUInt32LE(i) === eocdSig) {
+            eocd = i;
+            break;
+        }
+    }
+    if (eocd < 0) throw new Error('HWPX ZIP 구조를 읽을 수 없습니다.');
+    const count = buffer.readUInt16LE(eocd + 10);
+    const centralOffset = buffer.readUInt32LE(eocd + 16);
+    const entries = [];
+    let ptr = centralOffset;
+    for (let i = 0; i < count; i += 1) {
+        if (buffer.readUInt32LE(ptr) !== 0x02014b50) throw new Error('HWPX 중앙 디렉터리를 읽을 수 없습니다.');
+        const method = buffer.readUInt16LE(ptr + 10);
+        const compressedSize = buffer.readUInt32LE(ptr + 20);
+        const uncompressedSize = buffer.readUInt32LE(ptr + 24);
+        const nameLen = buffer.readUInt16LE(ptr + 28);
+        const extraLen = buffer.readUInt16LE(ptr + 30);
+        const commentLen = buffer.readUInt16LE(ptr + 32);
+        const localOffset = buffer.readUInt32LE(ptr + 42);
+        const name = buffer.slice(ptr + 46, ptr + 46 + nameLen).toString('utf8');
+        const localNameLen = buffer.readUInt16LE(localOffset + 26);
+        const localExtraLen = buffer.readUInt16LE(localOffset + 28);
+        const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+        const compressed = buffer.slice(dataStart, dataStart + compressedSize);
+        let data;
+        if (method === 0) {
+            data = compressed;
+        } else if (method === 8) {
+            data = require('zlib').inflateRawSync(compressed);
+        } else {
+            throw new Error(`지원하지 않는 HWPX 압축 방식입니다: ${method}`);
+        }
+        if (data.length !== uncompressedSize) throw new Error(`HWPX 엔트리 크기가 맞지 않습니다: ${name}`);
+        entries.push({ name, data });
+        ptr += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries;
+}
+
+function hpPara(text, style = 0) {
+    const lines = String(text || '').split(/\r?\n/);
+    return lines.map(line =>
+        `<hp:p id="0" paraPrIDRef="0" styleIDRef="0">` +
+        `<hp:run charPrIDRef="0"><hp:t>${xmlEscape(line || ' ')}</hp:t></hp:run>` +
+        `</hp:p>`
+    ).join('');
+}
+
+function hwpxTextRun(text, charPrIDRef = '5') {
+    return `<hp:run charPrIDRef="${charPrIDRef}"><hp:t>${xmlEscape(text || ' ')}</hp:t></hp:run>`;
+}
+
+function findMatchingTagEnd(xml, startIndex, tagName) {
+    const tagRe = new RegExp(`<${tagName}(?:\\s|>)|<\\/${tagName}>`, 'g');
+    tagRe.lastIndex = startIndex;
+    let depth = 0;
+    let match;
+    while ((match = tagRe.exec(xml))) {
+        if (match[0].startsWith('</')) {
+            depth -= 1;
+            if (depth === 0) return tagRe.lastIndex;
+        } else {
+            depth += 1;
+        }
+    }
+    return -1;
+}
+
+function findMatchingHpParagraphEnd(xml, startIndex) {
+    return findMatchingTagEnd(xml, startIndex, 'hp:p');
+}
+
+function getTemplateTableParagraph(sectionXml) {
+    const tableIndex = sectionXml.indexOf('<hp:tbl');
+    if (tableIndex < 0) return null;
+    const start = sectionXml.lastIndexOf('<hp:p', tableIndex);
+    const end = findMatchingHpParagraphEnd(sectionXml, start);
+    if (start < 0 || end < 0) return null;
+    return {
+        prefix: sectionXml.slice(0, start),
+        tableParagraph: sectionXml.slice(start, end),
+        suffix: sectionXml.slice(end)
+    };
+}
+
+function buildHwpxCellParagraphsFromTemplate(emptyParagraphXml, value) {
+    const lines = String(value || ' ')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    const safeLines = lines.length ? lines : [' '];
+    const runMatch = emptyParagraphXml.match(/<hp:run\s+charPrIDRef="([^"]+)"\s*\/>/);
+    const charPrIDRef = runMatch ? runMatch[1] : '5';
+    return safeLines.map(line => emptyParagraphXml.replace(/<hp:run\s+charPrIDRef="[^"]+"\s*\/>/, hwpxTextRun(line, charPrIDRef))).join('');
+}
+
+function makeHwpxPicXml(image, widthHu, heightHu, nativeWidthHu, nativeHeightHu) {
+    const safeId = attrEscape(image.id);
+    const picId = 1000000000 + image.index;
+    const centerX = Math.round(widthHu / 2);
+    const centerY = Math.round(heightHu / 2);
+    const orgWidth = nativeWidthHu || widthHu;
+    const orgHeight = nativeHeightHu || heightHu;
+    const scaleX = orgWidth ? (widthHu / orgWidth).toFixed(6) : '1';
+    const scaleY = orgHeight ? (heightHu / orgHeight).toFixed(6) : '1';
+    return `<hp:run charPrIDRef="5"><hp:pic id="${picId}" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${picId}" reverse="0">` +
+        `<hp:offset x="0" y="0"/>` +
+        `<hp:orgSz width="${orgWidth}" height="${orgHeight}"/>` +
+        `<hp:curSz width="${widthHu}" height="${heightHu}"/>` +
+        `<hp:flip horizontal="0" vertical="0"/>` +
+        `<hp:rotationInfo angle="0" centerX="${centerX}" centerY="${centerY}" rotateimage="0"/>` +
+        `<hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="${scaleX}" e2="0" e3="0" e4="0" e5="${scaleY}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo>` +
+        `<hc:img binaryItemIDRef="${safeId}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>` +
+        `<hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${orgWidth}" y="0"/><hc:pt2 x="${orgWidth}" y="${orgHeight}"/><hc:pt3 x="0" y="${orgHeight}"/></hp:imgRect>` +
+        `<hp:imgClip left="0" right="${orgWidth}" top="0" bottom="${orgHeight}"/>` +
+        `<hp:inMargin left="0" right="0" top="0" bottom="0"/>` +
+        `<hp:imgDim dimwidth="${orgWidth}" dimheight="${orgHeight}"/>` +
+        `<hp:effects/>` +
+        `<hp:sz width="${widthHu}" widthRelTo="ABSOLUTE" height="${heightHu}" heightRelTo="ABSOLUTE" protect="0"/>` +
+        `<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="CENTER" vertOffset="0" horzOffset="0"/>` +
+        `<hp:outMargin left="0" right="0" top="0" bottom="0"/>` +
+        `</hp:pic><hp:t/></hp:run>`;
+}
+
+function buildHwpxImageParagraphFromTemplate(emptyParagraphXml, image, cellWidth = 23101, cellHeight = 13531) {
+    if (!image) return emptyParagraphXml;
+    const size = getImageSize(image.buffer, image.ext);
+    const maxWidth = Math.max(1000, Number(cellWidth) - 800);
+    const maxHeight = Math.max(1000, Number(cellHeight) - 800);
+    const scale = Math.min(maxWidth / size.width, maxHeight / size.height);
+    const widthHu = Math.max(1000, Math.round(size.width * scale));
+    const heightHu = Math.max(1000, Math.round(size.height * scale));
+    const nativeWidthHu = Math.max(1000, Math.round(size.width * 75));
+    const nativeHeightHu = Math.max(1000, Math.round(size.height * 75));
+    return emptyParagraphXml.replace(/<hp:run\s+charPrIDRef="[^"]+"\s*\/>/, makeHwpxPicXml(image, widthHu, heightHu, nativeWidthHu, nativeHeightHu));
+}
+
+function updateCellsInRowHeight(blockXml, rowAddr, minHeight) {
+    const rowToken = `rowAddr="${rowAddr}"`;
+    let output = '';
+    let cursor = 0;
+    let searchFrom = 0;
+    while (searchFrom < blockXml.length) {
+        const addrIndex = blockXml.indexOf(rowToken, searchFrom);
+        if (addrIndex < 0) break;
+        const cellStart = blockXml.lastIndexOf('<hp:tc', addrIndex);
+        const cellEnd = findMatchingTagEnd(blockXml, cellStart, 'hp:tc');
+        if (cellStart < 0 || cellEnd < 0 || cellStart < cursor) {
+            searchFrom = addrIndex + rowToken.length;
+            continue;
+        }
+        const cellXml = blockXml.slice(cellStart, cellEnd);
+        const nextCellXml = cellXml.replace(/(<hp:cellSz\s+width="[^"]+"\s+height=")(\d+)(")/, (_match, prefix, value, suffix) => {
+            return `${prefix}${Math.max(Number(value) || 0, minHeight)}${suffix}`;
+        });
+        output += blockXml.slice(cursor, cellStart) + nextCellXml;
+        cursor = cellEnd;
+        searchFrom = cellEnd;
+    }
+    return cursor ? output + blockXml.slice(cursor) : blockXml;
+}
+
+function updateCellImageByAddress(blockXml, rowAddr, colAddr, image) {
+    if (!image) return blockXml;
+    const addrPattern = `<hp:cellAddr colAddr="${colAddr}" rowAddr="${rowAddr}"`;
+    const addrIndex = blockXml.indexOf(addrPattern);
+    if (addrIndex < 0) return blockXml;
+    const cellStart = blockXml.lastIndexOf('<hp:tc', addrIndex);
+    const cellEnd = findMatchingTagEnd(blockXml, cellStart, 'hp:tc');
+    if (cellStart < 0 || cellEnd < 0) return blockXml;
+    const cellXml = blockXml.slice(cellStart, cellEnd);
+    const emptyRunIndex = cellXml.indexOf('<hp:run charPrIDRef="5"/>');
+    if (emptyRunIndex < 0) return blockXml;
+    const paraStart = cellXml.lastIndexOf('<hp:p', emptyRunIndex);
+    const paraEnd = findMatchingHpParagraphEnd(cellXml, paraStart);
+    if (paraStart < 0 || paraEnd < 0) return blockXml;
+    const cellSize = cellXml.match(/<hp:cellSz width="([^"]+)" height="([^"]+)"/);
+    const paragraphXml = cellXml.slice(paraStart, paraEnd);
+    const replacement = buildHwpxImageParagraphFromTemplate(paragraphXml, image, cellSize?.[1], cellSize?.[2]);
+    const nextCellXml = cellXml.slice(0, paraStart) + replacement + cellXml.slice(paraEnd);
+    return blockXml.slice(0, cellStart) + nextCellXml + blockXml.slice(cellEnd);
+}
+
+function buildHwpxImageParagraphsFromTemplate(emptyParagraphXml, images, cellWidth = 23101, cellHeight = 13531) {
+    const list = Array.isArray(images) ? images.filter(Boolean).slice(0, 2) : [];
+    if (!list.length) return emptyParagraphXml;
+    const rowHeight = Math.max(1000, Math.floor(Number(cellHeight) || 13531));
+    const eachHeight = Math.max(1000, Math.floor((rowHeight - (list.length - 1) * 300) / list.length));
+    return list.map(image => {
+        const size = getImageSize(image.buffer, image.ext);
+        const maxWidth = Math.max(1000, Number(cellWidth) - 800);
+        const maxHeight = Math.max(1000, eachHeight - 300);
+        const scale = Math.min(maxWidth / size.width, maxHeight / size.height);
+        const widthHu = Math.max(1000, Math.round(size.width * scale));
+        const heightHu = Math.max(1000, Math.round(size.height * scale));
+        const nativeWidthHu = Math.max(1000, Math.round(size.width * 75));
+        const nativeHeightHu = Math.max(1000, Math.round(size.height * 75));
+        return emptyParagraphXml.replace(/<hp:run\s+charPrIDRef="[^"]+"\s*\/>/, makeHwpxPicXml(image, widthHu, heightHu, nativeWidthHu, nativeHeightHu));
+    }).join('');
+}
+
+function updateCellImagesByAddress(blockXml, rowAddr, colAddr, images) {
+    const list = Array.isArray(images) ? images.filter(Boolean).slice(0, 2) : [];
+    if (!list.length) return blockXml;
+    const addrPattern = `<hp:cellAddr colAddr="${colAddr}" rowAddr="${rowAddr}"`;
+    const addrIndex = blockXml.indexOf(addrPattern);
+    if (addrIndex < 0) return blockXml;
+    const cellStart = blockXml.lastIndexOf('<hp:tc', addrIndex);
+    const cellEnd = findMatchingTagEnd(blockXml, cellStart, 'hp:tc');
+    if (cellStart < 0 || cellEnd < 0) return blockXml;
+    const cellXml = blockXml.slice(cellStart, cellEnd);
+    const emptyRunIndex = cellXml.indexOf('<hp:run charPrIDRef="5"/>');
+    if (emptyRunIndex < 0) return blockXml;
+    const paraStart = cellXml.lastIndexOf('<hp:p', emptyRunIndex);
+    const paraEnd = findMatchingHpParagraphEnd(cellXml, paraStart);
+    if (paraStart < 0 || paraEnd < 0) return blockXml;
+    const cellSize = cellXml.match(/<hp:cellSz width="([^"]+)" height="([^"]+)"/);
+    const paragraphXml = cellXml.slice(paraStart, paraEnd);
+    const replacement = buildHwpxImageParagraphsFromTemplate(paragraphXml, list, cellSize?.[1], cellSize?.[2]);
+    const nextCellXml = cellXml.slice(0, paraStart) + replacement + cellXml.slice(paraEnd);
+    return blockXml.slice(0, cellStart) + nextCellXml + blockXml.slice(cellEnd);
+}
+
+function updateCellTextByAddress(blockXml, rowAddr, colAddr, value) {
+    const addrPattern = `<hp:cellAddr colAddr="${colAddr}" rowAddr="${rowAddr}"`;
+    const addrIndex = blockXml.indexOf(addrPattern);
+    if (addrIndex < 0) return blockXml;
+    const cellStart = blockXml.lastIndexOf('<hp:tc', addrIndex);
+    const cellEnd = findMatchingTagEnd(blockXml, cellStart, 'hp:tc');
+    if (cellStart < 0 || cellEnd < 0) return blockXml;
+    const cellXml = blockXml.slice(cellStart, cellEnd);
+    const emptyRun = '<hp:run charPrIDRef="5"/>';
+    const emptyRunIndex = cellXml.indexOf(emptyRun);
+    if (emptyRunIndex < 0) return blockXml;
+    const paraStart = cellXml.lastIndexOf('<hp:p', emptyRunIndex);
+    const paraEnd = findMatchingHpParagraphEnd(cellXml, paraStart);
+    if (paraStart < 0 || paraEnd < 0) return blockXml;
+    const paragraphXml = cellXml.slice(paraStart, paraEnd);
+    const replacement = buildHwpxCellParagraphsFromTemplate(paragraphXml, value || ' ');
+    const nextCellXml = cellXml.slice(0, paraStart) + replacement + cellXml.slice(paraEnd);
+    return blockXml.slice(0, cellStart) + nextCellXml + blockXml.slice(cellEnd);
+}
+
+function replaceHwpxCellLabel(blockXml, fromLabel, toLabel) {
+    return String(blockXml || '').replace(`<hp:t>${fromLabel}</hp:t>`, `<hp:t>${toLabel}</hp:t>`);
+}
+
+function uniquifyHwpxBlockIds(blockXml, index) {
+    let seq = (index + 1) * 100000;
+    const nextId = () => String(1100000000 + seq++);
+    return String(blockXml || '')
+        .replace(/(<hp:p\b[^>]*?\bid=")([^"]*)(")/g, (_match, prefix, _value, suffix) => `${prefix}${nextId()}${suffix}`)
+        .replace(/(<hp:tbl\b[^>]*?\bid=")(\d+)(")/g, (_match, prefix, _value, suffix) => `${prefix}${nextId()}${suffix}`)
+        .replace(/(\bctrlid=")(\d+)(")/g, (_match, prefix, _value, suffix) => `${prefix}${nextId()}${suffix}`)
+        .replace(/(\binstid=")(\d+)(")/g, (_match, prefix, _value, suffix) => `${prefix}${nextId()}${suffix}`);
+}
+
+function updateFirstEmptyCellAfterLabel(sectionXml, label, value) {
+    const labelIndex = sectionXml.indexOf(`<hp:t>${label}</hp:t>`);
+    if (labelIndex < 0) return sectionXml;
+    const emptyRun = '<hp:run charPrIDRef="5"/>';
+    const emptyIndex = sectionXml.indexOf(emptyRun, labelIndex);
+    if (emptyIndex < 0) return sectionXml;
+    return sectionXml.slice(0, emptyIndex) + hwpxTextRun(value) + sectionXml.slice(emptyIndex + emptyRun.length);
+}
+
+function updateFirstEmptyCellParagraphAfterLabel(sectionXml, label, value) {
+    const labelIndex = sectionXml.indexOf(`<hp:t>${label}</hp:t>`);
+    if (labelIndex < 0) return sectionXml;
+    const emptyRun = '<hp:run charPrIDRef="5"/>';
+    const emptyIndex = sectionXml.indexOf(emptyRun, labelIndex);
+    if (emptyIndex < 0) return sectionXml;
+    const paraStart = sectionXml.lastIndexOf('<hp:p', emptyIndex);
+    const paraEnd = findMatchingHpParagraphEnd(sectionXml, paraStart);
+    if (paraStart < 0 || paraEnd < 0) return updateFirstEmptyCellAfterLabel(sectionXml, label, value);
+    const paragraphXml = sectionXml.slice(paraStart, paraEnd);
+    const replacement = buildHwpxCellParagraphsFromTemplate(paragraphXml, value);
+    return sectionXml.slice(0, paraStart) + replacement + sectionXml.slice(paraEnd);
+}
+
+function removeTableRowContainingLabel(sectionXml, label) {
+    const labelIndex = sectionXml.indexOf(`<hp:t>${label}</hp:t>`);
+    if (labelIndex < 0) return sectionXml;
+    const rowStart = sectionXml.lastIndexOf('<hp:tr', labelIndex);
+    const rowEnd = findMatchingTagEnd(sectionXml, rowStart, 'hp:tr');
+    if (rowStart < 0 || rowEnd < 0) return sectionXml;
+    return removeTableRowAtRange(sectionXml, rowStart, rowEnd);
+}
+
+function removeTableRowByCellAddress(sectionXml, rowAddr) {
+    const addrIndex = sectionXml.indexOf(`rowAddr="${rowAddr}"`);
+    if (addrIndex < 0) return sectionXml;
+    const rowStart = sectionXml.lastIndexOf('<hp:tr', addrIndex);
+    const rowEnd = findMatchingTagEnd(sectionXml, rowStart, 'hp:tr');
+    if (rowStart < 0 || rowEnd < 0) return sectionXml;
+    return removeTableRowAtRange(sectionXml, rowStart, rowEnd);
+}
+
+function removeTableRowAtRange(sectionXml, rowStart, rowEnd) {
+    let nextXml = sectionXml.slice(0, rowStart) + sectionXml.slice(rowEnd);
+    const tblStart = sectionXml.lastIndexOf('<hp:tbl', rowStart);
+    if (tblStart >= 0) {
+        const tblOpenEnd = nextXml.indexOf('>', tblStart);
+        if (tblOpenEnd > tblStart) {
+            const tblOpen = nextXml.slice(tblStart, tblOpenEnd + 1);
+            nextXml = nextXml.slice(0, tblStart) +
+                tblOpen.replace(/rowCnt="(\d+)"/, (_match, value) => `rowCnt="${Math.max(0, Number(value) - 1)}"`) +
+                nextXml.slice(tblOpenEnd + 1);
+        }
+    }
+    return nextXml;
+}
+
+function getIssueSpecialNote(issue) {
+    return String(
+        issue?.specialNote ||
+        issue?.hwpxSpecialNote ||
+        issue?.reportSpecialNote ||
+        ''
+    ).trim();
+}
+
+function imageFromIssueDataUrl(issue, keys) {
+    for (const key of keys) {
+        const value = issue && issue[key];
+        if (typeof value === 'string' && value.startsWith('data:image/')) {
+            const image = dataUrlToImage(value);
+            if (image) return image;
+            console.warn('[HWPX Export] unsupported data URL image skipped:', key, String(value).slice(0, 32));
+        }
+    }
+    return null;
+}
+
+async function resolveIssueExportImages(issue, index, token) {
+    const images = { thumbnail: null, before: null, after: null };
+    const baseIndex = index * 3;
+    const thumbnailData = imageFromIssueDataUrl(issue, ['thumbnailImage', 'issueThumbnailImage']);
+    const beforeData = imageFromIssueDataUrl(issue, ['beforeImage', 'imageBefore', 'imgBefore']);
+    const afterData = imageFromIssueDataUrl(issue, ['afterImage', 'imageAfter', 'imgAfter']);
+    if (thumbnailData) {
+        thumbnailData.id = `image${baseIndex + 1}`;
+        thumbnailData.index = baseIndex + 1;
+        thumbnailData.name = `BinData/${thumbnailData.id}.${thumbnailData.ext}`;
+        images.thumbnail = thumbnailData;
+    }
+    if (beforeData) {
+        beforeData.id = `image${baseIndex + 2}`;
+        beforeData.index = baseIndex + 2;
+        beforeData.name = `BinData/${beforeData.id}.${beforeData.ext}`;
+        images.before = beforeData;
+    }
+    if (afterData) {
+        afterData.id = `image${baseIndex + 3}`;
+        afterData.index = baseIndex + 3;
+        afterData.name = `BinData/${afterData.id}.${afterData.ext}`;
+        images.after = afterData;
+    }
+    const thumbnailSnapshotUrn = issue.thumbnailSnapshotUrn || issue.snapshotUrn || issue.thumbnailUrn;
+    if (!images.thumbnail && thumbnailSnapshotUrn && token) {
+        try {
+            const fetched = await fetchSnapshotImage(thumbnailSnapshotUrn, token);
+            const ext = contentTypeToImageExt(fetched.contentType) || imageExtFromBuffer(fetched.buffer);
+            if (!ext) throw new Error(`지원하지 않는 이미지 형식입니다: ${fetched.contentType || 'unknown'}`);
+            images.thumbnail = {
+                id: `image${baseIndex + 1}`,
+                index: baseIndex + 1,
+                name: `BinData/image${baseIndex + 1}.${ext}`,
+                ext,
+                contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+                buffer: fetched.buffer
+            };
+        } catch (err) {
+            console.warn('[HWPX Export] issue thumbnail image skipped:', err.message);
+        }
+    }
+    if (images.thumbnail || images.before || images.after) {
+        console.log('[HWPX Export] issue image resolved:', {
+            index: index + 1,
+            thumbnail: !!images.thumbnail,
+            before: !!images.before,
+            after: !!images.after,
+            thumbnailSnapshotUrn: !!thumbnailSnapshotUrn
+        });
+    } else {
+        console.warn('[HWPX Export] issue image not found:', {
+            index: index + 1,
+            thumbnailSnapshotUrn: !!thumbnailSnapshotUrn,
+            hasToken: !!token
+        });
+    }
+    return images;
+}
+
+function isBimReviewIssue(issue) {
+    const typeText = [
+        issue?.exportIssueType,
+        issue?.type,
+        issue?.issueType,
+        issue?.category,
+        issue?.typePath,
+        issue?.workScheduleCategory,
+        issue?.kind,
+        issue?.label
+    ].map(value => {
+        if (!value) return '';
+        if (typeof value === 'object') return value.name || value.text || value.title || '';
+        return String(value);
+    }).join(' ').toLowerCase();
+    return typeText.includes('간섭') || typeText.includes('clash') || typeText.includes('collision') ||
+        typeText.includes('설계') || typeText.includes('design');
+}
+
+function isClosedIssueStatus(issue) {
+    const statusKey = String(issue?.status || issue?.state || '').toLowerCase().replace(/[\s_-]+/g, '');
+    return statusKey.includes('종료') || statusKey.includes('완료') ||
+        statusKey.includes('closed') || statusKey.includes('complete') ||
+        statusKey.includes('completed') || statusKey.includes('done');
+}
+
+function getIssueReviewPlan(issue) {
+    return String(
+        issue?.reviewPlan ||
+        issue?.bimReviewPlan ||
+        issue?.hwpxReviewPlan ||
+        issue?.resolutionPlan ||
+        ''
+    ).trim();
+}
+
+function getIssueBimReviewImageCaption(issue) {
+    return String(
+        issue?.bimReviewImageCaption ||
+        issue?.reviewImageCaption ||
+        issue?.bimReviewCaption ||
+        issue?.hwpxBimReviewImageCaption ||
+        ''
+    ).trim();
+}
+
+function getIssueResultImageCaption(issue) {
+    return String(
+        issue?.resultImageCaption ||
+        issue?.reflectionResultImageCaption ||
+        issue?.bimResultImageCaption ||
+        issue?.hwpxResultImageCaption ||
+        ''
+    ).trim();
+}
+
+function normalizeReviewImageList(issue, keys) {
+    const result = [];
+    for (const key of keys) {
+        const value = issue && issue[key];
+        const values = Array.isArray(value) ? value : (value ? [value] : []);
+        for (const item of values) {
+            if (typeof item !== 'string' || !item.startsWith('data:image/')) continue;
+            const image = dataUrlToImage(item);
+            if (image) result.push(image);
+            if (result.length >= 2) return result;
+        }
+    }
+    return result;
+}
+
+async function resolveBimReviewIssueImages(issue, index) {
+    const baseIndex = index * 4;
+    const reviewImages = normalizeReviewImageList(issue, ['bimReviewImages', 'reviewImages', 'bimReviewImage'])
+        .map((image, imageIndex) => ({
+            ...image,
+            id: `reviewImage${baseIndex + imageIndex + 1}`,
+            index: baseIndex + imageIndex + 1,
+            name: `BinData/reviewImage${baseIndex + imageIndex + 1}.${image.ext}`
+        }));
+    const resultImages = normalizeReviewImageList(issue, ['resultImages', 'reflectionResultImages', 'bimResultImages', 'resultImage'])
+        .map((image, imageIndex) => ({
+            ...image,
+            id: `reviewImage${baseIndex + reviewImages.length + imageIndex + 1}`,
+            index: baseIndex + reviewImages.length + imageIndex + 1,
+            name: `BinData/reviewImage${baseIndex + reviewImages.length + imageIndex + 1}.${image.ext}`
+        }));
+    return { reviewImages, resultImages };
+}
+
+function addHwpxImageManifestItems(contentHpf, images) {
+    const items = images
+        .filter(Boolean)
+        .filter(image => !contentHpf.includes(`id="${attrEscape(image.id)}"`))
+        .map(image => `<opf:item id="${attrEscape(image.id)}" href="${attrEscape(image.name)}" media-type="${attrEscape(image.contentType || `image/${image.ext}`)}" isEmbeded="1"/>`)
+        .join('');
+    if (!items) return contentHpf;
+    return contentHpf.replace('</opf:manifest>', `${items}</opf:manifest>`);
+}
+
+function addHwpxHeaderBinDataItems(headerXml, images) {
+    return headerXml;
+}
+
+function addHwpxPackageManifestImageEntries(manifestXml, images) {
+    const items = images
+        .filter(Boolean)
+        .filter(image => !manifestXml.includes(`full-path="${attrEscape(image.name)}"`))
+        .map(image => `<file-entry full-path="${attrEscape(image.name)}" media-type="${attrEscape(image.contentType || `image/${image.ext}`)}"/>`)
+        .join('');
+    if (!items) return manifestXml;
+    return manifestXml.replace('</manifest>', `${items}</manifest>`);
+}
+
+function addHwpxImageEntries(entries, images) {
+    const existing = new Set(entries.map(entry => entry.name));
+    images.filter(Boolean).forEach(image => {
+        if (!existing.has(image.name)) {
+            entries.push({ name: image.name, data: image.buffer });
+            existing.add(image.name);
+        }
+    });
+    return entries;
+}
+
+function setHwpxHeaderSectionCount(headerXml, sectionCount) {
+    if (!headerXml || !sectionCount) return headerXml;
+    return headerXml.replace(/(<hh:head\b[^>]*\bsecCnt=")(\d+)(")/, (_match, prefix, _value, suffix) => {
+        return `${prefix}${sectionCount}${suffix}`;
+    });
+}
+
+function setHwpxContentSections(contentHpf, sectionCount) {
+    if (!contentHpf || sectionCount <= 1) return contentHpf;
+    let next = contentHpf;
+    const manifestItems = [];
+    const spineItems = [];
+    for (let i = 1; i < sectionCount; i += 1) {
+        const id = `section${i}`;
+        manifestItems.push(`<opf:item id="${id}" href="Contents/${id}.xml" media-type="application/xml"/>`);
+        spineItems.push(`<opf:itemref idref="${id}" linear="yes"/>`);
+    }
+    next = next.replace('</opf:manifest>', `${manifestItems.join('')}</opf:manifest>`);
+    next = next.replace('</opf:spine>', `${spineItems.join('')}</opf:spine>`);
+    return next;
+}
+
+function fillIssueTemplateBlock(tableParagraph, issue, index, images = {}) {
+    const parsed = parseUpdateIssueDescription(issue);
+    const imageNote = issue.imageNote || issue.afterImageNote || issue.hwpxImageNote || issue.reportImageNote || '';
+    const specialNote = getIssueSpecialNote(issue);
+    let block = tableParagraph;
+    block = block.replace(/pageBreak="[^"]*"/, `pageBreak="${index === 0 ? '0' : '1'}"`);
+    block = updateFirstEmptyCellParagraphAfterLabel(block, '수정 사유', parsed.reason || ' ');
+    block = updateFirstEmptyCellParagraphAfterLabel(block, '주요 수정 사항', parsed.changes || ' ');
+    block = updateCellImageByAddress(block, 4, 3, images.thumbnail);
+    block = updateCellTextByAddress(block, 5, 0, imageNote || ' ');
+    block = updateCellTextByAddress(block, 5, 3, imageNote || ' ');
+    if (images.before || images.after) {
+        block = updateCellsInRowHeight(block, 6, 17600);
+    }
+    block = updateCellImageByAddress(block, 6, 0, images.before);
+    block = updateCellImageByAddress(block, 6, 3, images.after);
+    block = specialNote
+        ? updateFirstEmptyCellParagraphAfterLabel(block, '특이 사항', specialNote)
+        : removeTableRowByCellAddress(removeTableRowContainingLabel(block, '특이 사항'), 7);
+    return uniquifyHwpxBlockIds(block, index);
+}
+
+async function createTemplateBasedUpdateIssuesHwpx(issues, title, token) {
+    if (!fs.existsSync(HWPX_TEMPLATE_PATH)) return null;
+    const templateEntries = readZipEntries(fs.readFileSync(HWPX_TEMPLATE_PATH));
+    const issueImages = await Promise.all(issues.map((issue, index) => resolveIssueExportImages(issue, index, token)));
+    const allImages = issueImages.flatMap(pair => [pair.thumbnail, pair.before, pair.after]).filter(Boolean);
+    console.log('[HWPX Export] image summary:', {
+        issues: issues.length,
+        images: allImages.length,
+        thumbnailImages: issueImages.filter(pair => pair.thumbnail).length,
+        beforeImages: issueImages.filter(pair => pair.before).length,
+        afterImages: issueImages.filter(pair => pair.after).length
+    });
+    const previewIssueText = issues.map((issue, index) => {
+        const parsed = parseUpdateIssueDescription(issue);
+        const specialNote = getIssueSpecialNote(issue);
+        return [
+            `수정 사유: ${parsed.reason || ''}`,
+            `주요 수정 사항: ${parsed.changes || ''}`,
+            specialNote ? `특이 사항: ${specialNote}` : ''
+        ].filter(Boolean).join('\r\n');
+    }).join('\r\n\r\n');
+    const hasSpecialNotes = issues.some(issue => !!getIssueSpecialNote(issue));
+    const previewText = [
+        '<수정 사유><>',
+        '<주요 수정 사항><' + previewIssueText + '>',
+        '<변경 전><변경 후 >',
+        '<><>',
+        '<><>',
+        '<><>',
+        '<><>'
+    ].concat(hasSpecialNotes ? [
+        '<특이 사항><' + issues.map(issue => getIssueSpecialNote(issue)).filter(Boolean).join('\r\n\r\n') + '>'
+    ] : []).join('\r\n');
+    const nextEntries = templateEntries.map(entry => {
+        if (entry.name === 'Contents/section0.xml') {
+            let xml = entry.data.toString('utf8');
+            const template = getTemplateTableParagraph(xml);
+            if (template) {
+                const blocks = issues.map((issue, index) => fillIssueTemplateBlock(template.tableParagraph, issue, index, issueImages[index])).join('');
+                xml = template.prefix + blocks + template.suffix;
+            } else {
+                xml = updateFirstEmptyCellParagraphAfterLabel(xml, '수정 사유', '');
+                xml = updateFirstEmptyCellParagraphAfterLabel(xml, '주요 수정 사항', previewIssueText || ' ');
+                xml = hasSpecialNotes
+                    ? updateFirstEmptyCellParagraphAfterLabel(xml, '특이 사항', issues.map(issue => getIssueSpecialNote(issue)).filter(Boolean).join('\r\n\r\n'))
+                    : removeTableRowByCellAddress(removeTableRowContainingLabel(xml, '특이 사항'), 7);
+            }
+            return { name: entry.name, data: xml };
+        }
+        if (entry.name === 'Contents/content.hpf') {
+            return { name: entry.name, data: addHwpxImageManifestItems(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'Contents/header.xml') {
+            return { name: entry.name, data: addHwpxHeaderBinDataItems(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'META-INF/manifest.xml') {
+            return { name: entry.name, data: addHwpxPackageManifestImageEntries(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'Preview/PrvText.txt') return { name: entry.name, data: previewText };
+        return entry;
+    });
+    return createZip(addHwpxImageEntries(nextEntries, allImages));
+}
+
+function getBimReviewText(issue) {
+    return stripLeadingBulletMarkers(stripVersionInfo(issue.description || issue.desc || issue.mainChange || ''));
+}
+
+function getBimReviewResultText(issue) {
+    return stripLeadingBulletMarkers(stripVersionInfo(
+        issue.result ||
+        issue.outcome ||
+        issue.resolutionResult ||
+        issue.reflectionResult ||
+        ''
+    ));
+}
+
+function fillBimReviewTemplateBlock(tableParagraph, issue, index, images = {}, options = {}) {
+    const isClosed = isClosedIssueStatus(issue);
+    let block = tableParagraph;
+    block = block.replace(/pageBreak="[^"]*"/, 'pageBreak="0"');
+    block = updateFirstEmptyCellParagraphAfterLabel(block, '검토 사항', getBimReviewText(issue) || ' ');
+    const reviewImageCaption = getIssueBimReviewImageCaption(issue);
+    block = reviewImageCaption
+        ? updateCellTextByAddress(block, 2, 0, reviewImageCaption)
+        : removeTableRowByCellAddress(block, 2);
+    if (images.reviewImages && images.reviewImages.length) {
+        block = updateCellsInRowHeight(block, 3, 16644);
+        block = updateCellImagesByAddress(block, 3, 0, images.reviewImages);
+    }
+    if (isClosed) {
+        block = updateFirstEmptyCellParagraphAfterLabel(block, '반영 결과', getBimReviewResultText(issue) || ' ');
+        const resultImageCaption = getIssueResultImageCaption(issue);
+        block = resultImageCaption
+            ? updateCellTextByAddress(block, 5, 0, resultImageCaption)
+            : removeTableRowByCellAddress(block, 5);
+        if (images.resultImages && images.resultImages.length) {
+            block = updateCellsInRowHeight(block, 6, 16078);
+            block = updateCellImagesByAddress(block, 6, 0, images.resultImages);
+        }
+        block = removeTableRowContainingLabel(block, '검토 방안');
+    } else {
+        if (options.openFromClosedTemplate) {
+            block = replaceHwpxCellLabel(block, '반영 결과', '검토 방안');
+        }
+        block = updateFirstEmptyCellParagraphAfterLabel(block, '검토 방안', getIssueReviewPlan(issue) || ' ');
+        block = removeTableRowByCellAddress(removeTableRowByCellAddress(removeTableRowContainingLabel(block, '반영 결과'), 6), 5);
+    }
+    return uniquifyHwpxBlockIds(block, index);
+}
+
+function readBimReviewTemplateParts(templatePath) {
+    if (!fs.existsSync(templatePath)) return null;
+    const entries = readZipEntries(fs.readFileSync(templatePath));
+    const sectionEntry = entries.find(entry => entry.name === 'Contents/section0.xml');
+    if (!sectionEntry) return null;
+    const sectionXml = sectionEntry.data.toString('utf8');
+    const template = getTemplateTableParagraph(sectionXml);
+    if (!template) return null;
+    return { entries, template };
+}
+
+async function createTemplateBasedBimReviewIssuesHwpx(issues, title) {
+    const openTemplate = readBimReviewTemplateParts(BIM_REVIEW_OPEN_HWPX_TEMPLATE_PATH);
+    const closedTemplate = readBimReviewTemplateParts(BIM_REVIEW_CLOSED_HWPX_TEMPLATE_PATH);
+    if (!openTemplate && !closedTemplate) return null;
+    const hasClosed = issues.some(isClosedIssueStatus);
+    const hasOpen = issues.some(issue => !isClosedIssueStatus(issue));
+    const mixedStatuses = hasClosed && hasOpen;
+    const baseTemplate = mixedStatuses
+        ? (closedTemplate || openTemplate)
+        : (hasClosed ? closedTemplate : openTemplate) || closedTemplate || openTemplate;
+    const issueImages = await Promise.all(issues.map((issue, index) => resolveBimReviewIssueImages(issue, index)));
+    const allImages = issueImages.flatMap(pair => [...pair.reviewImages, ...pair.resultImages]).filter(Boolean);
+    const previewText = issues.map(issue => {
+        const isClosed = isClosedIssueStatus(issue);
+        return [
+            `검토 사항: ${getBimReviewText(issue) || ''}`,
+            isClosed
+                ? `반영 결과: ${getBimReviewResultText(issue) || ''}`
+                : `검토 방안: ${getIssueReviewPlan(issue) || ''}`
+        ].join('\r\n');
+    }).join('\r\n\r\n');
+    const blocks = issues.map((issue, index) => {
+        const useClosedForOpen = mixedStatuses && !isClosedIssueStatus(issue);
+        const perIssueTemplate = mixedStatuses
+            ? baseTemplate
+            : ((isClosedIssueStatus(issue) ? closedTemplate : openTemplate) || baseTemplate);
+        return fillBimReviewTemplateBlock(perIssueTemplate.template.tableParagraph, issue, index, issueImages[index], {
+            openFromClosedTemplate: useClosedForOpen
+        });
+    }).join('');
+    const nextEntries = baseTemplate.entries.map(entry => {
+        if (entry.name === 'Contents/section0.xml') {
+            return {
+                name: entry.name,
+                data: baseTemplate.template.prefix + blocks + baseTemplate.template.suffix
+            };
+        }
+        if (entry.name === 'Contents/content.hpf') {
+            return { name: entry.name, data: addHwpxImageManifestItems(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'Contents/header.xml') {
+            return { name: entry.name, data: addHwpxHeaderBinDataItems(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'META-INF/manifest.xml') {
+            return { name: entry.name, data: addHwpxPackageManifestImageEntries(entry.data.toString('utf8'), allImages) };
+        }
+        if (entry.name === 'Preview/PrvText.txt') return { name: entry.name, data: previewText };
+        return entry;
+    });
+    return createZip(addHwpxImageEntries(nextEntries, allImages));
+}
+
+async function createBimReviewIssuesHwpx(issues, title) {
+    const templated = await createTemplateBasedBimReviewIssuesHwpx(issues, title);
+    if (templated) return templated;
+    return createZip([
+        { name: 'mimetype', data: 'application/hwp+zip' },
+        { name: 'version.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HCFVersion xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" targetApplication="WORDPROC" major="5" minor="1" micro="0" buildNumber="0" os="Windows"/>' },
+        { name: 'META-INF/manifest.xml', data: '<?xml version="1.0" encoding="UTF-8"?><manifest xmlns="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><file-entry full-path="/" media-type="application/hwp+zip"/><file-entry full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/><file-entry full-path="Contents/header.xml" media-type="application/xml"/><file-entry full-path="Contents/section0.xml" media-type="application/xml"/><file-entry full-path="Contents/settings.xml" media-type="application/xml"/></manifest>' },
+        { name: 'META-INF/container.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>' },
+        { name: 'Contents/content.hpf', data: '<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="1.0"><opf:metadata><dc:title>BIM기반 검토 보고서</dc:title><dc:creator>APS AI Platform</dc:creator><dc:language>ko-KR</dc:language></opf:metadata><opf:manifest><opf:item id="header" href="header.xml" media-type="application/xml"/><opf:item id="section0" href="section0.xml" media-type="application/xml"/><opf:item id="settings" href="settings.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="section0"/></opf:spine></opf:package>' },
+        { name: 'Contents/header.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/><hh:refList><hh:fontfaces><hh:fontface lang="HANGUL"><hh:font name="함초롬바탕" type="TTF"/></hh:fontface></hh:fontfaces><hh:borderFills><hh:borderFill id="0"/></hh:borderFills><hh:charProperties><hh:charPr id="0" height="1000" textColor="#000000"/></hh:charProperties><hh:paraProperties><hh:paraPr id="0" align="LEFT"/></hh:paraProperties><hh:styles><hh:style id="0" type="PARA" name="바탕글" paraPrIDRef="0" charPrIDRef="0"/></hh:styles></hh:refList></hh:head>' },
+        { name: 'Contents/section0.xml', data: buildHwpxSection(issues.map((issue, index) => ({ ...issue, id: issue.id || index + 1, mainChange: getBimReviewText(issue) })), title || 'BIM기반 검토 보고서') },
+        { name: 'Contents/settings.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app"/>' },
+        { name: 'Preview/PrvText.txt', data: issues.map(issue => getBimReviewText(issue)).join('\n\n') }
+    ]);
+}
+
+function buildHwpxSection(issues, title) {
+    const today = new Date().toISOString().slice(0, 10);
+    const body = issues.map((issue, index) => {
+        const mainChange = stripVersionInfo(issue.mainChange || issue.description || issue.desc || '');
+        const specialNote = getIssueSpecialNote(issue);
+        return [
+            hpPara(`${index + 1}. ${issue.title || '업데이트 이슈'}`, 1),
+            hpPara(`이슈 ID: ${issue.id || '-'}`),
+            hpPara(`상태: ${issue.status || '-'}`),
+            hpPara(`담당자: ${issue.assignee || '-'}`),
+            hpPara(`확인자: ${issue.reviewer || '-'}`),
+            hpPara(`위치: ${issue.location || '-'}`),
+            hpPara(`배치: ${issue.placement || '-'}`),
+            hpPara('이미지 제목: '),
+            hpPara('이미지: '),
+            hpPara('수정사유: '),
+            hpPara('주요 수정 사항'),
+            hpPara(mainChange || ' ')
+        ].concat(specialNote ? [
+            hpPara('특이 사항: '),
+            hpPara(specialNote)
+        ] : []).join('');
+    }).join('');
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+${hpPara(title || '업데이트 이슈 보고서', 1)}
+${hpPara(`작성일: ${today}`)}
+${hpPara(`대상: 업데이트 이슈 ${issues.length}건`)}
+${hpPara(' ')}
+${body}
+</hs:sec>`;
+}
+
+async function createUpdateIssuesHwpx(issues, title, token) {
+    const templated = await createTemplateBasedUpdateIssuesHwpx(issues, title, token);
+    if (templated) return templated;
+
+    const safeIssues = issues.map((issue, index) => ({
+        id: issue.id || issue.displayId || issue.dbId || index + 1,
+        title: issue.title || issue.name || '업데이트 이슈',
+        status: issue.status || '',
+        assignee: issue.assignee || '',
+        reviewer: issue.reviewer || issue.verifier || '',
+        location: issue.location || issue.locationName || '',
+        placement: issue.placement || issue.placementName || issue.file || '',
+        mainChange: stripVersionInfo(issue.mainChange || issue.description || issue.desc || ''),
+        specialNote: getIssueSpecialNote(issue)
+    }));
+    const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>
+  <hh:refList>
+    <hh:fontfaces><hh:fontface lang="HANGUL"><hh:font name="함초롬바탕" type="TTF"/></hh:fontface></hh:fontfaces>
+    <hh:borderFills><hh:borderFill id="0"/></hh:borderFills>
+    <hh:charProperties><hh:charPr id="0" height="1000" textColor="#000000"/></hh:charProperties>
+    <hh:paraProperties><hh:paraPr id="0" align="LEFT"/></hh:paraProperties>
+    <hh:styles><hh:style id="0" type="PARA" name="바탕글" paraPrIDRef="0" charPrIDRef="0"/></hh:styles>
+    <hh:bullets/>
+    <hh:numberings/>
+  </hh:refList>
+</hh:head>`;
+    const entries = [
+        { name: 'mimetype', data: 'application/hwp+zip' },
+        { name: 'version.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HCFVersion xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" targetApplication="WORDPROC" major="5" minor="1" micro="0" buildNumber="0" os="Windows"/>' },
+        { name: 'META-INF/manifest.xml', data: '<?xml version="1.0" encoding="UTF-8"?><manifest xmlns="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><file-entry full-path="/" media-type="application/hwp+zip"/><file-entry full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/><file-entry full-path="Contents/header.xml" media-type="application/xml"/><file-entry full-path="Contents/section0.xml" media-type="application/xml"/><file-entry full-path="Contents/settings.xml" media-type="application/xml"/></manifest>' },
+        { name: 'META-INF/container.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>' },
+        { name: 'Contents/content.hpf', data: '<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="1.0"><opf:metadata><dc:title>업데이트 이슈 보고서</dc:title><dc:creator>APS AI Platform</dc:creator><dc:language>ko-KR</dc:language></opf:metadata><opf:manifest><opf:item id="header" href="header.xml" media-type="application/xml"/><opf:item id="section0" href="section0.xml" media-type="application/xml"/><opf:item id="settings" href="settings.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="section0"/></opf:spine></opf:package>' },
+        { name: 'Contents/header.xml', data: headerXml },
+        { name: 'Contents/section0.xml', data: buildHwpxSection(safeIssues, title) },
+        { name: 'Contents/settings.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app"/>' },
+        { name: 'Preview/PrvText.txt', data: safeIssues.map(issue => [issue.title, issue.mainChange].filter(Boolean).join('\n')).join('\n\n') }
+    ];
+    return createZip(entries);
 }
 
 function textFromValueSafe(value) {
@@ -1722,6 +2772,53 @@ router.delete('/api/issues/:id', (req, res) => {
         res.status(500).json({ error: 'Failed to delete issue' });
     }
 });
+
+// ── POST /api/issues/export-hwpx ────────────────────────────────
+router.post('/api/issues/export-hwpx', hwpxRateLimit, authRefreshMiddleware, asyncHandler(async (req, res) => {
+    const data = req.body || {};
+    const issuesRaw = Array.isArray(data.issues) ? data.issues : [];
+    if (!issuesRaw.length) throw new AppError('내보낼 이슈가 없습니다.', 400, 'VALIDATION_ERROR');
+
+    const exportKind = String(data.reportKind || data.filter || '').toLowerCase();
+    const isUpdateExportRequest = exportKind === 'update';
+    const isBimReviewExportRequest = exportKind === 'bim-review' || exportKind === 'review';
+    const updateIssues = isUpdateExportRequest ? issuesRaw : issuesRaw.filter(issue => {
+        const typeText = [
+            issue.exportIssueType,
+            issue.type,
+            issue.issueType,
+            issue.category,
+            issue.typePath,
+            issue.workScheduleCategory,
+            issue.kind,
+            issue.label
+        ].map(value => {
+            if (!value) return '';
+            if (typeof value === 'object') return value.name || value.text || value.title || '';
+            return String(value);
+        }).join(' ').toLowerCase();
+        return typeText.includes('업데이트') || typeText.includes('update');
+    });
+    const bimReviewIssues = isBimReviewExportRequest ? issuesRaw : issuesRaw.filter(isBimReviewIssue);
+
+    const token = req.internalOAuthToken && req.internalOAuthToken.access_token;
+    let hwpxBuffer;
+    let filenameBase;
+    if (isBimReviewExportRequest) {
+        if (!bimReviewIssues.length) throw new AppError('설계 이슈 또는 간섭 이슈가 없습니다.', 400, 'VALIDATION_ERROR');
+        hwpxBuffer = await createBimReviewIssuesHwpx(bimReviewIssues, data.title || 'BIM기반 검토 보고서');
+        filenameBase = 'BIM기반_검토_보고서';
+    } else {
+        if (!updateIssues.length) throw new AppError('업데이트 구분 이슈가 없습니다.', 400, 'VALIDATION_ERROR');
+        hwpxBuffer = await createUpdateIssuesHwpx(updateIssues, data.title || 'BIM 모델 작성 보고서', token);
+        filenameBase = 'BIM_모델_작성_보고서';
+    }
+    const filename = encodeURIComponent(`${filenameBase}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.hwpx`);
+    res.setHeader('Content-Type', 'application/hwp+zip');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
+    res.setHeader('Content-Length', String(hwpxBuffer.length));
+    res.send(hwpxBuffer);
+}));
 
 // ── POST /api/issues/export-pdf ────────────────────────────────
 router.post('/api/issues/export-pdf', pdfRateLimit, asyncHandler(async (req, res) => {

@@ -19,7 +19,7 @@
     <!-- Three.js (금주 작업 시각화 3D 뷰어) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.min.js"></script>
     <!-- Dashboard CSS -->
-    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260828-selected-cctv1">
+    <link rel="stylesheet" href="/css/construction-dashboard.css?v=20260831-monthly-export2">
     <!-- Custom CCTV CSS -->
     <link rel="stylesheet" href="/css/cctv.css">
     <script>
@@ -2044,8 +2044,17 @@
                 </div>
                 <!-- 열 설정 버튼 & 드롭다운 -->
                 <div style="position: relative; display: flex; align-items: center;">
+                    <button id="btn-monthly-issue-browser" class="btn btn-sm btn-outline-secondary" style="margin-right: 8px; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s;" title="월별 이슈 보기">
+                        <i class="fas fa-calendar-days" style="color: #7dd3fc;"></i>
+                    </button>
                     <button id="btn-main-pdf-export" class="btn btn-sm btn-outline-secondary" style="margin-right: 8px; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s;" title="PDF 내보내기">
                         <i class="fas fa-file-pdf" style="color: #ef4444;"></i>
+                    </button>
+                    <button id="btn-main-hwpx-export" class="btn btn-sm btn-outline-secondary" style="margin-right: 8px; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s;" title="업데이트 이슈 한글(.hwpx) 내보내기">
+                        <i class="fas fa-file-word" style="color: #38bdf8;"></i>
+                    </button>
+                    <button id="btn-main-report-images-export" class="btn btn-sm btn-outline-secondary" style="margin-right: 8px; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s;" title="현재 이슈 목록의 보고서 이미지 ZIP 다운로드">
+                        <i class="fas fa-images" style="color: #22c55e;"></i>
                     </button>
                     <button id="btn-column-settings" style="background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
                         <i class="fas fa-cog"></i> 열 설정
@@ -2059,7 +2068,33 @@
                 </div>
             </div>
 
-            <div style="flex: 1; overflow-y: auto; background: #1e293b; border-radius: 8px; border: 1px solid #334155;">
+            <div id="issue-monthly-inline-controls" style="display:none; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: -8px 0 14px; padding: 12px; background: rgba(15,23,42,0.78); border: 1px solid #334155; border-radius: 8px;">
+                <label style="display:grid; gap:5px; color:#94a3b8; font-size:11px; font-weight:900;">월
+                    <select id="issue-monthly-inline-month" style="height:34px; border:1px solid #475569; border-radius:6px; background:#020617; color:#e5eefb; padding:0 9px;"></select>
+                </label>
+                <label style="display:grid; gap:5px; color:#94a3b8; font-size:11px; font-weight:900;">보기 기준
+                    <select id="issue-monthly-inline-group" style="height:34px; border:1px solid #475569; border-radius:6px; background:#020617; color:#e5eefb; padding:0 9px;">
+                        <option value="structure">구조물별</option>
+                        <option value="trade">공종별</option>
+                    </select>
+                </label>
+                <label style="display:grid; gap:5px; color:#94a3b8; font-size:11px; font-weight:900;">정렬
+                    <select id="issue-monthly-inline-sort" style="height:34px; border:1px solid #475569; border-radius:6px; background:#020617; color:#e5eefb; padding:0 9px;">
+                        <option value="structureTradeCreated">구조물/공종/작성순</option>
+                        <option value="date">최신 날짜순</option>
+                        <option value="id">이슈 ID순</option>
+                        <option value="title">제목순</option>
+                        <option value="status">상태순</option>
+                    </select>
+                </label>
+                <label style="display:grid; gap:5px; color:#94a3b8; font-size:11px; font-weight:900;">검색
+                    <input id="issue-monthly-inline-search" type="search" placeholder="제목, 구조물, 공종 검색" style="height:34px; border:1px solid #475569; border-radius:6px; background:#020617; color:#e5eefb; padding:0 9px;">
+                </label>
+            </div>
+
+            <div id="issue-monthly-grouped-view" style="display:none; flex:1; overflow-y:auto; background:#1e293b; border-radius:8px; border:1px solid #334155; padding:14px; box-sizing:border-box;"></div>
+
+            <div id="issue-table-wrap" style="flex: 1; overflow-y: auto; background: #1e293b; border-radius: 8px; border: 1px solid #334155;">
                 <table style="width: 100%; border-collapse: collapse; text-align: left; color: #f8fafc; font-size: 14px;">
                     <thead id="issue-table-header" style="background: #0f172a; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #475569;">
                     </thead>
@@ -2503,18 +2538,209 @@
     <!-- Autodesk Viewer Scripts -->
     <script src="/api/viewer-sdk/7.108.0/viewer3D.min.js"></script>
     <script type="module">
-        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260828-selected-cctv1';
+        import { initConstructionBimDashboard } from '/js/construction-dashboard.js?v=20260902-special-note2';
         document.addEventListener('DOMContentLoaded', initConstructionBimDashboard);
     </script>
-    <script src="./js/model-visibility.js?v=20260804-tab-preserve1" type="module"></script>
+    <script src="./js/model-visibility.js?v=20260902-opacity-material5" type="module"></script>
     <!-- Main Entry Point Module -->
-    <script src="./js/main.js?v=20260825-viewer-visible-guard1" type="module"></script>
+    <script src="./js/main.js?v=20260903-report-region-capture1" type="module"></script>
 
     <script>
         // ── Tab Switching Logic ────────────────────────────────────
+        window.__apsAuthenticated = null;
+        window.__apsAuthCheckPromise = null;
+        window.APS_PROTECTED_TABS = ['example1', 'construction', 'monthly-issues', 'issue', 'cctv', 'project'];
+
+        window.clearProtectedLocalCaches = function() {
+            [
+                'aps_project_issues',
+                'my_saved_issues',
+                'my_saved_compare_issues',
+                'cctv_field_issues',
+                'aps_example1_merged_models_v1',
+                'aps_example1_merged_preview_v1',
+                'aps_example1_hold_preview_until_refresh_v1'
+            ].forEach(function(key) {
+                try { localStorage.removeItem(key); } catch (err) {}
+            });
+            window._constructionIssueCache = [];
+            window._globalRvtModelsCache = null;
+        };
+
+        window.ensureAutodeskAuthenticated = function(force) {
+            if (!force && window.__apsAuthenticated === true) return Promise.resolve(true);
+            if (!force && window.__apsAuthenticated === false) return Promise.resolve(false);
+            if (!force && window.__apsAuthCheckPromise) return window.__apsAuthCheckPromise;
+
+            window.__apsAuthCheckPromise = fetch('/api/auth/profile', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(function(resp) {
+                    if (!resp.ok) return false;
+                    return resp.json().then(function(profile) {
+                        return !!(profile && (profile.name || profile.email || profile.id));
+                    });
+                })
+                .catch(function() { return false; })
+                .then(function(isAuthed) {
+                    window.__apsAuthenticated = isAuthed;
+                    window.__apsAuthCheckPromise = null;
+                    if (!isAuthed && typeof window.clearProtectedLocalCaches === 'function') {
+                        window.clearProtectedLocalCaches();
+                    }
+                    return isAuthed;
+                });
+            return window.__apsAuthCheckPromise;
+        };
+
+        window.showAuthRequiredScreen = function(tabName) {
+            var protectedEls = [
+                document.getElementById('tab-content-project'),
+                document.getElementById('tab-content-issue'),
+                document.getElementById('tab-content-cctv'),
+                document.getElementById('construction-bim-dashboard'),
+                document.getElementById('monthly-issue-status-tab'),
+                document.getElementById('example1-tab')
+            ];
+            protectedEls.forEach(function(el) {
+                if (el) el.style.display = 'none';
+            });
+
+            var panel = document.getElementById('auth-required-screen');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'auth-required-screen';
+                panel.style.cssText = 'position:relative; z-index:20; min-height:calc(100vh - 70px); display:flex; align-items:center; justify-content:center; padding:24px; background:#0b1120; color:#e2e8f0;';
+                panel.innerHTML =
+                    '<div style="width:min(520px,100%); border:1px solid rgba(56,189,248,0.3); border-radius:8px; background:rgba(15,23,42,0.96); padding:26px; text-align:center; box-shadow:0 18px 44px rgba(0,0,0,0.35);">' +
+                    '<div style="font-size:2rem; color:#38bdf8; margin-bottom:12px;"><i class="fas fa-lock"></i></div>' +
+                    '<h2 style="margin:0 0 10px; font-size:1.25rem; color:#f8fafc;">Autodesk Docs 로그인이 필요합니다</h2>' +
+                    '<p style="margin:0 0 18px; color:#94a3b8; line-height:1.55;">홈, 현장, BIM, 현장관제 데이터는 로그인 후 확인할 수 있습니다.</p>' +
+                    '<a href="/api/auth/login?force=1" class="login-btn" style="display:inline-flex;"><i class="fas fa-sign-in-alt"></i> <i class="fab fa-autodesk"></i> 로그인</a>' +
+                    '</div>';
+                document.body.appendChild(panel);
+            }
+            panel.style.display = 'flex';
+            panel.dataset.targetTab = tabName || '';
+        };
+
+        window.hideAuthRequiredScreen = function() {
+            var panel = document.getElementById('auth-required-screen');
+            if (panel) panel.style.display = 'none';
+        };
+
+        window.showProjectExplorerPanel = function() {
+            var project = document.getElementById('tab-content-project');
+            var explorerContainer = document.getElementById('explorer-container');
+            var preview = document.getElementById('preview');
+            var comparisonContainer = document.getElementById('comparison-container');
+            var comparisonBar = document.getElementById('comparison-bar');
+            var backBtn = document.getElementById('back-to-explorer-btn');
+            var mainViewerControls = document.getElementById('main-viewer-controls');
+
+            window.__projectPanelMode = 'explorer';
+            if (project) {
+                project.style.display = 'block';
+                project.style.position = 'relative';
+                project.style.opacity = '1';
+                project.style.pointerEvents = 'auto';
+                project.style.zIndex = '10';
+            }
+            if (explorerContainer) {
+                explorerContainer.style.display = 'flex';
+                explorerContainer.style.position = 'absolute';
+                explorerContainer.style.inset = '0';
+                explorerContainer.style.zIndex = '30';
+            }
+            if (preview) preview.style.display = 'none';
+            if (comparisonContainer) comparisonContainer.style.display = 'none';
+            if (comparisonBar) comparisonBar.style.display = 'none';
+            if (backBtn) backBtn.style.display = 'none';
+            if (mainViewerControls) mainViewerControls.style.display = 'none';
+
+            if (window.explorer && typeof window.explorer.switchMode === 'function') {
+                window.explorer.switchMode('explorer');
+            }
+        };
+
+        window.showProjectViewerPanel = function() {
+            var project = document.getElementById('tab-content-project');
+            var explorerContainer = document.getElementById('explorer-container');
+            var preview = document.getElementById('preview');
+            var comparisonContainer = document.getElementById('comparison-container');
+            var comparisonBar = document.getElementById('comparison-bar');
+            var backBtn = document.getElementById('back-to-explorer-btn');
+
+            window.__projectPanelMode = 'viewer';
+            document.body.classList.remove('comparison-active');
+            if (project) {
+                project.style.display = 'block';
+                project.style.position = 'relative';
+                project.style.opacity = '1';
+                project.style.pointerEvents = 'auto';
+                project.style.zIndex = '10';
+            }
+            if (explorerContainer) explorerContainer.style.display = 'none';
+            if (preview) preview.style.display = 'block';
+            if (comparisonContainer) comparisonContainer.style.display = 'none';
+            if (comparisonBar) comparisonBar.style.display = 'none';
+            if (backBtn) backBtn.style.display = 'block';
+
+            if (window.explorer && typeof window.explorer.switchMode === 'function') {
+                window.explorer.switchMode('viewer');
+            }
+            var activeViewer = window.projectViewer || window.myGlobalViewer || window.viewer || window.NOP_VIEWER;
+            if (activeViewer && typeof activeViewer.resize === 'function') {
+                setTimeout(function() { activeViewer.resize(); }, 50);
+            }
+        };
+
+        window.showProjectComparisonPanel = function() {
+            var project = document.getElementById('tab-content-project');
+            var explorerContainer = document.getElementById('explorer-container');
+            var preview = document.getElementById('preview');
+            var comparisonContainer = document.getElementById('comparison-container');
+            var comparisonBar = document.getElementById('comparison-bar');
+            var viewerOverlay = document.getElementById('viewer-overlay');
+            var splitWrapper = document.getElementById('viewer-split-wrapper');
+            var comparisonPanel = document.getElementById('comparison-panel');
+            var backBtn = document.getElementById('back-to-explorer-btn');
+
+            window.__projectPanelMode = 'comparison';
+            document.body.classList.add('comparison-active');
+            if (project) {
+                project.style.display = 'block';
+                project.style.position = 'relative';
+                project.style.opacity = '1';
+                project.style.pointerEvents = 'auto';
+                project.style.zIndex = '10';
+            }
+            if (explorerContainer) explorerContainer.style.display = 'none';
+            if (preview) preview.style.display = 'none';
+            if (comparisonContainer) comparisonContainer.style.display = 'flex';
+            if (comparisonBar) comparisonBar.style.display = 'flex';
+            if (viewerOverlay) viewerOverlay.style.setProperty('display', 'none', 'important');
+            if (splitWrapper) splitWrapper.style.display = 'flex';
+            if (comparisonPanel) comparisonPanel.style.display = 'flex';
+            if (backBtn) backBtn.style.display = 'none';
+        };
+
         // 🚨 [오프스크린 탭 전환 엔진] 뷰어의 기절을 막는 무중단 탭 스위치 로직
         window.switchTab = function(tabName) {
             tabName = tabName || 'example1';
+            if (window.APS_PROTECTED_TABS.indexOf(tabName) > -1 && window.__apsAuthenticated !== true) {
+                window.showAuthRequiredScreen(tabName);
+                window.ensureAutodeskAuthenticated(true).then(function(isAuthed) {
+                    if (isAuthed) {
+                        window.hideAuthRequiredScreen();
+                        window.switchTab(tabName);
+                    }
+                });
+                return;
+            }
+            window.hideAuthRequiredScreen();
             var previousMainTab = window.currentMainTab || null;
             window.currentMainTab = tabName;
             if (previousMainTab && previousMainTab !== tabName && window._initialMainTabApplied) {
@@ -2607,16 +2833,27 @@
                         window.viewer = window.projectViewer;
                         window.myGlobalViewer = window.projectViewer;
                     }
-                    // 뷰어 복귀 (정상 표시)
-                    project.style.position = 'relative';
-                    project.style.opacity = '1';
-                    project.style.pointerEvents = 'auto';
-                    project.style.zIndex = '1';
+                    var projectPanelMode = window.__nextProjectPanelMode || 'explorer';
+                    window.__nextProjectPanelMode = null;
+                    var applyProjectPanelMode = function() {
+                        if (projectPanelMode === 'comparison' && typeof window.showProjectComparisonPanel === 'function') {
+                            window.showProjectComparisonPanel();
+                        } else if (projectPanelMode === 'viewer' && typeof window.showProjectViewerPanel === 'function') {
+                            window.showProjectViewerPanel();
+                        } else {
+                            window.showProjectExplorerPanel();
+                        }
+                    };
+                    applyProjectPanelMode();
                     
                     setTimeout(function() {
-                        var activeViewer = window.myGlobalViewer || window.viewer || window.NOP_VIEWER;
-                        if (activeViewer && typeof activeViewer.resize === 'function') {
-                            activeViewer.resize();
+                        applyProjectPanelMode();
+                        if (projectPanelMode === 'explorer' && typeof window.updateSourceView === 'function') {
+                            window.updateSourceView();
+                        }
+                        if (projectPanelMode === 'explorer' && window.explorer && typeof window.explorer.refresh === 'function') {
+                            window.explorer.switchMode('explorer');
+                            window.explorer.refresh();
                         }
                     }, 100);
                 } else {
@@ -3253,9 +3490,18 @@
                     });
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     var profile = await resp.json();
-                    return renderProfile(profileSec, profile);
+                    var isAuthed = renderProfile(profileSec, profile);
+                    window.__apsAuthenticated = isAuthed;
+                    if (!isAuthed && typeof window.clearProtectedLocalCaches === 'function') {
+                        window.clearProtectedLocalCaches();
+                    }
+                    return isAuthed;
                 } catch (err) {
                     console.warn('[Auth] Header profile refresh failed:', err.message);
+                    window.__apsAuthenticated = false;
+                    if (typeof window.clearProtectedLocalCaches === 'function') {
+                        window.clearProtectedLocalCaches();
+                    }
                     renderLogin(profileSec);
                     return false;
                 }

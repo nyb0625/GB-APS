@@ -25,6 +25,7 @@ lerna-debug.log*
 data/*.json
 data/*.db
 data/*.sqlite
+data/sessions/
 uploads/
 temp/
 tmp/

@@ -776,7 +776,7 @@ window.compressBase64Array = function(arr, maxWidth, quality, callback) {
  * main.js — Client-side orchestrator
  */
 
-import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260825-viewer-fixed-sdk1';
+import { initViewer, loadModel, captureViewerScreen } from './viewer.js?v=20260902-unconsolidated-opacity1';
 import { initAiPanel } from './ai-panel.js';
 import { explorer } from './explorer.js';
 import './harness-context.js';
@@ -1836,9 +1836,11 @@ window.startMarkupSession = function(baseImgUrl, onComplete) {
             if (!mergedDataUrl || mergedDataUrl.indexOf('data:image/webp') === -1) {
                 mergedDataUrl = mergeCanvas.toDataURL('image/jpeg', 0.9);
             }
+            var markupShapesSnapshot = JSON.parse(JSON.stringify(window.markupShapes || []));
+            var markupCanvasSize = { width: mergeCanvas.width, height: mergeCanvas.height };
             cleanup();
             if (typeof onComplete === 'function') {
-                onComplete(mergedDataUrl);
+                onComplete(mergedDataUrl, null, markupShapesSnapshot, markupCanvasSize);
             }
         }
     };
@@ -2758,15 +2760,19 @@ if (typeof Autodesk !== 'undefined' && Autodesk.Viewing && Autodesk.Viewing.View
     var originalLoadModel = Autodesk.Viewing.Viewer3D.prototype.loadModel;
     Autodesk.Viewing.Viewer3D.prototype.loadModel = function() {
         var self = this;
-        window.myGlobalViewer = self;
-        window.viewer = self;
+        var isProjectViewer = self && self.container && self.container.id === 'preview';
+        if (isProjectViewer) {
+            window.myGlobalViewer = self;
+            window.viewer = self;
+            window.projectViewer = self;
+        }
         
-        if (typeof window.bindViewerEvents === 'function') {
+        if (isProjectViewer && typeof window.bindViewerEvents === 'function') {
             window.bindViewerEvents(self);
         }
         
         return originalLoadModel.apply(this, arguments).then(function(model) {
-            if (typeof initRegularModelIssueButton === 'function') {
+            if (isProjectViewer && typeof initRegularModelIssueButton === 'function') {
                 initRegularModelIssueButton();
             }
             return model;
@@ -2963,6 +2969,10 @@ async function checkLoginStatus() {
 async function updateSourceView() {
     const sourceSelector = document.getElementById('source-selector');
     if (!sourceSelector) return;
+
+    if (window.currentMainTab === 'project' && (window.__projectPanelMode === 'viewer' || window.__projectPanelMode === 'comparison')) {
+        return;
+    }
     
     const source = sourceSelector.value;
     const isLoggedIn = await checkLoginStatus();
@@ -3042,6 +3052,7 @@ async function updateSourceView() {
         }
     }
 }
+window.updateSourceView = updateSourceView;
 
 /**
  * Fetch and populate local model dropdown list
@@ -3201,7 +3212,8 @@ function clearNotification() {
     overlay.style.display = 'none';
 }
 
-window.issueMarkersDOMList = []; 
+window.issueMarkersDOMList = [];
+window.issueMarkerBadgesEnabled = false;
 
 window.updateIssueMarkersPosition = function() {
     // 🚨 [컨테이너 수정] 마커는 activeViewer.container에 직접 추가되므로 viewer container 기준으로 사이즈 측정
@@ -3280,6 +3292,10 @@ window.collectActiveIssueIdsFromTable = function() {
 };
 
 window.scheduleIssueMarkerRender = function(issuesArray, delay) {
+    if (window.issueMarkerBadgesEnabled === false) {
+        if (typeof window.clearAllCurrentMarkers === 'function') window.clearAllCurrentMarkers();
+        return;
+    }
     clearTimeout(window._issueMarkerRenderTimer);
     window._issueMarkerRenderTimer = setTimeout(function() {
         if (typeof window.renderIssueMarkers === 'function') {
@@ -3289,6 +3305,10 @@ window.scheduleIssueMarkerRender = function(issuesArray, delay) {
 };
 
 window.renderIssueMarkers = function(issuesArray) {
+    if (window.issueMarkerBadgesEnabled === false) {
+        if (typeof window.clearAllCurrentMarkers === 'function') window.clearAllCurrentMarkers();
+        return;
+    }
     var activeViewer = window.myGlobalViewer || window.viewer || window.NOP_VIEWER;
     if (!activeViewer || !activeViewer.container) return;
 
@@ -4682,6 +4702,36 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
         if (!issueObj) return result;
         var raw = issueObj.rawFormaIssue || issueObj.rawDetailIssue || issueObj;
+        var parseMaybeJson = function(value) {
+            if (typeof value !== 'string') return value;
+            var text = value.trim();
+            if (!text || (text[0] !== '{' && text[0] !== '[')) return value;
+            try { return JSON.parse(text); } catch(e) { return value; }
+        };
+        var coerceVector = function(value) {
+            value = parseMaybeJson(value);
+            if (Array.isArray(value) && value.length >= 3) {
+                return { x: Number(value[0]), y: Number(value[1]), z: Number(value[2]) };
+            }
+            if (value && typeof value === 'object') {
+                if (Array.isArray(value.position) && value.position.length >= 3) return coerceVector(value.position);
+                if (typeof value.x !== 'undefined' && typeof value.y !== 'undefined' && typeof value.z !== 'undefined') {
+                    return { x: Number(value.x), y: Number(value.y), z: Number(value.z) };
+                }
+            }
+            return value;
+        };
+        var coerceViewport = function(value) {
+            value = parseMaybeJson(value);
+            if (!value || typeof value !== 'object') return value;
+            var viewport = value.viewport || value.viewpoint || value;
+            if (viewport.eye && viewport.target) {
+                viewport.eye = Array.isArray(viewport.eye) ? viewport.eye : [viewport.eye.x, viewport.eye.y, viewport.eye.z];
+                viewport.target = Array.isArray(viewport.target) ? viewport.target : [viewport.target.x, viewport.target.y, viewport.target.z];
+                viewport.up = viewport.up ? (Array.isArray(viewport.up) ? viewport.up : [viewport.up.x, viewport.up.y, viewport.up.z]) : [0, 0, 1];
+            }
+            return viewport;
+        };
 
         // 1. linkedDocuments[].details 정밀 파싱 (Forma/ACC 공식 규격)
         var docs = []
@@ -4699,13 +4749,13 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         result.externalId = details.externalId;
                     }
                     if (details.position && !result.position) {
-                        result.position = details.position;
+                        result.position = coerceVector(details.position);
                     }
                     if (details.viewerState && !result.viewerState) {
-                        result.viewerState = details.viewerState;
+                        result.viewerState = parseMaybeJson(details.viewerState);
                     }
                     if ((details.viewport || details.viewpoint) && !result.viewport) {
-                        result.viewport = details.viewport || details.viewpoint;
+                        result.viewport = coerceViewport(details.viewport || details.viewpoint);
                     }
                     if (details.globalOffset && !result.globalOffset) {
                         result.globalOffset = details.globalOffset;
@@ -4730,16 +4780,17 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             result.position = issueObj.point || issueObj.position || raw.point || raw.position ||
                               (raw.attributes && raw.attributes.pushpinAttributes && raw.attributes.pushpinAttributes.location) ||
                               findDeepValue(raw, ['position', 'location3D', 'worldPosition', 'pushpinPosition']);
+            result.position = coerceVector(result.position);
         }
 
         if (!result.viewerState && raw.viewerState) {
-            result.viewerState = raw.viewerState;
+            result.viewerState = parseMaybeJson(raw.viewerState);
         }
         if (!result.viewerState) {
-            result.viewerState = findDeepValue(raw, ['viewerState', 'viewState']);
+            result.viewerState = parseMaybeJson(findDeepValue(raw, ['viewerState', 'viewState']));
         }
         if (!result.viewport) {
-            result.viewport = findDeepValue(raw, ['viewport', 'viewpoint']);
+            result.viewport = coerceViewport(findDeepValue(raw, ['viewport', 'viewpoint']));
         }
 
         return result;
@@ -4785,6 +4836,50 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             }
         };
 
+        var safeSelectAndThemeOnly = function(dbIds) {
+            try {
+                if (!Array.isArray(dbIds)) dbIds = [dbIds];
+                dbIds = dbIds.map(function(id) { return parseInt(id, 10); }).filter(function(id) { return !isNaN(id) && id > 0; });
+                if (!dbIds.length) return false;
+                if (typeof v.clearSelection === 'function') v.clearSelection();
+                if (typeof v.select === 'function') v.select(dbIds);
+                if (typeof v.setThemingColor === 'function' && typeof THREE !== 'undefined' && v.model) {
+                    var color = new THREE.Vector4(1.0, 0.3, 0.0, 0.85);
+                    dbIds.forEach(function(id) {
+                        try { v.setThemingColor(id, color, v.model); } catch(e) {}
+                    });
+                }
+                if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
+                return true;
+            } catch(e) {
+                console.warn('[applySmartIssueFocus] safeSelectAndThemeOnly 오류:', e);
+                return false;
+            }
+        };
+
+        var applyViewportCamera = function(viewport) {
+            if (!viewport || !viewport.eye || !viewport.target) return false;
+            try {
+                var eye = viewport.eye;
+                var target = viewport.target;
+                var up = viewport.up || [0, 0, 1];
+                if (!Array.isArray(eye)) eye = [eye.x, eye.y, eye.z];
+                if (!Array.isArray(target)) target = [target.x, target.y, target.z];
+                if (!Array.isArray(up)) up = [up.x, up.y, up.z];
+                if (typeof v.setViewFromArray === 'function') {
+                    v.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                } else if (v.navigation && typeof v.navigation.setView === 'function' && typeof THREE !== 'undefined') {
+                    v.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
+                }
+                if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(v);
+                if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
+                return true;
+            } catch(e) {
+                console.warn('[applySmartIssueFocus] viewport apply error:', e);
+                return false;
+            }
+        };
+
         var applyPositionCamera = function(pos) {
             if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number' || typeof pos.z !== 'number') return false;
             try {
@@ -4812,6 +4907,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
         };
 
         var createTargetIssuePushpinMarker = function(issueDataObj, posData, activeV) {
+            if (window.issueMarkerBadgesEnabled === false) return;
             if (!issueDataObj || !activeV || !activeV.container || !posData) return;
             var issueIdStr = String(issueDataObj.displayId || issueDataObj.id || '').trim();
             var markerId = 'marker-pushpin-target-' + (issueDataObj.id || issueDataObj.displayId);
@@ -4884,32 +4980,38 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             // 1순위: viewerState 카메라 복원 (Forma에서 이슈 저장 당시 카메라 시점 100% 복원)
             if (loc.viewerState && typeof v.restoreState === 'function') {
                 try {
-                    v.restoreState(loc.viewerState);
+                    v.restoreState(loc.viewerState, null, true);
                     if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(v);
+                    if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
+                        safeSelectAndThemeOnly([loc.objectId]);
+                    } else if (loc.externalId && typeof v.model.getExternalIdMapping === 'function') {
+                        v.model.getExternalIdMapping(function(mapping) {
+                            var matchedDbId = mapping[loc.externalId];
+                            if (matchedDbId) safeSelectAndThemeOnly([matchedDbId]);
+                        });
+                    }
                     console.log('[applySmartIssueFocus] Forma viewerState 3D 카메라 뷰포트 복원 성공!');
+                    return;
                 } catch(e) {
                     console.warn('[applySmartIssueFocus] viewerState 복원 오류:', e);
                 }
             }
 
+            if (loc.viewport && applyViewportCamera(loc.viewport)) {
+                if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
+                    safeSelectAndThemeOnly([loc.objectId]);
+                } else if (loc.externalId && typeof v.model.getExternalIdMapping === 'function') {
+                    v.model.getExternalIdMapping(function(mapping) {
+                        var matchedDbId = mapping[loc.externalId];
+                        if (matchedDbId) safeSelectAndThemeOnly([matchedDbId]);
+                    });
+                }
+                console.log('[applySmartIssueFocus] Forma viewport 3D 카메라 뷰포트 복원 성공!');
+                return;
+            }
+
             // 2순위: 3D Element objectId (예: 32312) 포커싱 & 하이라이트
             if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
-                if (!loc.viewerState && loc.viewport && loc.viewport.eye && loc.viewport.target) {
-                    try {
-                        var eye = loc.viewport.eye;
-                        var target = loc.viewport.target;
-                        var up = loc.viewport.up || [0, 0, 1];
-                        if (typeof v.setViewFromArray === 'function') {
-                            v.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
-                        } else if (v.navigation && typeof v.navigation.setView === 'function' && typeof THREE !== 'undefined') {
-                            v.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
-                        }
-                        if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(v);
-                        if (v.impl && typeof v.impl.invalidate === 'function') v.impl.invalidate(true, true, true);
-                    } catch(e) {
-                        console.warn('[applySmartIssueFocus] viewport apply error:', e);
-                    }
-                }
                 safeHighlightAndZoom([loc.objectId]);
                 console.log('[applySmartIssueFocus] 3D Element objectId(' + loc.objectId + ') 기반 줌인 & 하이라이트 성공!');
                 return;
@@ -4996,7 +5098,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
         var maxAttempts = 50; // 100ms × 50 = 5초
         var checkInterval = setInterval(function() {
             attempts++;
-            var v = window.NOP_VIEWER || window.myGlobalViewer || window.viewer ||
+            var v = window.projectViewer || window.myGlobalViewer || window.viewer || window.NOP_VIEWER ||
                     (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
             if (v) {
                 clearInterval(checkInterval);
@@ -5375,7 +5477,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 return item.label || item.fileName || 'BIM Model';
             }).join(', ') + ' 로딩 중...');
         }
+        window.__nextProjectPanelMode = 'viewer';
         if (typeof window.switchTab === 'function') window.switchTab('project');
+        if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
         setTimeout(async function() {
             try {
             var loadRemaining = async function(viewer, startIndex) {
@@ -5418,12 +5522,12 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             };
             if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                 await window.explorer.loadIntoViewer(items[0].urn, label || items[0].label || 'BIM Model');
-                var viewer = window.NOP_VIEWER || window.myGlobalViewer || window.viewer ||
+                var viewer = window.projectViewer || window.myGlobalViewer || window.viewer || window.NOP_VIEWER ||
                     (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
                 applyIssueViewerModelStyle(viewer, items[0].urn, viewer && viewer.model);
                 await loadRemaining(viewer, 1);
             } else {
-                var activeViewer = window.NOP_VIEWER || window.myGlobalViewer || window.viewer ||
+                var activeViewer = window.projectViewer || window.myGlobalViewer || window.viewer || window.NOP_VIEWER ||
                     (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
                 await loadRemaining(activeViewer, 0);
             }
@@ -5670,7 +5774,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         alert('이 이슈에서 직전 작성 버전 모델 URN을 찾지 못했습니다.');
                         return;
                     }
+                    window.__nextProjectPanelMode = 'viewer';
                     if (typeof window.switchTab === 'function') window.switchTab('project');
+                    if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
                     setTimeout(function() {
                         if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                             if (typeof window.showIssueViewerLoading === 'function') {
@@ -5687,7 +5793,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         alert('이 이슈에서 작성 당시 버전 모델 URN을 찾지 못했습니다.');
                         return;
                     }
+                    window.__nextProjectPanelMode = 'viewer';
                     if (typeof window.switchTab === 'function') window.switchTab('project');
+                    if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
                     setTimeout(function() {
                         if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                             if (typeof window.showIssueViewerLoading === 'function') {
@@ -5704,7 +5812,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         alert('이 이슈에서 비교할 작성 당시/직전 버전 모델 URN을 찾지 못했습니다.');
                         return;
                     }
-                    if (typeof window.switchTab === 'function') window.switchTab('compare');
+                    window.__nextProjectPanelMode = 'comparison';
+                    if (typeof window.switchTab === 'function') window.switchTab('project');
+                    if (typeof window.showProjectComparisonPanel === 'function') window.showProjectComparisonPanel();
                     setTimeout(function() {
                         var runLoad = function(fn) {
                             if (typeof fn === 'function') fn(verInfo.prevUrn, verInfo.createdUrn);
@@ -5712,7 +5822,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                         if (typeof window.loadVersions === 'function') {
                             runLoad(window.loadVersions);
                         } else {
-                            import('./comparison.js').then(function(mod) { runLoad(mod.loadVersions); }).catch(function(e){ console.error(e); });
+                            import('./comparison.js?v=20260831-issue-viewer-focus2').then(function(mod) { runLoad(mod.loadVersions); }).catch(function(e){ console.error(e); });
                         }
                     }, 300);
                 }
@@ -5804,15 +5914,15 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
             fetch('/api/auth/token').then(function(r){ return r.json(); }).then(function(d){ cb(d.access_token, d.expires_in); }).catch(function(){ cb('', 0); });
         };
 
-        Autodesk.Viewing.Initializer({ env: 'AutodeskProduction', getAccessToken: getToken }, function() {
+        Autodesk.Viewing.Initializer({ env: 'AutodeskProduction', api: 'derivativeV2', getAccessToken: getToken }, function() {
             var cA = document.getElementById('dual-viewer-left');
             var cB = document.getElementById('dual-viewer-right');
 
-            var vA = new Autodesk.Viewing.GuiViewer3D(cA);
+            var vA = new Autodesk.Viewing.GuiViewer3D(cA, { useConsolidation: false });
             vA.start();
             window.dualViewerA = vA;
 
-            var vB = new Autodesk.Viewing.GuiViewer3D(cB);
+            var vB = new Autodesk.Viewing.GuiViewer3D(cB, { useConsolidation: false });
             vB.start();
             window.dualViewerB = vB;
 
@@ -5859,6 +5969,40 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 }
             };
 
+            var dualDbIdExists = function(vObj, dbId) {
+                try {
+                    if (!vObj || !vObj.model || !dbId) return false;
+                    var tree = vObj.model.getInstanceTree && vObj.model.getInstanceTree();
+                    if (!tree) return true;
+                    return typeof tree.getNodeName(dbId) === 'string';
+                } catch(e) {
+                    return false;
+                }
+            };
+
+            var applyDualViewportCamera = function(vObj, viewport) {
+                if (!vObj || !viewport || !viewport.eye || !viewport.target) return false;
+                try {
+                    var eye = viewport.eye;
+                    var target = viewport.target;
+                    var up = viewport.up || [0, 0, 1];
+                    if (!Array.isArray(eye)) eye = [eye.x, eye.y, eye.z];
+                    if (!Array.isArray(target)) target = [target.x, target.y, target.z];
+                    if (!Array.isArray(up)) up = [up.x, up.y, up.z];
+                    if (typeof vObj.setViewFromArray === 'function') {
+                        vObj.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                    } else if (vObj.navigation && typeof vObj.navigation.setView === 'function' && typeof THREE !== 'undefined') {
+                        vObj.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
+                    }
+                    if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(vObj);
+                    if (vObj.impl && typeof vObj.impl.invalidate === 'function') vObj.impl.invalidate(true, true, true);
+                    return true;
+                } catch(e) {
+                    console.warn('[DualViewer] viewport apply skipped:', e);
+                    return false;
+                }
+            };
+
             // 지오메트리 로드 완료 시 배경 흰색 설정 & 이슈 위치 카메라 정밀 줌인
             var setupViewerFocusAndWhiteBg = function(vObj) {
                 var onGeo = function() {
@@ -5870,35 +6014,37 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                             var loc = extractForma3DLocationData(targetIssueObj);
                             console.log('[DualViewer] 파싱된 이슈 3D 시점 위치로 정밀 카메라 줌인:', loc);
                             if (loc) {
-                                if (loc.viewport && loc.viewport.eye && loc.viewport.target) {
+                                var cameraApplied = false;
+                                if (loc.viewerState && typeof vObj.restoreState === 'function') {
                                     try {
-                                        var eye = loc.viewport.eye;
-                                        var target = loc.viewport.target;
-                                        var up = loc.viewport.up || [0, 0, 1];
-                                        if (typeof vObj.setViewFromArray === 'function') {
-                                            vObj.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                                        vObj.restoreState(loc.viewerState, null, true);
+                                        cameraApplied = true;
+                                    } catch(e) {}
+                                }
+                                if (!cameraApplied && loc.viewport && loc.viewport.eye && loc.viewport.target) {
+                                    cameraApplied = applyDualViewportCamera(vObj, loc.viewport);
+                                }
+                                if (loc.objectId && loc.objectId > 0) {
+                                    try {
+                                        var dbId = parseInt(loc.objectId, 10);
+                                        if (typeof vObj.select === 'function') vObj.select([dbId]);
+                                        if (!cameraApplied && dualDbIdExists(vObj, dbId) && typeof vObj.fitToView === 'function') {
+                                            vObj.fitToView([dbId]);
+                                            setTimeout(function() {
+                                                try {
+                                                    if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
+                                                    setTimeout(function() { widenDualIssueZoom(vObj, 1.1); }, 80);
+                                                } catch(e) {}
+                                            }, 250);
                                         }
                                     } catch(e) {}
-                                } else if (loc.position) {
+                                } else if (!cameraApplied && loc.position) {
                                     try {
                                         var p = loc.position;
                                         if (typeof THREE !== 'undefined' && typeof vObj.setViewFromArray === 'function') {
                                             vObj.setViewFromArray([p.x + 11, p.y - 11, p.z + 11, p.x, p.y, p.z, 0, 0, 1]);
                                             setTimeout(function() { widenDualIssueZoom(vObj, 1.1); }, 80);
                                         }
-                                    } catch(e) {}
-                                }
-                                if (loc.objectId && loc.objectId > 0) {
-                                    try {
-                                        var dbId = parseInt(loc.objectId, 10);
-                                        if (typeof vObj.select === 'function') vObj.select([dbId]);
-                                        if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
-                                        setTimeout(function() {
-                                            try {
-                                                if (typeof vObj.fitToView === 'function') vObj.fitToView([dbId]);
-                                                setTimeout(function() { widenDualIssueZoom(vObj, 1.1); }, 80);
-                                            } catch(e) {}
-                                        }, 250);
                                     } catch(e) {}
                                 }
                             }
@@ -5913,6 +6059,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
             var loadDocInto = function(vObj, urnVal) {
                 if (!urnVal) return;
+                if (vObj && typeof vObj.resize === 'function') {
+                    try { vObj.resize(); } catch(e) {}
+                }
                 var list = Array.isArray(urnVal) ? urnVal : [urnVal];
                 list.forEach(function(entry, index) {
                     var itemUrn = entry && (entry.urn || entry.id || entry.versionId || entry);
@@ -5928,8 +6077,13 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                                 keepCurrentModels: index > 0,
                                 preserveView: true,
                                 globalOffset: { x: 0, y: 0, z: 0 }
-                            }).then(function() {
+                            }).then(function(model) {
                                 applyWhiteBg(vObj);
+                                try {
+                                    if (typeof vObj.resize === 'function') vObj.resize();
+                                    if (typeof vObj.fitToView === 'function') vObj.fitToView(null, model || vObj.model);
+                                    if (vObj.impl && typeof vObj.impl.invalidate === 'function') vObj.impl.invalidate(true, true, true);
+                                } catch(e) {}
                             });
                         }
                     }, function(errCode) {
@@ -5959,9 +6113,10 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
     // ── 메인 진입점 ─────────────────────────────────────────────────────────
     // 1. 현재 뷰어에 로드된 모델 URN 수집 (버전 차이 감지용)
-    var currentViewer = window.NOP_VIEWER ||
+    var currentViewer = window.projectViewer ||
                        window.myGlobalViewer ||
                        window.viewer ||
+                       window.NOP_VIEWER ||
                        (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
 
     var currentUrn = '';
@@ -6001,7 +6156,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     alert('이 이슈에서 직전 작성 버전 모델 URN을 찾지 못했습니다.');
                     return;
                 }
+                window.__nextProjectPanelMode = 'viewer';
                 if (typeof window.switchTab === 'function') window.switchTab('project');
+                if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
                 setTimeout(function() {
                     if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                         if (typeof window.showIssueViewerLoading === 'function') {
@@ -6018,7 +6175,9 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                     alert('이 이슈에서 작성 당시 버전 모델 URN을 찾지 못했습니다.');
                     return;
                 }
+                window.__nextProjectPanelMode = 'viewer';
                 if (typeof window.switchTab === 'function') window.switchTab('project');
+                if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
                 setTimeout(function() {
                     if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                         if (typeof window.showIssueViewerLoading === 'function') {
@@ -6043,13 +6202,16 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
 
     // 3. 동일 모델일 경우 기존 흐름대로 탭 이동 후 줌인 진행
     if (typeof window.switchTab === 'function') {
+        window.__nextProjectPanelMode = 'viewer';
         window.switchTab('project');
     }
+    if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
 
     setTimeout(function() {
-        var activeViewer = window.NOP_VIEWER ||
+        var activeViewer = window.projectViewer ||
                            window.myGlobalViewer ||
                            window.viewer ||
+                           window.NOP_VIEWER ||
                            (window.explorer && window.explorer.viewer ? window.explorer.viewer : null);
 
         console.log('[focusIssueOnViewer] 300ms 후 뷰어 체크 — activeViewer:', !!activeViewer);
@@ -6074,7 +6236,7 @@ window.focusIssueOnViewer = function(targetIssueOrId, targetUrn) {
                 console.warn('[focusIssueOnViewer] targetUrn 없고 뷰어도 없음 — 탭 전환만 완료.');
                 if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
             } else {
-                import('./viewer.js?v=20260825-viewer-fixed-sdk1').then(function(mod) {
+                import('./viewer.js?v=20260902-unconsolidated-opacity1').then(function(mod) {
                     if (!mod.initViewer || !mod.loadModel) return;
                     var container = document.getElementById('preview');
                     if (!container) return;
@@ -7729,6 +7891,7 @@ window.bindIssueItemClickEvents = function() {
     ];
     var DEFAULTS = ['displayId', 'title', 'status', 'type', 'assignee', 'dueDate', 'startDate', 'placement'];
     var formaCache = { issues: [], ts: 0, error: null };
+    var issueMonthlyInlineState = { visible: false, month: 'all', group: 'structure', sort: 'structureTradeCreated', search: '' };
 
     function esc(value) {
         return String(value == null ? '' : value)
@@ -8138,10 +8301,12 @@ window.bindIssueItemClickEvents = function() {
             .forma-detail-x{width:32px;height:32px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(148,163,184,.22);border-radius:6px;background:rgba(15,23,42,.72);color:#cbd5e1;cursor:pointer}
             .forma-detail-body{min-height:0;overflow:auto;padding:18px 22px 20px}.forma-detail-section+.forma-detail-section{margin-top:18px}.forma-detail-section-title{margin-bottom:10px;color:#94a3b8;font-size:12px;font-weight:900}
             .forma-detail-snapshot{overflow:hidden;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#020617}.forma-detail-snapshot img{display:block;width:100%;height:auto;max-height:min(46vh,420px);object-fit:contain;background:#020617}.forma-detail-snapshot-note{padding:10px 12px;color:#94a3b8;font-size:11px;font-weight:800}
+            .forma-report-capture-box{display:grid;gap:10px;padding:12px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(15,23,42,.78)}.forma-report-capture-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.forma-report-capture-tile{min-height:0;overflow:hidden;border:1px solid rgba(148,163,184,.18);border-radius:8px;background:#020617}.forma-report-capture-tile>span{height:38px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;font-weight:900}.forma-report-capture-tile img{display:block;width:100%;height:auto;max-height:none;object-fit:contain;background:#fff}.forma-report-capture-label{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border-bottom:1px solid rgba(148,163,184,.14);color:#bae6fd;font-size:11px;font-weight:900;background:rgba(30,41,59,.72)}.forma-report-delete-btn{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(248,113,113,.38);border-radius:6px;background:rgba(127,29,29,.38);color:#fecaca;cursor:pointer}.forma-report-delete-btn:hover{border-color:rgba(248,113,113,.8);color:#fff}.forma-report-note-row{display:grid;grid-template-columns:minmax(0,1fr) 38px;gap:8px;align-items:stretch}.forma-report-note{width:100%;min-height:64px;resize:vertical;border:1px solid rgba(148,163,184,.22);border-radius:6px;padding:9px 10px;background:#020617;color:#e5eefb;font:inherit;font-size:13px;line-height:1.45}.forma-report-caption-input{width:100%;height:34px;border:1px solid rgba(148,163,184,.22);border-radius:6px;padding:0 10px;background:#020617;color:#e5eefb;font:inherit;font-size:12px;line-height:34px}.forma-report-note:focus,.forma-report-caption-input:focus{outline:2px solid rgba(56,189,248,.34);border-color:rgba(56,189,248,.72)}.forma-report-special-box{display:grid;gap:8px;padding:12px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(15,23,42,.78)}.forma-report-special-hint{color:#94a3b8;font-size:11px;font-weight:800;line-height:1.45}.forma-report-note-save{width:38px;min-height:38px;align-self:start;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(56,189,248,.42);border-radius:6px;background:#0e7490;color:#ecfeff;cursor:pointer}.forma-report-note-save:hover{border-color:rgba(125,211,252,.8);color:#fff}.forma-report-note-save.saved{background:#047857;border-color:rgba(52,211,153,.62)}
+            .forma-report-floating{position:fixed;right:22px;bottom:22px;z-index:31000;width:min(360px,calc(100vw - 32px));display:grid;gap:10px;padding:14px;border:1px solid rgba(125,211,252,.35);border-radius:10px;background:#0f172a;color:#e5eefb;box-shadow:0 18px 44px rgba(0,0,0,.42)}.forma-report-floating-title{font-size:13px;font-weight:900;color:#f8fafc}.forma-report-floating-actions{display:flex;justify-content:flex-end;gap:8px}.forma-report-floating button{min-height:34px;border:1px solid rgba(148,163,184,.26);border-radius:6px;padding:0 11px;background:rgba(30,41,59,.9);color:#e5eefb;font-weight:900;cursor:pointer}.forma-report-floating button.primary{border-color:rgba(56,189,248,.46);background:#0e7490;color:#ecfeff}.forma-report-floating button:disabled{opacity:.6;cursor:wait}
             .forma-detail-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.forma-detail-meta-item{min-width:0;padding:11px 12px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(30,41,59,.58)}.forma-detail-meta-item span{display:block;margin-bottom:5px;color:#94a3b8;font-size:11px;font-weight:800}.forma-detail-meta-item strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f8fafc;font-size:13px;line-height:1.35}
             .forma-detail-description{padding:14px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(15,23,42,.78);color:#e5eefb;font-size:13px;line-height:1.65}.forma-detail-desc-lead{font-weight:900}.forma-detail-desc-list{margin:9px 0 0;padding-left:18px}.forma-detail-desc-list li+li{margin-top:3px}.forma-detail-desc-list code{padding:1px 5px;border-radius:4px;background:rgba(56,189,248,.14);color:#bae6fd;font-family:inherit;font-weight:900}.forma-detail-empty{color:#94a3b8}
             .forma-detail-actions{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px;border-top:1px solid rgba(148,163,184,.2);background:rgba(2,6,23,.32)}.forma-detail-action{min-height:36px;display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid rgba(148,163,184,.26);border-radius:6px;padding:0 13px;background:rgba(30,41,59,.86);color:#e5eefb;font-weight:900;cursor:pointer}.forma-detail-action.primary{border-color:rgba(56,189,248,.46);background:#0e7490;color:#ecfeff}.forma-detail-action.ghost{background:transparent;color:#cbd5e1}.forma-detail-action:hover,.forma-detail-x:hover{border-color:rgba(125,211,252,.7);color:#fff}
-            @media(max-width:720px){.forma-detail-overlay{padding:12px!important}.forma-detail-meta-grid{grid-template-columns:1fr}.forma-detail-actions{flex-direction:column}}
+            @media(max-width:720px){.forma-detail-overlay{padding:12px!important}.forma-detail-meta-grid,.forma-report-capture-grid{grid-template-columns:1fr}.forma-detail-actions{flex-direction:column}}
         `;
         var style = document.createElement('style');
         style.id = 'forma-detail-style';
@@ -8179,9 +8344,50 @@ window.bindIssueItemClickEvents = function() {
         return isTargetType && isClosed && !!getFormaIssueResult(issue);
     }
 
+    function isBimReviewIssueForHwpx(issue, typeLabel) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+        var typeKey = [
+            typeLabel,
+            field(issue, 'type'),
+            issue && (issue.typePath || issue.type_path || issue.typeFullName || issue.type || issue.category || issue.issueType || issue.exportIssueType),
+            raw && (raw.typePath || raw.type_path || raw.typeFullName || raw.type || raw.category || raw.issueType)
+        ].map(function(value) {
+            if (!value) return '';
+            if (typeof value === 'object') return value.name || value.text || value.title || value.typePath || '';
+            return String(value);
+        }).join(' ').toLowerCase();
+        return typeKey.indexOf('\uac04\uc12d') > -1 || typeKey.indexOf('clash') > -1 ||
+            typeKey.indexOf('collision') > -1 || typeKey.indexOf('\uc124\uacc4') > -1 || typeKey.indexOf('design') > -1;
+    }
+
+    function isIssueClosedForHwpx(issue, statusText) {
+        var statusKey = String(statusText || field(issue, 'status') || (issue && issue.status) || '').toLowerCase().replace(/[\s_-]+/g, '');
+        return statusKey.indexOf('\uc885\ub8cc') > -1 || statusKey.indexOf('\uc644\ub8cc') > -1 ||
+            statusKey.indexOf('closed') > -1 || statusKey.indexOf('done') > -1 ||
+            statusKey.indexOf('complete') > -1;
+    }
+
+    function getLimitedReportImages(value) {
+        return (Array.isArray(value) ? value : (value ? [value] : []))
+            .filter(function(item) { return typeof item === 'string' && item.indexOf('data:image/') === 0; })
+            .slice(0, 2);
+    }
+
+    function getIssueReviewPlanForHwpx(issue) {
+        var saved = getFormaIssueReportCapture(issue);
+        return saved.reviewPlan || issue.reviewPlan || issue.bimReviewPlan || issue.hwpxReviewPlan || '';
+    }
+
     function issueSnapshotUrn(issue) {
-        return issue && (issue.snapshotUrn || issue.snapshotURN || issue.thumbnailUrn ||
-            findIssueValueDeep(issue.rawFormaIssue || issue, ['snapshotUrn', 'snapshotURN', 'thumbnailUrn']));
+        if (!issue) return '';
+        return issue.snapshotUrn || issue.snapshotURN || issue.thumbnailUrn ||
+            findIssueValueDeep(issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue, [
+                'snapshotUrn',
+                'snapshotURN',
+                'thumbnailUrn',
+                'snapshot',
+                'thumbnail'
+            ]);
     }
 
     function renderIssueSnapshot(issue) {
@@ -8195,6 +8401,328 @@ window.bindIssueItemClickEvents = function() {
             + '<div class="forma-detail-snapshot-note">Forma 이슈 캡처 이미지</div>'
             + '</div>'
             + '</section>';
+    }
+
+    var FORMA_ISSUE_REPORT_CAPTURE_KEY = 'forma_issue_report_captures_v1';
+
+    function getFormaIssueReportCaptureKey(issue) {
+        if (!issue) return '';
+        return String(issue.id || issue.displayId || issue.dbId || issue.issueId || issue.guid || field(issue, 'displayId') || field(issue, 'title') || '').trim();
+    }
+
+    function getFormaIssueReportCaptureKeys(issue) {
+        if (!issue) return [];
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || {};
+        var values = [
+            issue.id, issue.displayId, issue.dbId, issue.issueId, issue.guid,
+            raw.id, raw.displayId, raw.dbId, raw.issueId, raw.guid,
+            raw.issueNumber, raw.number,
+            raw.attributes && raw.attributes.displayId,
+            raw.attributes && raw.attributes.title,
+            field(issue, 'displayId'), field(issue, 'title'), issue.title, raw.title
+        ];
+        var seen = {};
+        return values.map(function(value) {
+            return String(value || '').trim();
+        }).filter(function(value) {
+            if (!value || seen[value]) return false;
+            seen[value] = true;
+            return true;
+        });
+    }
+
+    function loadFormaIssueReportCaptures() {
+        try {
+            var parsed = JSON.parse(localStorage.getItem(FORMA_ISSUE_REPORT_CAPTURE_KEY) || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch(e) {
+            return {};
+        }
+    }
+
+    function resolveFormaIssueReportCaptureRecord(store, value) {
+        var current = value;
+        var guard = 0;
+        while (current && current.ref && store[current.ref] && guard < 6) {
+            current = store[current.ref];
+            guard += 1;
+        }
+        return current && typeof current === 'object' ? current : {};
+    }
+
+    function compactFormaIssueReportCaptureStore(store) {
+        var nextStore = {};
+        var keys = Object.keys(store || {});
+        keys.forEach(function(key) {
+            var value = store[key];
+            if (!value || typeof value !== 'object') return;
+            if (value.ref) {
+                nextStore[key] = { ref: String(value.ref) };
+                return;
+            }
+            var hasImageData = !!(value.beforeImage || value.afterImage ||
+                (Array.isArray(value.bimReviewImages) && value.bimReviewImages.length) ||
+                (Array.isArray(value.resultImages) && value.resultImages.length));
+            var existingKey = hasImageData ? Object.keys(nextStore).find(function(savedKey) {
+                var saved = nextStore[savedKey];
+                return saved && !saved.ref && (saved.beforeImage || saved.afterImage ||
+                    (Array.isArray(saved.bimReviewImages) && saved.bimReviewImages.length) ||
+                    (Array.isArray(saved.resultImages) && saved.resultImages.length)) &&
+                    saved.beforeImage === value.beforeImage &&
+                    saved.afterImage === value.afterImage &&
+                    saved.imageNote === value.imageNote &&
+                    saved.specialNote === value.specialNote;
+            }) : '';
+            nextStore[key] = existingKey ? { ref: existingKey } : value;
+        });
+        return nextStore;
+    }
+
+    function writeFormaIssueReportCaptures(store) {
+        try {
+            localStorage.setItem(FORMA_ISSUE_REPORT_CAPTURE_KEY, JSON.stringify(compactFormaIssueReportCaptureStore(store || {})));
+        } catch(e) {
+            console.warn('[Issue Report Capture] 저장 공간에 기록하지 못했습니다:', e);
+            throw e;
+        }
+    }
+
+    function getFormaIssueReportCapture(issue) {
+        var keys = getFormaIssueReportCaptureKeys(issue);
+        if (!keys.length) return {};
+        var store = loadFormaIssueReportCaptures();
+        for (var i = 0; i < keys.length; i++) {
+            if (store[keys[i]]) return resolveFormaIssueReportCaptureRecord(store, store[keys[i]]);
+        }
+        var normalizedKeys = keys.map(function(key) {
+            return String(key || '').trim().toLowerCase();
+        }).filter(Boolean);
+        var storeKeys = Object.keys(store);
+        for (var j = 0; j < storeKeys.length; j++) {
+            var normalizedStoreKey = String(storeKeys[j] || '').trim().toLowerCase();
+            if (normalizedKeys.indexOf(normalizedStoreKey) > -1) return resolveFormaIssueReportCaptureRecord(store, store[storeKeys[j]]);
+        }
+        return {};
+    }
+    window.getFormaIssueReportCapture = getFormaIssueReportCapture;
+
+    function saveFormaIssueReportCapture(issue, data) {
+        var key = getFormaIssueReportCaptureKey(issue);
+        if (!key) return {};
+        var store = loadFormaIssueReportCaptures();
+        store = compactFormaIssueReportCaptureStore(store);
+        var current = resolveFormaIssueReportCaptureRecord(store, store[key] || {});
+        var next = Object.assign({}, current, data || {}, { updatedAt: new Date().toISOString() });
+        if (data && (data.afterImage || data.beforeImage || data.bimReviewImages || data.resultImages)) next.suppressReportImages = false;
+        var aliases = getFormaIssueReportCaptureKeys(issue);
+        store[key] = next;
+        aliases.forEach(function(aliasKey) {
+            if (aliasKey !== key) store[aliasKey] = { ref: key };
+        });
+        try {
+            writeFormaIssueReportCaptures(store);
+        } catch(e) {
+            if (e && (e.name === 'QuotaExceededError' || e.code === 22)) {
+                alert('보고서 이미지 저장 공간이 가득 찼습니다. 기존 보고서 이미지를 일부 삭제한 뒤 다시 시도해 주세요.');
+            }
+            return {};
+        }
+        if (issue && typeof issue === 'object') {
+            if (next.afterImage) issue.afterImage = next.afterImage;
+            if (next.beforeImage) issue.beforeImage = next.beforeImage;
+            if (Array.isArray(next.bimReviewImages)) issue.bimReviewImages = next.bimReviewImages.slice(0, 2);
+            if (Array.isArray(next.resultImages)) issue.resultImages = next.resultImages.slice(0, 2);
+            if (Object.prototype.hasOwnProperty.call(next, 'bimReviewImageCaption')) {
+                issue.bimReviewImageCaption = next.bimReviewImageCaption || '';
+                issue.reviewImageCaption = next.bimReviewImageCaption || '';
+                issue.hwpxBimReviewImageCaption = next.bimReviewImageCaption || '';
+            }
+            if (Object.prototype.hasOwnProperty.call(next, 'resultImageCaption')) {
+                issue.resultImageCaption = next.resultImageCaption || '';
+                issue.reflectionResultImageCaption = next.resultImageCaption || '';
+                issue.hwpxResultImageCaption = next.resultImageCaption || '';
+            }
+            if (Object.prototype.hasOwnProperty.call(next, 'reviewPlan')) {
+                issue.reviewPlan = next.reviewPlan || '';
+                issue.bimReviewPlan = next.reviewPlan || '';
+                issue.hwpxReviewPlan = next.reviewPlan || '';
+            }
+            if (Object.prototype.hasOwnProperty.call(next, 'imageNote')) {
+                issue.imageNote = next.imageNote || '';
+                issue.hwpxImageNote = next.imageNote || '';
+            }
+            if (Object.prototype.hasOwnProperty.call(next, 'specialNote')) {
+                issue.specialNote = next.specialNote || '';
+                issue.hwpxSpecialNote = next.specialNote || '';
+                issue.reportSpecialNote = next.specialNote || '';
+            }
+        }
+        return next;
+    }
+    window.saveFormaIssueReportCapture = saveFormaIssueReportCapture;
+
+    function deleteFormaIssueReportCapture(issue, target) {
+        var keys = getFormaIssueReportCaptureKeys(issue);
+        if (!keys.length) return {};
+        var key = getFormaIssueReportCaptureKey(issue) || keys[0];
+        var store = loadFormaIssueReportCaptures();
+        store = compactFormaIssueReportCaptureStore(store);
+        var current = Object.assign({}, getFormaIssueReportCapture(issue) || {});
+        if (target === 'before') {
+            delete current.beforeImage;
+            delete current.beforeImageNote;
+        } else if (target === 'after') {
+            delete current.afterImage;
+            delete current.afterImageNote;
+            delete current.imageNote;
+        } else if (target && target.indexOf('bimReview:') === 0) {
+            var reviewIndex = parseInt(target.split(':')[1], 10);
+            current.bimReviewImages = getLimitedReportImages(current.bimReviewImages);
+            if (!isNaN(reviewIndex)) current.bimReviewImages.splice(reviewIndex, 1);
+        } else if (target && target.indexOf('result:') === 0) {
+            var resultIndex = parseInt(target.split(':')[1], 10);
+            current.resultImages = getLimitedReportImages(current.resultImages);
+            if (!isNaN(resultIndex)) current.resultImages.splice(resultIndex, 1);
+        } else {
+            current = {};
+        }
+        current.suppressReportImages = !(target && (target.indexOf('bimReview:') === 0 || target.indexOf('result:') === 0));
+        current.updatedAt = new Date().toISOString();
+        store[key] = current;
+        keys.forEach(function(aliasKey) {
+            if (aliasKey !== key) store[aliasKey] = { ref: key };
+        });
+        try {
+            writeFormaIssueReportCaptures(store);
+        } catch(e) {}
+        if (issue && typeof issue === 'object') {
+            if (target === 'before' || target === 'all') {
+                issue.beforeImage = '';
+                issue.imageBefore = '';
+                issue.imgBefore = '';
+            }
+            if (target === 'after' || target === 'all') {
+                issue.afterImage = '';
+                issue.imageAfter = '';
+                issue.imgAfter = '';
+                issue.imageNote = '';
+                issue.hwpxImageNote = '';
+                issue.reportImageNote = '';
+            }
+            if (target === 'all' || (target && target.indexOf('bimReview:') === 0)) {
+                issue.bimReviewImages = getLimitedReportImages(current.bimReviewImages);
+            }
+            if (target === 'all' || (target && target.indexOf('result:') === 0)) {
+                issue.resultImages = getLimitedReportImages(current.resultImages);
+            }
+        }
+        return current;
+    }
+    window.deleteFormaIssueReportCapture = deleteFormaIssueReportCapture;
+
+    function renderIssueReportCaptureSection(issue) {
+        var typeLabel = issueTypeLabel(issue);
+        var statusText = field(issue, 'status') || issue.status || '';
+        if (isBimReviewIssueForHwpx(issue, typeLabel)) {
+            return renderBimReviewReportSection(issue, isIssueClosedForHwpx(issue, statusText));
+        }
+        var saved = getFormaIssueReportCapture(issue);
+        var suppressed = !!saved.suppressReportImages;
+        var before = suppressed ? '' : (saved.beforeImage || issue.beforeImage || issue.imageBefore || issue.imgBefore || '');
+        var after = suppressed ? '' : (saved.afterImage || issue.afterImage || issue.imageAfter || issue.image || issue.img || issue.screenshot || '');
+        var note = saved.imageNote || issue.imageNote || issue.hwpxImageNote || issue.reportImageNote || '';
+        function tile(label, src, target) {
+            return '<div class="forma-report-capture-tile">'
+                + '<div class="forma-report-capture-label"><span>' + esc(label) + '</span>'
+                + (src ? '<button type="button" class="forma-report-delete-btn" data-report-delete="' + esc(target) + '" title="' + esc(label) + ' 이미지 삭제"><i class="fas fa-trash"></i></button>' : '')
+                + '</div>'
+                + (src ? '<img src="' + esc(src) + '" alt="' + esc(label) + '">' : '<span>저장된 이미지 없음</span>')
+                + '</div>';
+        }
+        return '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">보고서 이미지</div>'
+            + '<div class="forma-report-capture-box">'
+            + '<div class="forma-report-capture-grid">' + tile('변경 전', before, 'before') + tile('변경 후', after, 'after') + '</div>'
+            + '<div class="forma-report-note-row">'
+            + '<textarea id="forma-report-image-note" class="forma-report-note" placeholder="이미지 하단에 넣을 내용을 입력하세요.">' + esc(note) + '</textarea>'
+            + '<button id="forma-report-note-save-btn" type="button" class="forma-report-note-save" title="APS 보고서용 텍스트 저장"><i class="fas fa-save"></i></button>'
+            + '</div>'
+            + '</div>'
+            + '</section>';
+    }
+
+    function renderBimReviewReportSection(issue, isClosed) {
+        var saved = getFormaIssueReportCapture(issue);
+        var reviewImages = getLimitedReportImages(saved.bimReviewImages || issue.bimReviewImages || issue.reviewImages || []);
+        var resultImages = getLimitedReportImages(saved.resultImages || issue.resultImages || issue.reflectionResultImages || []);
+        var reviewPlan = saved.reviewPlan || issue.reviewPlan || issue.bimReviewPlan || issue.hwpxReviewPlan || '';
+        var reviewCaption = saved.bimReviewImageCaption || issue.bimReviewImageCaption || issue.reviewImageCaption || issue.hwpxBimReviewImageCaption || '';
+        var resultCaption = saved.resultImageCaption || issue.resultImageCaption || issue.reflectionResultImageCaption || issue.hwpxResultImageCaption || '';
+        function tile(label, src, target, canAdd) {
+            return '<div class="forma-report-capture-tile">'
+                + '<div class="forma-report-capture-label"><span>' + esc(label) + '</span>'
+                + (src ? '<button type="button" class="forma-report-delete-btn" data-report-delete="' + esc(target) + '" title="' + esc(label) + ' 삭제"><i class="fas fa-trash"></i></button>' : '')
+                + '</div>'
+                + (src ? '<img src="' + esc(src) + '" alt="' + esc(label) + '">' : (canAdd ? '<span>저장된 이미지 없음</span>' : '<span>사용 안 함</span>'))
+                + '</div>';
+        }
+        function captureButton(target, disabled) {
+            return '<button type="button" class="forma-detail-action" data-bim-review-capture="' + esc(target) + '"' + (disabled ? ' disabled' : '') + '>'
+                + '<i class="fas fa-camera"></i><span>' + (target === 'result' ? '반영 결과 캡처' : 'BIM 검토 캡처') + '</span></button>';
+        }
+        var html = '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">BIM 검토 보고서</div>'
+            + '<div class="forma-report-capture-box">'
+            + '<div class="forma-report-capture-label" style="border:0;background:transparent;padding:0;color:#bae6fd;"><span>BIM 검토 이미지</span>' + captureButton('bimReview', reviewImages.length >= 2) + '</div>'
+            + '<input id="forma-report-bim-review-caption" class="forma-report-caption-input" type="text" maxlength="80" placeholder="이미지칸 상단에 넣을 텍스트" value="' + esc(reviewCaption) + '">'
+            + '<div class="forma-report-capture-grid">'
+            + tile('BIM 검토 1', reviewImages[0], 'bimReview:0', true)
+            + tile('BIM 검토 2', reviewImages[1], 'bimReview:1', true)
+            + '</div>';
+        if (isClosed) {
+            html += '<div class="forma-report-capture-label" style="border:0;background:transparent;padding:4px 0 0;color:#bae6fd;"><span>반영 결과 이미지</span>' + captureButton('result', resultImages.length >= 2) + '</div>'
+                + '<input id="forma-report-result-caption" class="forma-report-caption-input" type="text" maxlength="80" placeholder="반영 결과 이미지칸 상단에 넣을 텍스트" value="' + esc(resultCaption) + '">'
+                + '<div class="forma-report-capture-grid">'
+                + tile('반영 결과 1', resultImages[0], 'result:0', true)
+                + tile('반영 결과 2', resultImages[1], 'result:1', true)
+                + '</div>';
+        } else {
+            html += '<div class="forma-report-note-row">'
+                + '<textarea id="forma-report-review-plan" class="forma-report-note" placeholder="한글 보고서의 검토 방안 칸에 넣을 내용을 입력하세요.">' + esc(reviewPlan) + '</textarea>'
+                + '<button id="forma-report-review-plan-save-btn" type="button" class="forma-report-note-save" title="검토 방안 저장"><i class="fas fa-save"></i></button>'
+                + '</div>';
+        }
+        return html + '</div></section>';
+    }
+
+    function renderIssueSpecialNoteSection(issue) {
+        var saved = getFormaIssueReportCapture(issue);
+        var specialNote = saved.specialNote || issue.specialNote || issue.hwpxSpecialNote || issue.reportSpecialNote || '';
+        return '<section class="forma-detail-section">'
+            + '<div class="forma-detail-section-title">특이 사항</div>'
+            + '<div class="forma-report-special-box">'
+            + '<div class="forma-report-note-row">'
+            + '<textarea id="forma-report-special-note" class="forma-report-note" placeholder="한글 보고서의 특이 사항 칸에 넣을 내용을 입력하세요.">' + esc(specialNote) + '</textarea>'
+            + '<button id="forma-report-special-save-btn" type="button" class="forma-report-note-save" title="APS 특이 사항 저장"><i class="fas fa-save"></i></button>'
+            + '</div>'
+            + '<div class="forma-report-special-hint">입력한 내용은 APS 보고서용으로만 저장되며, 비어 있으면 한글파일에 특이 사항 항목을 내보내지 않습니다.</div>'
+            + '</div>'
+            + '</section>';
+    }
+
+    function saveCurrentFormaDetailReportFields(issue) {
+        var noteEl = document.getElementById('forma-report-image-note');
+        var specialEl = document.getElementById('forma-report-special-note');
+        var reviewPlanEl = document.getElementById('forma-report-review-plan');
+        var reviewCaptionEl = document.getElementById('forma-report-bim-review-caption');
+        var resultCaptionEl = document.getElementById('forma-report-result-caption');
+        var data = {};
+        if (noteEl) data.imageNote = noteEl.value.trim();
+        if (specialEl) data.specialNote = specialEl.value.trim();
+        if (reviewPlanEl) data.reviewPlan = reviewPlanEl.value.trim();
+        if (reviewCaptionEl) data.bimReviewImageCaption = reviewCaptionEl.value.trim();
+        if (resultCaptionEl) data.resultImageCaption = resultCaptionEl.value.trim();
+        if (Object.keys(data).length) saveFormaIssueReportCapture(issue, data);
     }
 
     function renderDetailDescription(value) {
@@ -8213,6 +8741,564 @@ window.bindIssueItemClickEvents = function() {
         }
         return html;
     }
+
+    function parseIssueDateValue(value) {
+        if (!value || value === '-') return null;
+        var date = new Date(value);
+        return isNaN(date.getTime()) ? null : date;
+    }
+
+    function getIssueDateForMonthlyBrowser(issue) {
+        return parseIssueDateValue(issue && (issue.dueDate || issue.endDate || issue.startDate || issue.createdAt || issue.updatedAt)) ||
+            parseIssueDateValue(field(issue, 'dueDate')) ||
+            parseIssueDateValue(field(issue, 'startDate'));
+    }
+
+    function getIssueMonthKeyForBrowser(issue) {
+        var date = getIssueDateForMonthlyBrowser(issue);
+        if (!date) return '미지정';
+        return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+    }
+
+    function normalizeIssueStructureName(value) {
+        var name = String(value || '').trim();
+        if (!name || name === '-') return '';
+        name = name
+            .replace(/\.(rvt|ifc|nwc|nwd|dwg|3dm|zip)$/i, '')
+            .replace(/\s*\([^)]*\)\s*$/g, '')
+            .replace(/\s+v\d+$/i, '')
+            .trim();
+
+        var parts = name.split(/[_/\\]+/).map(function(part) {
+            return part.trim();
+        }).filter(Boolean);
+        if (!parts.length) return name;
+
+        var tradeCodes = {
+            C: true,
+            A: true,
+            AS: true,
+            AM: true,
+            E: true,
+            M: true,
+            S: true,
+            L: true,
+            T: true,
+            '토목': true,
+            '건축': true,
+            '건축구조': true,
+            '건축설비': true,
+            '전기': true,
+            '기계': true,
+            '철근': true,
+            '철근배근': true,
+            '배근': true,
+            '가설': true,
+            '콘크리트': true,
+            '마감': true
+        };
+        if (parts.length > 1 && tradeCodes[String(parts[parts.length - 1] || '').toUpperCase()]) {
+            parts.pop();
+        }
+
+        var last = parts[parts.length - 1] || '';
+        if (last && !/^\d+$/.test(last)) return last;
+        return parts.slice(-2).join('_') || name;
+    }
+
+    function getIssueStructureNumberFromValue(value) {
+        var name = String(value || '').trim();
+        if (!name || name === '-') return null;
+        name = name.replace(/\.(rvt|ifc|nwc|nwd|dwg|3dm|zip)$/i, '');
+        var parts = name.split(/[_/\\]+/).map(function(part) {
+            return part.trim();
+        }).filter(Boolean);
+        for (var i = 0; i < parts.length; i++) {
+            if (/^\d{1,3}$/.test(parts[i]) && i + 1 < parts.length && !/^\d+$/.test(parts[i + 1])) {
+                return Number(parts[i]);
+            }
+        }
+        var match = name.match(/(?:^|[_\s/\\-])(\d{1,3})(?=[_\s/\\-]*[^\d_\s/\\-])/);
+        return match ? Number(match[1]) : null;
+    }
+
+    function getIssueStructureNumberForBrowser(issue) {
+        var candidates = [
+            field(issue, 'location'),
+            issue && issue.structure,
+            issue && issue.structureName,
+            issue && issue.locationName,
+            issue && issue.location,
+            field(issue, 'placement')
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+            var number = getIssueStructureNumberFromValue(candidates[i]);
+            if (number != null) return number;
+        }
+        return null;
+    }
+
+    function getIssueStructureZoneRankFromValue(value) {
+        var text = String(value || '').trim().toLowerCase();
+        if (!text || text === '-') return 99;
+        if (text.indexOf('가시설') > -1 || text.indexOf('temporary') > -1) return 0;
+        if (text.indexOf('신설') > -1 || text.indexOf('new') > -1) return 1;
+        if (text.indexOf('증설') > -1 || text.indexOf('본공사') > -1 || text.indexOf('extension') > -1) return 2;
+        if (text.indexOf('기타') > -1 || text.indexOf('etc') > -1) return 3;
+        return 99;
+    }
+
+    function getIssueStructureZoneRankForBrowser(issue) {
+        var candidates = [
+            field(issue, 'location'),
+            issue && issue.structure,
+            issue && issue.structureName,
+            issue && issue.locationName,
+            issue && issue.location,
+            field(issue, 'placement')
+        ];
+        var best = 99;
+        for (var i = 0; i < candidates.length; i++) {
+            best = Math.min(best, getIssueStructureZoneRankFromValue(candidates[i]));
+        }
+        return best;
+    }
+
+    function getIssueStructureForBrowser(issue) {
+        var candidates = [
+            field(issue, 'location'),
+            issue && issue.structure,
+            issue && issue.structureName,
+            issue && issue.locationName,
+            issue && issue.location,
+            field(issue, 'placement')
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+            var normalized = normalizeIssueStructureName(candidates[i]);
+            if (normalized) return normalized;
+        }
+        return '미지정';
+    }
+
+    function compareMonthlyIssueGroupNames(a, b, groupBy, groups) {
+        if (groupBy === 'structure') {
+            var aIssue = groups[a] && groups[a][0];
+            var bIssue = groups[b] && groups[b][0];
+            var aZone = getIssueStructureZoneRankForBrowser(aIssue);
+            var bZone = getIssueStructureZoneRankForBrowser(bIssue);
+            if (aZone !== bZone) return aZone - bZone;
+            var aNo = getIssueStructureNumberForBrowser(aIssue);
+            var bNo = getIssueStructureNumberForBrowser(bIssue);
+            if (aNo != null || bNo != null) {
+                return (aNo == null ? 9999 : aNo) - (bNo == null ? 9999 : bNo) ||
+                    a.localeCompare(b, 'ko', { numeric: true });
+            }
+        }
+        if (groupBy === 'trade') {
+            var aRank = getIssueTradeRankFromText(a);
+            var bRank = getIssueTradeRankFromText(b);
+            if (aRank !== bRank) return aRank - bRank;
+        }
+        return a.localeCompare(b, 'ko', { numeric: true });
+    }
+
+    function normalizeIssueTradeName(value) {
+        var text = String(value || '').trim();
+        if (!text || text === '-') return '';
+        var upper = text.toUpperCase();
+        var directMap = {
+            C: '토목',
+            M: '기계',
+            E: '전기',
+            AM: '건축설비',
+            A: '건축',
+            AS: '건축구조'
+        };
+        if (directMap[upper]) return directMap[upper];
+        if (text.indexOf('토목') > -1) return '토목';
+        if (text.indexOf('기계') > -1) return '기계';
+        if (text.indexOf('전기') > -1) return '전기';
+        if (text.indexOf('건축설비') > -1 || text.indexOf('설비') > -1) return '건축설비';
+        if (text.indexOf('건축구조') > -1) return '건축구조';
+        if (text.indexOf('건축') > -1) return '건축';
+        return text;
+    }
+
+    function getIssueTradeRankFromText(value) {
+        var trade = normalizeIssueTradeName(value);
+        if (trade === '토목') return 0;
+        if (trade === '기계') return 1;
+        if (trade === '전기') return 2;
+        if (trade === '건축설비') return 3;
+        return 99;
+    }
+
+    function getIssueTradeForBrowser(issue) {
+        var tradeMap = {
+            C: '토목',
+            E: '전기',
+            A: '건축',
+            AM: '건축설비',
+            M: '기계'
+        };
+        var placement = field(issue, 'placement');
+        var parts = String(placement || '')
+            .replace(/\.(rvt|ifc|nwc|nwd|dwg|3dm|zip)$/i, '')
+            .split(/[_/\\\s.-]+/)
+            .map(function(part) { return part.trim(); })
+            .filter(Boolean);
+        for (var i = parts.length - 1; i >= 0; i--) {
+            var key = String(parts[i] || '').toUpperCase();
+            if (tradeMap[key]) return tradeMap[key];
+        }
+        return '미지정';
+    }
+
+    function getIssueCreatedTimeForBrowser(issue) {
+        var raw = issue && (issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue);
+        var candidates = [
+            issue && issue.createdAt,
+            issue && issue.created_at,
+            issue && issue.createdDate,
+            issue && issue.date,
+            raw && raw.createdAt,
+            raw && raw.created_at,
+            raw && raw.createdDate,
+            raw && raw.attributes && raw.attributes.createdAt,
+            raw && raw.attributes && raw.attributes.createdDate,
+            issue && issue.startDate
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+            var date = parseIssueDateValue(candidates[i]);
+            if (date) return date.getTime();
+        }
+        return Number.MAX_SAFE_INTEGER;
+    }
+
+    function compareIssuesForMonthlyBrowser(a, b, sortKey) {
+        if (sortKey === 'title') return String(field(a, 'title') || '').localeCompare(String(field(b, 'title') || ''), 'ko', { numeric: true });
+        if (sortKey === 'status') return String(field(a, 'status') || '').localeCompare(String(field(b, 'status') || ''), 'ko', { numeric: true });
+        if (sortKey === 'id') return String(field(a, 'displayId') || '').localeCompare(String(field(b, 'displayId') || ''), 'ko', { numeric: true });
+        if (sortKey === 'structureTradeCreated') {
+            var aZone = getIssueStructureZoneRankForBrowser(a);
+            var bZone = getIssueStructureZoneRankForBrowser(b);
+            if (aZone !== bZone) return aZone - bZone;
+            var aNo = getIssueStructureNumberForBrowser(a);
+            var bNo = getIssueStructureNumberForBrowser(b);
+            if ((aNo == null ? 9999 : aNo) !== (bNo == null ? 9999 : bNo)) {
+                return (aNo == null ? 9999 : aNo) - (bNo == null ? 9999 : bNo);
+            }
+            var aTrade = getIssueTradeRankFromText(getIssueTradeForBrowser(a));
+            var bTrade = getIssueTradeRankFromText(getIssueTradeForBrowser(b));
+            if (aTrade !== bTrade) return aTrade - bTrade;
+            return getIssueCreatedTimeForBrowser(a) - getIssueCreatedTimeForBrowser(b) ||
+                String(field(a, 'displayId') || '').localeCompare(String(field(b, 'displayId') || ''), 'ko', { numeric: true });
+        }
+        var aDate = getIssueDateForMonthlyBrowser(a);
+        var bDate = getIssueDateForMonthlyBrowser(b);
+        var at = aDate ? aDate.getTime() : 0;
+        var bt = bDate ? bDate.getTime() : 0;
+        return bt - at || String(field(a, 'displayId') || '').localeCompare(String(field(b, 'displayId') || ''), 'ko', { numeric: true });
+    }
+
+    function getIssuesForMonthlyBrowser() {
+        var source = Array.isArray(window.currentFilteredIssues) && window.currentFilteredIssues.length
+            ? window.currentFilteredIssues
+            : (Array.isArray(window._gangbukFormaSSOT) && window._gangbukFormaSSOT.length ? window._gangbukFormaSSOT : (window.currentIssueList || formaCache.issues || []));
+        return source.filter(function(issue) {
+            return issue && !isGunhwaIssueClient(issue);
+        });
+    }
+
+    function getMonthlyIssueMonthOptions(issues) {
+        return Array.from(new Set((issues || []).map(getIssueMonthKeyForBrowser))).sort().reverse();
+    }
+
+    function renderMonthlyIssueGroupedContent(body, allIssues, options) {
+        if (!body) return;
+        options = options || {};
+        var month = options.month || 'all';
+        var groupBy = options.group || 'structure';
+        var sortKey = options.sort || (groupBy === 'structure' ? 'structureTradeCreated' : 'date');
+        var query = String(options.search || '').trim().toLowerCase();
+        var filtered = (allIssues || []).filter(function(issue) {
+            if (month !== 'all' && getIssueMonthKeyForBrowser(issue) !== month) return false;
+            if (query) {
+                var haystack = [
+                    field(issue, 'displayId'),
+                    field(issue, 'title'),
+                    field(issue, 'status'),
+                    getIssueStructureForBrowser(issue),
+                    getIssueTradeForBrowser(issue),
+                    field(issue, 'desc')
+                ].join(' ').toLowerCase();
+                if (haystack.indexOf(query) < 0) return false;
+            }
+            return true;
+        });
+
+        var groups = {};
+        filtered.forEach(function(issue) {
+            var key = groupBy === 'trade' ? getIssueTradeForBrowser(issue) : getIssueStructureForBrowser(issue);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(issue);
+        });
+        var groupNames = Object.keys(groups).sort(function(a, b) {
+            return compareMonthlyIssueGroupNames(a, b, groupBy, groups);
+        });
+        var summary = '<div class="monthly-issue-browser-summary">'
+            + '<span class="monthly-issue-browser-chip">전체 ' + (allIssues || []).length + '건</span>'
+            + '<span class="monthly-issue-browser-chip">표시 ' + filtered.length + '건</span>'
+            + '<span class="monthly-issue-browser-chip">' + (groupBy === 'trade' ? '공종' : '구조물') + ' ' + groupNames.length + '개</span>'
+            + '</div>';
+        if (!filtered.length) {
+            body.innerHTML = summary + '<div class="monthly-issue-browser-empty">조건에 맞는 이슈가 없습니다.</div>';
+            if (options.trackExportOrder) window._currentHwpxExportIssues = [];
+            return;
+        }
+
+        var orderedIssuesForExport = [];
+        body.innerHTML = summary + groupNames.map(function(groupName) {
+            var issues = groups[groupName].slice().sort(function(a, b) {
+                return compareIssuesForMonthlyBrowser(a, b, sortKey);
+            });
+            orderedIssuesForExport = orderedIssuesForExport.concat(issues);
+            var rows = issues.map(function(issue) {
+                var id = issue.id || issue.displayId || issue.dbId || '';
+                return '<tr data-monthly-issue-id="' + esc(id) + '">'
+                    + '<td>' + esc(field(issue, 'displayId')) + '</td>'
+                    + '<td title="' + esc(field(issue, 'title')) + '">' + esc(field(issue, 'title')) + '</td>'
+                    + '<td>' + esc(field(issue, 'status')) + '</td>'
+                    + '<td>' + esc(getIssueStructureForBrowser(issue)) + '</td>'
+                    + '<td>' + esc(getIssueTradeForBrowser(issue)) + '</td>'
+                    + '<td>' + esc(getIssueMonthKeyForBrowser(issue)) + '</td>'
+                    + '</tr>';
+            }).join('');
+            return '<section class="monthly-issue-group">'
+                + '<div class="monthly-issue-group-title"><span>' + esc(groupName) + '</span><span>' + issues.length + '건</span></div>'
+                + '<table class="monthly-issue-browser-table">'
+                + '<thead><tr><th>ID</th><th>제목</th><th>상태</th><th>구조물</th><th>공종</th><th>월</th></tr></thead>'
+                + '<tbody>' + rows + '</tbody>'
+                + '</table>'
+                + '</section>';
+        }).join('');
+        if (options.trackExportOrder) {
+            window._currentHwpxExportIssues = orderedIssuesForExport.slice();
+        }
+
+        var issueMap = new Map();
+        filtered.forEach(function(issue) {
+            issueMap.set(String(issue.id || issue.displayId || issue.dbId || ''), issue);
+        });
+        body.querySelectorAll('[data-monthly-issue-id]').forEach(function(row) {
+            row.onclick = function() {
+                var issue = issueMap.get(String(row.getAttribute('data-monthly-issue-id')));
+                if (issue) {
+                    if (options.closePopupOnOpen) {
+                        var modal = document.getElementById('monthly-issue-browser-modal');
+                        if (modal) modal.remove();
+                    }
+                    openDetail(issue);
+                }
+            };
+        });
+    }
+
+    function syncIssueMonthlyInlineControls(issues) {
+        var monthSelect = document.getElementById('issue-monthly-inline-month');
+        if (!monthSelect) return;
+        var current = monthSelect.value || issueMonthlyInlineState.month || 'all';
+        var months = getMonthlyIssueMonthOptions(issues || getIssuesForMonthlyBrowser());
+        monthSelect.innerHTML = '<option value="all">전체 월</option>' + months.map(function(month) {
+            return '<option value="' + esc(month) + '">' + esc(month) + '</option>';
+        }).join('');
+        monthSelect.value = months.indexOf(current) > -1 ? current : 'all';
+        issueMonthlyInlineState.month = monthSelect.value || 'all';
+    }
+
+    function isIssueMonthlyInlineActive() {
+        var controls = document.getElementById('issue-monthly-inline-controls');
+        var monthSelect = document.getElementById('issue-monthly-inline-month');
+        return !!(controls && controls.style.display !== 'none' && monthSelect && monthSelect.value && monthSelect.value !== 'all');
+    }
+
+    function resetIssueMonthlyInlineView() {
+        var grouped = document.getElementById('issue-monthly-grouped-view');
+        var tableWrap = document.getElementById('issue-table-wrap');
+        if (grouped) {
+            grouped.style.display = 'none';
+            grouped.innerHTML = '';
+        }
+        if (tableWrap) tableWrap.style.display = 'block';
+    }
+
+    function renderIssueMonthlyInlineView(issues) {
+        var controls = document.getElementById('issue-monthly-inline-controls');
+        if (!controls || controls.style.display === 'none') {
+            resetIssueMonthlyInlineView();
+            return false;
+        }
+        syncIssueMonthlyInlineControls(issues);
+        var monthSelect = document.getElementById('issue-monthly-inline-month');
+        var groupSelect = document.getElementById('issue-monthly-inline-group');
+        var sortSelect = document.getElementById('issue-monthly-inline-sort');
+        var searchInput = document.getElementById('issue-monthly-inline-search');
+        issueMonthlyInlineState.month = monthSelect ? monthSelect.value || 'all' : 'all';
+        issueMonthlyInlineState.group = groupSelect ? groupSelect.value || 'structure' : 'structure';
+        issueMonthlyInlineState.sort = sortSelect ? sortSelect.value || 'structureTradeCreated' : 'structureTradeCreated';
+        issueMonthlyInlineState.search = searchInput ? searchInput.value || '' : '';
+        if (!isIssueMonthlyInlineActive()) {
+            window._currentHwpxExportIssues = null;
+            resetIssueMonthlyInlineView();
+            return false;
+        }
+        ensureMonthlyIssueBrowserStyles();
+        var grouped = document.getElementById('issue-monthly-grouped-view');
+        var tableWrap = document.getElementById('issue-table-wrap');
+        if (tableWrap) tableWrap.style.display = 'none';
+        if (grouped) {
+            grouped.style.display = 'block';
+            renderMonthlyIssueGroupedContent(grouped, issues || getIssuesForMonthlyBrowser(), {
+                month: issueMonthlyInlineState.month,
+                group: issueMonthlyInlineState.group,
+                sort: issueMonthlyInlineState.sort,
+                search: issueMonthlyInlineState.search,
+                trackExportOrder: true
+            });
+        }
+        return true;
+    }
+
+    function bindIssueMonthlyInlineControls() {
+        var controls = document.getElementById('issue-monthly-inline-controls');
+        if (!controls || controls.dataset.bound === '1') return;
+        controls.dataset.bound = '1';
+        ['issue-monthly-inline-month', 'issue-monthly-inline-group', 'issue-monthly-inline-sort', 'issue-monthly-inline-search'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener(id === 'issue-monthly-inline-search' ? 'input' : 'change', function() {
+                if (id === 'issue-monthly-inline-month' && (!el.value || el.value === 'all')) {
+                    issueMonthlyInlineState.month = 'all';
+                    window._currentHwpxExportIssues = null;
+                    if (typeof window.renderIssueTable === 'function') window.renderIssueTable(true);
+                    return;
+                }
+                renderIssueMonthlyInlineView(window.currentFilteredIssues || getIssuesForMonthlyBrowser());
+            });
+        });
+    }
+
+    async function toggleIssueMonthlyInlineBrowser() {
+        ensureMonthlyIssueBrowserStyles();
+        bindIssueMonthlyInlineControls();
+        if (!getIssuesForMonthlyBrowser().length) {
+            try {
+                await fetchFormaIssues(false);
+            } catch (err) {
+                console.warn('[Monthly Issue Inline] issue fetch failed:', err.message);
+            }
+        }
+        var controls = document.getElementById('issue-monthly-inline-controls');
+        if (!controls) return;
+        var willOpen = controls.style.display === 'none';
+        controls.style.display = willOpen ? 'grid' : 'none';
+        if (!willOpen) {
+            issueMonthlyInlineState.month = 'all';
+            window._currentHwpxExportIssues = null;
+            var monthSelect = document.getElementById('issue-monthly-inline-month');
+            if (monthSelect) monthSelect.value = 'all';
+            resetIssueMonthlyInlineView();
+        } else {
+            syncIssueMonthlyInlineControls(getIssuesForMonthlyBrowser());
+        }
+        if (typeof window.renderIssueTable === 'function') window.renderIssueTable(true);
+    }
+    window.toggleIssueMonthlyInlineBrowser = toggleIssueMonthlyInlineBrowser;
+
+    function ensureMonthlyIssueBrowserStyles() {
+        if (document.getElementById('monthly-issue-browser-style')) return;
+        var style = document.createElement('style');
+        style.id = 'monthly-issue-browser-style';
+        style.textContent = `
+            .monthly-issue-browser-overlay{position:fixed;inset:0;z-index:32000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(2,6,23,.72);backdrop-filter:blur(6px)}
+            .monthly-issue-browser-dialog{width:min(1080px,96vw);max-height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(148,163,184,.24);border-radius:10px;background:#0f172a;color:#e5eefb;box-shadow:0 28px 70px rgba(0,0,0,.5)}
+            .monthly-issue-browser-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;border-bottom:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.96)}
+            .monthly-issue-browser-head strong{font-size:16px;color:#f8fafc}.monthly-issue-browser-close{width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(148,163,184,.24);border-radius:6px;background:rgba(30,41,59,.78);color:#cbd5e1;cursor:pointer}
+            .monthly-issue-browser-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:14px 18px;border-bottom:1px solid rgba(148,163,184,.16);background:rgba(2,6,23,.28)}
+            .monthly-issue-browser-controls label{display:grid;gap:5px;color:#94a3b8;font-size:11px;font-weight:900}.monthly-issue-browser-controls select,.monthly-issue-browser-controls input{height:34px;border:1px solid rgba(148,163,184,.26);border-radius:6px;background:#020617;color:#e5eefb;padding:0 9px;font:inherit;font-size:13px}
+            .monthly-issue-browser-body{min-height:0;overflow:auto;padding:14px 18px 18px}.monthly-issue-browser-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.monthly-issue-browser-chip{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border-radius:999px;background:rgba(56,189,248,.14);color:#bae6fd;font-size:11px;font-weight:900}
+            .monthly-issue-group{margin-top:12px;border:1px solid rgba(148,163,184,.16);border-radius:8px;overflow:hidden;background:rgba(15,23,42,.68)}.monthly-issue-group:first-child{margin-top:0}.monthly-issue-group-title{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 11px;background:rgba(30,41,59,.78);color:#f8fafc;font-size:13px;font-weight:900}
+            .monthly-issue-browser-table{width:100%;border-collapse:collapse;font-size:13px}.monthly-issue-browser-table th,.monthly-issue-browser-table td{padding:9px 10px;border-top:1px solid rgba(148,163,184,.14);text-align:left}.monthly-issue-browser-table th{color:#94a3b8;background:rgba(2,6,23,.32);font-size:11px}.monthly-issue-browser-table tr{cursor:pointer}.monthly-issue-browser-table tr:hover td{background:rgba(56,189,248,.08)}
+            .monthly-issue-browser-empty{padding:34px;text-align:center;color:#94a3b8;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(15,23,42,.62)}
+            @media(max-width:760px){.monthly-issue-browser-controls{grid-template-columns:1fr}.monthly-issue-browser-overlay{padding:12px}.monthly-issue-browser-table th:nth-child(4),.monthly-issue-browser-table td:nth-child(4){display:none}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    function renderMonthlyIssueBrowser() {
+        var modal = document.getElementById('monthly-issue-browser-modal');
+        if (!modal) return;
+        var monthSelect = document.getElementById('monthly-issue-browser-month');
+        var groupSelect = document.getElementById('monthly-issue-browser-group');
+        var sortSelect = document.getElementById('monthly-issue-browser-sort');
+        var searchInput = document.getElementById('monthly-issue-browser-search');
+        var body = document.getElementById('monthly-issue-browser-body');
+        if (!monthSelect || !groupSelect || !sortSelect || !searchInput || !body) return;
+
+        var allIssues = getIssuesForMonthlyBrowser();
+        var month = monthSelect.value || 'all';
+        var groupBy = groupSelect.value || 'structure';
+        var sortKey = sortSelect.value || 'date';
+        var query = String(searchInput.value || '').trim().toLowerCase();
+        renderMonthlyIssueGroupedContent(body, allIssues, {
+            month: month,
+            group: groupBy,
+            sort: sortKey,
+            search: query,
+            closePopupOnOpen: true
+        });
+    }
+
+    async function openMonthlyIssueBrowser() {
+        ensureMonthlyIssueBrowserStyles();
+        if (!getIssuesForMonthlyBrowser().length) {
+            try {
+                await fetchFormaIssues(false);
+            } catch (err) {
+                console.warn('[Monthly Issue Browser] issue fetch failed:', err.message);
+            }
+        }
+        var old = document.getElementById('monthly-issue-browser-modal');
+        if (old) old.remove();
+        var issues = getIssuesForMonthlyBrowser();
+        var months = Array.from(new Set(issues.map(getIssueMonthKeyForBrowser))).sort().reverse();
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="monthly-issue-browser-modal" class="monthly-issue-browser-overlay">'
+            + '<div class="monthly-issue-browser-dialog" role="dialog" aria-modal="true" aria-labelledby="monthly-issue-browser-title">'
+            + '<div class="monthly-issue-browser-head">'
+            + '<strong id="monthly-issue-browser-title"><i class="fas fa-calendar-days" style="color:#7dd3fc;margin-right:8px;"></i>월별 이슈 보기</strong>'
+            + '<button id="monthly-issue-browser-close" type="button" class="monthly-issue-browser-close" title="닫기"><i class="fas fa-times"></i></button>'
+            + '</div>'
+            + '<div class="monthly-issue-browser-controls">'
+            + '<label>월<select id="monthly-issue-browser-month"><option value="all">전체 월</option>' + months.map(function(month) { return '<option value="' + esc(month) + '">' + esc(month) + '</option>'; }).join('') + '</select></label>'
+            + '<label>보기 기준<select id="monthly-issue-browser-group"><option value="structure">구조물별</option><option value="trade">공종별</option></select></label>'
+            + '<label>정렬<select id="monthly-issue-browser-sort"><option value="structureTradeCreated">구조물/공종/작성순</option><option value="date">최신 날짜순</option><option value="id">이슈 ID순</option><option value="title">제목순</option><option value="status">상태순</option></select></label>'
+            + '<label>검색<input id="monthly-issue-browser-search" type="search" placeholder="제목, 구조물, 공종 검색"></label>'
+            + '</div>'
+            + '<div id="monthly-issue-browser-body" class="monthly-issue-browser-body"></div>'
+            + '</div></div>');
+
+        document.getElementById('monthly-issue-browser-close').onclick = function() {
+            var modal = document.getElementById('monthly-issue-browser-modal');
+            if (modal) modal.remove();
+        };
+        ['monthly-issue-browser-month', 'monthly-issue-browser-group', 'monthly-issue-browser-sort', 'monthly-issue-browser-search'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener(id === 'monthly-issue-browser-search' ? 'input' : 'change', renderMonthlyIssueBrowser);
+        });
+        renderMonthlyIssueBrowser();
+    }
+    window.openMonthlyIssueBrowser = openMonthlyIssueBrowser;
 
     async function exportFormaIssueToPdf(issue) {
         var BLANK_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
@@ -8380,10 +9466,790 @@ window.bindIssueItemClickEvents = function() {
     }
     window.resolveFormaIssueViewerUrn = resolveFormaIssueViewerUrn;
 
+    function getCurrentReportCaptureViewer() {
+        if (typeof window.getActiveCaptureViewer === 'function') {
+            var active = window.getActiveCaptureViewer();
+            if (active) return active;
+        }
+        return window.projectViewer || window.myGlobalViewer || window.viewer || window.NOP_VIEWER || null;
+    }
+
+    function getReportViewerState(viewer) {
+        if (!viewer) return null;
+        try {
+            if (typeof viewer.getState === 'function') return viewer.getState({ viewport: true, objectSet: true });
+        } catch(e) {}
+        try {
+            var nav = viewer.navigation;
+            if (nav) {
+                return {
+                    viewport: {
+                        eye: nav.getPosition && nav.getPosition(),
+                        target: nav.getTarget && nav.getTarget(),
+                        up: nav.getCameraUpVector && nav.getCameraUpVector(),
+                        pivotPoint: nav.getPivotPoint && nav.getPivotPoint(),
+                        projection: nav.getCamera && nav.getCamera().isPerspective ? 'perspective' : 'orthographic'
+                    }
+                };
+            }
+        } catch(e2) {}
+        return null;
+    }
+
+    function getReportViewerModelUrn(viewer) {
+        if (!viewer || !viewer.model) return '';
+        try {
+            if (typeof viewer.model.getUrn === 'function') return viewer.model.getUrn() || '';
+        } catch(e) {}
+        try {
+            var data = typeof viewer.model.getData === 'function' ? viewer.model.getData() : null;
+            return (data && (data.urn || data.modelUrn || data.versionUrn)) || '';
+        } catch(e2) {}
+        return window._currentMainModelUrn || '';
+    }
+
+    function normalizeReportViewerUrnToken(value) {
+        return String(value || '')
+            .replace(/^urn:/i, '')
+            .replace(/=/g, '')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .trim();
+    }
+
+    function unloadReportViewerModels(viewer) {
+        if (!viewer) return;
+        try {
+            if (typeof viewer.getAllModels === 'function' && typeof viewer.unloadModel === 'function') {
+                var models = viewer.getAllModels() || [];
+                models.forEach(function(model) {
+                    try { viewer.unloadModel(model); } catch(e) {}
+                });
+                return;
+            }
+        } catch(e1) {}
+        try {
+            if (viewer.model && typeof viewer.unloadModel === 'function') viewer.unloadModel(viewer.model);
+        } catch(e2) {}
+        try {
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        } catch(e3) {}
+    }
+
+    function normalizeReportCaptureDataUrlToFourThree(dataUrl) {
+        return new Promise(function(resolve) {
+            if (!dataUrl || String(dataUrl).indexOf('data:image') !== 0) {
+                resolve(dataUrl || '');
+                return;
+            }
+            var img = new Image();
+            img.onload = function() {
+                try {
+                    var sourceWidth = img.naturalWidth || img.width;
+                    var sourceHeight = img.naturalHeight || img.height;
+                    if (!sourceWidth || !sourceHeight) {
+                        resolve(dataUrl);
+                        return;
+                    }
+                    var targetRatio = 4 / 3;
+                    var sourceRatio = sourceWidth / sourceHeight;
+                    var cropWidth = sourceWidth;
+                    var cropHeight = sourceHeight;
+                    var cropX = 0;
+                    var cropY = 0;
+                    if (sourceRatio > targetRatio) {
+                        cropWidth = Math.round(sourceHeight * targetRatio);
+                        cropX = Math.max(0, Math.round((sourceWidth - cropWidth) / 2));
+                    } else if (sourceRatio < targetRatio) {
+                        cropHeight = Math.round(sourceWidth / targetRatio);
+                        cropY = Math.max(0, Math.round((sourceHeight - cropHeight) / 2));
+                    }
+                    var canvas = document.createElement('canvas');
+                    canvas.width = 900;
+                    canvas.height = 675;
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        resolve(dataUrl);
+                        return;
+                    }
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.82));
+                } catch(e) {
+                    resolve(dataUrl);
+                }
+            };
+            img.onerror = function() { resolve(dataUrl); };
+            img.src = dataUrl;
+        });
+    }
+
+    function captureViewerDataUrlForReport(viewer) {
+        return new Promise(function(resolve, reject) {
+            if (!viewer) {
+                reject(new Error('활성화된 3D 뷰어가 없습니다.'));
+                return;
+            }
+            var width = viewer.container && viewer.container.clientWidth ? viewer.container.clientWidth : 1280;
+            var height = viewer.container && viewer.container.clientHeight ? viewer.container.clientHeight : 720;
+            var resolveFourThree = function(dataUrl) {
+                normalizeReportCaptureDataUrlToFourThree(dataUrl).then(resolve);
+            };
+            if (typeof captureViewerScreen === 'function') {
+                captureViewerScreen(viewer, width, height).then(resolveFourThree).catch(function() {
+                    if (typeof viewer.getScreenShot !== 'function') {
+                        reject(new Error('뷰어 캡처 기능을 사용할 수 없습니다.'));
+                        return;
+                    }
+                    viewer.getScreenShot(width, height, resolveFourThree);
+                });
+                return;
+            }
+            if (typeof viewer.getScreenShot !== 'function') {
+                reject(new Error('뷰어 캡처 기능을 사용할 수 없습니다.'));
+                return;
+            }
+            viewer.getScreenShot(width, height, resolveFourThree);
+        });
+    }
+
+    var REPORT_CAPTURE_REGION_KEY = 'forma_report_capture_region_v1';
+
+    function getReportCaptureTargetContainer() {
+        if (window.isCompareModeActive) {
+            var split = document.getElementById('viewer-split-wrapper');
+            if (split && split.style.display !== 'none') return split;
+            return document.getElementById('viewer-overlay');
+        }
+        return document.getElementById('preview');
+    }
+
+    function readReportCaptureRegion() {
+        try {
+            var region = JSON.parse(localStorage.getItem(REPORT_CAPTURE_REGION_KEY) || 'null');
+            if (!region || typeof region !== 'object') return null;
+            var x = Number(region.x);
+            var y = Number(region.y);
+            var w = Number(region.w);
+            var h = Number(region.h);
+            if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h)) return null;
+            if (w <= 0.03 || h <= 0.03) return null;
+            return {
+                x: Math.max(0, Math.min(0.98, x)),
+                y: Math.max(0, Math.min(0.98, y)),
+                w: Math.max(0.03, Math.min(1, w)),
+                h: Math.max(0.03, Math.min(1, h))
+            };
+        } catch(e) {
+            return null;
+        }
+    }
+
+    function saveReportCaptureRegion(region) {
+        if (!region) return;
+        try {
+            localStorage.setItem(REPORT_CAPTURE_REGION_KEY, JSON.stringify(region));
+        } catch(e) {}
+    }
+
+    function cropReportCaptureDataUrl(dataUrl, region) {
+        return new Promise(function(resolve) {
+            if (!dataUrl || !region) return resolve(dataUrl || '');
+            var img = new Image();
+            img.onload = function() {
+                try {
+                    var sx = Math.max(0, Math.round(region.x * img.width));
+                    var sy = Math.max(0, Math.round(region.y * img.height));
+                    var sw = Math.min(img.width - sx, Math.round(region.w * img.width));
+                    var sh = Math.min(img.height - sy, Math.round(region.h * img.height));
+                    if (sw < 20 || sh < 20) return resolve(dataUrl);
+                    var canvas = document.createElement('canvas');
+                    canvas.width = sw;
+                    canvas.height = sh;
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return resolve(dataUrl);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, sw, sh);
+                    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+                    resolve(canvas.toDataURL('image/jpeg', 0.9));
+                } catch(e) {
+                    resolve(dataUrl);
+                }
+            };
+            img.onerror = function() { resolve(dataUrl); };
+            img.src = dataUrl;
+        });
+    }
+
+    function selectReportCaptureRegion(dataUrl) {
+        return new Promise(function(resolve, reject) {
+            var targetContainer = getReportCaptureTargetContainer();
+            if (!targetContainer) {
+                resolve(readReportCaptureRegion());
+                return;
+            }
+            window.setViewerControls(false);
+            var oldOverlay = document.getElementById('report-region-overlay');
+            if (oldOverlay) oldOverlay.remove();
+
+            var overlay = document.createElement('div');
+            overlay.id = 'report-region-overlay';
+            overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;z-index:10020;background:rgba(2,6,23,.72);display:flex;flex-direction:column;font-family:'Noto Sans KR',sans-serif;";
+            var toolbar = document.createElement('div');
+            toolbar.style.cssText = "display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;padding:10px;background:#1e293b;border-bottom:2px solid #334155;color:#e5eefb;font-size:13px;font-weight:800;";
+            toolbar.innerHTML = '<span>보고서에 넣을 캡처 영역을 드래그하세요.</span>';
+            var useFullBtn = document.createElement('button');
+            useFullBtn.type = 'button';
+            useFullBtn.textContent = '전체 화면';
+            useFullBtn.style.cssText = "background:#334155;color:#e5eefb;border:1px solid #475569;border-radius:4px;padding:6px 12px;font-weight:900;cursor:pointer;";
+            var cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = '취소';
+            cancelBtn.style.cssText = "background:#ef4444;color:white;border:0;border-radius:4px;padding:6px 12px;font-weight:900;cursor:pointer;";
+            var doneBtn = document.createElement('button');
+            doneBtn.type = 'button';
+            doneBtn.textContent = '이 영역 사용';
+            doneBtn.disabled = true;
+            doneBtn.style.cssText = "background:#10b981;color:white;border:0;border-radius:4px;padding:6px 14px;font-weight:900;cursor:pointer;opacity:.55;";
+            toolbar.appendChild(useFullBtn);
+            toolbar.appendChild(cancelBtn);
+            toolbar.appendChild(doneBtn);
+            overlay.appendChild(toolbar);
+
+            var canvasWrap = document.createElement('div');
+            canvasWrap.style.cssText = "flex:1;position:relative;overflow:hidden;";
+            var canvas = document.createElement('canvas');
+            canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;";
+            canvasWrap.appendChild(canvas);
+            overlay.appendChild(canvasWrap);
+            targetContainer.appendChild(overlay);
+
+            var ctx = canvas.getContext('2d');
+            var img = new Image();
+            var start = null;
+            var current = null;
+            var selected = null;
+
+            function cleanup() {
+                overlay.remove();
+                window.setViewerControls(true);
+            }
+            function resizeCanvas() {
+                canvas.width = Math.max(1, canvasWrap.clientWidth);
+                canvas.height = Math.max(1, canvasWrap.clientHeight);
+                draw();
+            }
+            function draw() {
+                if (!ctx) return;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                if (img.complete && img.naturalWidth) {
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                }
+                var box = current || selected;
+                if (box) {
+                    var x = Math.min(box.x1, box.x2);
+                    var y = Math.min(box.y1, box.y2);
+                    var w = Math.abs(box.x2 - box.x1);
+                    var h = Math.abs(box.y2 - box.y1);
+                    ctx.save();
+                    ctx.fillStyle = 'rgba(2,6,23,.42)';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.clearRect(x, y, w, h);
+                    if (img.complete && img.naturalWidth) {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    }
+                    ctx.strokeStyle = '#38bdf8';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeRect(x, y, w, h);
+                    ctx.setLineDash([]);
+                    ctx.restore();
+                }
+            }
+            function point(evt) {
+                var rect = canvas.getBoundingClientRect();
+                return {
+                    x: Math.max(0, Math.min(canvas.width, evt.clientX - rect.left)),
+                    y: Math.max(0, Math.min(canvas.height, evt.clientY - rect.top))
+                };
+            }
+            function normalized(box) {
+                var x = Math.min(box.x1, box.x2);
+                var y = Math.min(box.y1, box.y2);
+                var w = Math.abs(box.x2 - box.x1);
+                var h = Math.abs(box.y2 - box.y1);
+                return {
+                    x: x / canvas.width,
+                    y: y / canvas.height,
+                    w: w / canvas.width,
+                    h: h / canvas.height
+                };
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+            img.onload = function() {
+                resizeCanvas();
+            };
+            img.onerror = function() {
+                cleanup();
+                reject(new Error('캡처 이미지를 불러올 수 없습니다.'));
+            };
+            img.src = dataUrl;
+
+            canvas.onmousedown = function(evt) {
+                start = point(evt);
+                current = { x1: start.x, y1: start.y, x2: start.x, y2: start.y };
+                selected = null;
+                doneBtn.disabled = true;
+                doneBtn.style.opacity = '.55';
+                draw();
+            };
+            canvas.onmousemove = function(evt) {
+                if (!start || !current) return;
+                var p = point(evt);
+                current.x2 = p.x;
+                current.y2 = p.y;
+                draw();
+            };
+            canvas.onmouseup = function(evt) {
+                if (!start || !current) return;
+                var p = point(evt);
+                current.x2 = p.x;
+                current.y2 = p.y;
+                if (Math.abs(current.x2 - current.x1) >= 20 && Math.abs(current.y2 - current.y1) >= 20) {
+                    selected = current;
+                    doneBtn.disabled = false;
+                    doneBtn.style.opacity = '1';
+                }
+                start = null;
+                current = null;
+                draw();
+            };
+            useFullBtn.onclick = function() {
+                var region = { x: 0, y: 0, w: 1, h: 1 };
+                saveReportCaptureRegion(region);
+                window.removeEventListener('resize', resizeCanvas);
+                cleanup();
+                resolve(region);
+            };
+            cancelBtn.onclick = function() {
+                window.removeEventListener('resize', resizeCanvas);
+                cleanup();
+                resolve(null);
+            };
+            doneBtn.onclick = function() {
+                if (!selected) return;
+                var region = normalized(selected);
+                saveReportCaptureRegion(region);
+                window.removeEventListener('resize', resizeCanvas);
+                cleanup();
+                resolve(region);
+            };
+        });
+    }
+
+    async function captureViewerRegionDataUrlForReport(viewer, forceSelectRegion) {
+        var screenshot = await captureViewerDataUrlForReport(viewer);
+        var region = forceSelectRegion ? null : readReportCaptureRegion();
+        if (!region) {
+            region = await selectReportCaptureRegion(screenshot);
+        }
+        if (!region) return '';
+        return await cropReportCaptureDataUrl(screenshot, region);
+    }
+
+    function drawReportMarkupShapeOnContext(ctx, s) {
+        if (!ctx || !s) return;
+        ctx.strokeStyle = s.color || '#ef4444';
+        ctx.fillStyle = s.color || '#ef4444';
+        ctx.lineWidth = s.width || 3;
+        ctx.lineCap = 'round';
+        if (s.type === 'line') {
+            ctx.beginPath();
+            ctx.moveTo(s.x1, s.y1);
+            ctx.lineTo(s.x2, s.y2);
+            ctx.stroke();
+        } else if (s.type === 'arrow') {
+            ctx.beginPath();
+            ctx.moveTo(s.x1, s.y1);
+            ctx.lineTo(s.x2, s.y2);
+            ctx.stroke();
+            var angle = Math.atan2(s.y2 - s.y1, s.x2 - s.x1);
+            ctx.beginPath();
+            ctx.moveTo(s.x2, s.y2);
+            ctx.lineTo(s.x2 - 15 * Math.cos(angle - Math.PI / 6), s.y2 - 15 * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(s.x2 - 15 * Math.cos(angle + Math.PI / 6), s.y2 - 15 * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fill();
+        } else if (s.type === 'rect') {
+            ctx.beginPath();
+            ctx.rect(s.x1, s.y1, s.x2 - s.x1, s.y2 - s.y1);
+            ctx.stroke();
+        } else if (s.type === 'circle') {
+            var rx = Math.abs(s.x2 - s.x1) / 2;
+            var ry = Math.abs(s.y2 - s.y1) / 2;
+            var cx = (s.x1 + s.x2) / 2;
+            var cy = (s.y1 + s.y2) / 2;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+        } else if (s.type === 'cloud') {
+            var minX = Math.min(s.x1, s.x2);
+            var maxX = Math.max(s.x1, s.x2);
+            var minY = Math.min(s.y1, s.y2);
+            var maxY = Math.max(s.y1, s.y2);
+            if (maxX - minX < 10 || maxY - minY < 10) return;
+            ctx.beginPath();
+            for (var x = minX; x <= maxX; x += 15) ctx.arc(x, minY, 8, Math.PI, 0, false);
+            for (var y = minY; y <= maxY; y += 15) ctx.arc(maxX, y, 8, -Math.PI / 2, Math.PI / 2, false);
+            for (var x2 = maxX; x2 >= minX; x2 -= 15) ctx.arc(x2, maxY, 8, 0, Math.PI, false);
+            for (var y2 = maxY; y2 >= minY; y2 -= 15) ctx.arc(minX, y2, 8, Math.PI / 2, -Math.PI / 2, false);
+            ctx.stroke();
+        } else if (s.type === 'text') {
+            ctx.font = (s.fontSize || 16) + 'px sans-serif';
+            ctx.fillText(s.text || '', s.x1, s.y1);
+        }
+    }
+
+    function applyReportMarkupShapesToImage(dataUrl, shapes, canvasSize) {
+        return new Promise(function(resolve) {
+            if (!dataUrl || !Array.isArray(shapes) || !shapes.length) return resolve(dataUrl || '');
+            var img = new Image();
+            img.onload = function() {
+                try {
+                    var width = canvasSize && canvasSize.width ? canvasSize.width : img.width;
+                    var height = canvasSize && canvasSize.height ? canvasSize.height : img.height;
+                    var canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return resolve(dataUrl);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, width, height);
+                    ctx.drawImage(img, 0, 0, width, height);
+                    shapes.forEach(function(shape) { drawReportMarkupShapeOnContext(ctx, shape); });
+                    var merged = canvas.toDataURL('image/webp', 0.9);
+                    if (!merged || merged.indexOf('data:image/webp') !== 0) merged = canvas.toDataURL('image/jpeg', 0.9);
+                    resolve(merged);
+                } catch(e) {
+                    resolve(dataUrl);
+                }
+            };
+            img.onerror = function() { resolve(dataUrl); };
+            img.src = dataUrl;
+        });
+    }
+
+    async function capturePreviousReportImageForIssue(issue, viewerState, currentViewerUrn) {
+        if (!viewerState || typeof capturePreviousModelImageForHwpxExport !== 'function') return '';
+        var raw = Object.assign({}, issue && issue.rawFormaIssue ? issue.rawFormaIssue : {}, {
+            viewerState: viewerState,
+            viewState: viewerState,
+            viewport: viewerState.viewport || viewerState,
+            viewerUrn: currentViewerUrn || '',
+            versionUrn: currentViewerUrn || ''
+        });
+        var source = Object.assign({}, issue || {}, {
+            viewerState: viewerState,
+            viewerUrn: currentViewerUrn || issue.viewerUrn || '',
+            versionUrn: currentViewerUrn || issue.versionUrn || '',
+            rawFormaIssue: raw
+        });
+        try {
+            var hiddenShot = await capturePreviousModelImageForHwpxExport(source);
+            if (hiddenShot) return hiddenShot;
+        } catch (err) {
+            console.warn('[Issue Report Capture] hidden previous capture failed:', err);
+        }
+        return await capturePreviousReportImageWithActiveViewer(source, viewerState, currentViewerUrn);
+    }
+
+    async function capturePreviousReportImageWithActiveViewer(sourceIssue, viewerState, currentViewerUrn) {
+        var viewer = getCurrentReportCaptureViewer();
+        if (!viewer || typeof loadModel !== 'function') return '';
+        var versionInfo = extractHwpxExportVersionUrns(sourceIssue);
+        var prevViewerUrn = normalizeViewerDocumentUrnForHiddenCapture(versionInfo.prevUrn);
+        var createdViewerUrn = normalizeViewerDocumentUrnForHiddenCapture(currentViewerUrn || versionInfo.createdUrn);
+        if (!prevViewerUrn || !createdViewerUrn || prevViewerUrn === createdViewerUrn) {
+            console.warn('[Issue Report Capture] visible previous capture skipped:', versionInfo);
+            return '';
+        }
+        try {
+            await loadModel(viewer, prevViewerUrn);
+            await waitForHwpxExportViewerGeometry(viewer, 7000);
+            applyHwpxExportIssueCamera(viewer, sourceIssue);
+            await new Promise(function(resolve) { setTimeout(resolve, 900); });
+            var shot = await captureViewerDataUrlForReport(viewer);
+            var compressed = await compressHwpxExportImage(shot);
+            try {
+                await loadModel(viewer, createdViewerUrn);
+                await waitForHwpxExportViewerGeometry(viewer, 7000);
+                if (viewerState && typeof viewer.restoreState === 'function') viewer.restoreState(viewerState, null, true);
+            } catch (restoreErr) {
+                console.warn('[Issue Report Capture] created model restore failed:', restoreErr);
+            }
+            return compressed;
+        } catch (err) {
+            console.warn('[Issue Report Capture] visible previous capture failed:', err);
+            try {
+                if (createdViewerUrn) await loadModel(viewer, createdViewerUrn);
+            } catch(e) {}
+            return '';
+        }
+    }
+
+    function buildReportVersionSourceIssue(issue, viewerState, currentViewerUrn) {
+        var raw = Object.assign({}, issue && issue.rawFormaIssue ? issue.rawFormaIssue : {}, {
+            viewerState: viewerState,
+            viewState: viewerState,
+            viewport: viewerState && (viewerState.viewport || viewerState),
+            viewerUrn: currentViewerUrn || '',
+            versionUrn: currentViewerUrn || ''
+        });
+        return Object.assign({}, issue || {}, {
+            viewerState: viewerState,
+            viewerUrn: currentViewerUrn || (issue && issue.viewerUrn) || '',
+            versionUrn: currentViewerUrn || (issue && issue.versionUrn) || '',
+            rawFormaIssue: raw
+        });
+    }
+
+    async function switchActiveViewerToPreviousReportVersion(sourceIssue) {
+        var viewer = getCurrentReportCaptureViewer();
+        if (!viewer || typeof loadModel !== 'function') return false;
+        var versionInfo = extractHwpxExportVersionUrns(sourceIssue);
+        var prevViewerUrn = normalizeViewerDocumentUrnForHiddenCapture(versionInfo.prevUrn);
+        if (!prevViewerUrn) {
+            console.warn('[Issue Report Capture] previous version switch skipped:', versionInfo);
+            return false;
+        }
+        var beforeSwitchUrn = getReportViewerModelUrn(viewer);
+        unloadReportViewerModels(viewer);
+        var model = await loadModel(viewer, prevViewerUrn);
+        if (!model) return false;
+        await waitForHwpxExportViewerGeometry(viewer, 7000);
+        applyHwpxExportIssueCamera(viewer, sourceIssue);
+        await new Promise(function(resolve) { setTimeout(resolve, 600); });
+        var afterSwitchUrn = getReportViewerModelUrn(viewer) || window._currentMainModelUrn || '';
+        var expected = normalizeReportViewerUrnToken(prevViewerUrn);
+        var actual = normalizeReportViewerUrnToken(afterSwitchUrn);
+        if (actual && expected && actual !== expected && beforeSwitchUrn && normalizeReportViewerUrnToken(beforeSwitchUrn) === actual) {
+            console.warn('[Issue Report Capture] previous version switch did not change active model:', {
+                expected: prevViewerUrn,
+                actual: afterSwitchUrn
+            });
+            return false;
+        }
+        return true;
+    }
+
+    function removeFormaReportCapturePanel() {
+        var old = document.getElementById('forma-report-capture-panel');
+        if (old) old.remove();
+    }
+
+    function showFormaBeforeReportCapturePanel(issue, note, afterImage) {
+        ensureFormaDetailStyles();
+        removeFormaReportCapturePanel();
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="forma-report-capture-panel" class="forma-report-floating">'
+            + '<div class="forma-report-floating-title">변경 전 이미지 캡처</div>'
+            + '<div style="color:#94a3b8;font-size:12px;line-height:1.45;">직전 버전의 같은 뷰로 이동했습니다. 화면을 확인한 뒤 캡처하세요.</div>'
+            + '<label style="display:flex;align-items:center;gap:7px;color:#cbd5e1;font-size:12px;font-weight:800;"><input id="forma-report-reselect-region" type="checkbox"> 캡처 영역 다시 지정</label>'
+            + '<div class="forma-report-floating-actions">'
+            + '<button id="forma-report-capture-cancel" type="button">나중에</button>'
+            + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 변경 전 캡처</button>'
+            + '</div>'
+            + '</div>');
+        var reopenDetailAfterCapture = function() {
+            window.setTimeout(function() {
+                if (typeof openDetail === 'function') openDetail(issue);
+            }, 120);
+        };
+        var cancel = document.getElementById('forma-report-capture-cancel');
+        var shot = document.getElementById('forma-report-capture-shot');
+        cancel.onclick = function() {
+            removeFormaReportCapturePanel();
+            reopenDetailAfterCapture();
+        };
+        shot.onclick = async function() {
+            var btn = this;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 캡처 중';
+            try {
+                var viewer = getCurrentReportCaptureViewer();
+                var reselect = document.getElementById('forma-report-reselect-region');
+                var screenshot = await captureViewerRegionDataUrlForReport(viewer, !!(reselect && reselect.checked));
+                if (!screenshot) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-camera"></i> 변경 전 캡처';
+                    return;
+                }
+                window.startMarkupSession(screenshot, async function(markedBeforeImage) {
+                    markedBeforeImage = await compressHwpxExportImage(markedBeforeImage);
+                    saveFormaIssueReportCapture(issue, {
+                        beforeImage: markedBeforeImage,
+                        afterImage: afterImage,
+                        imageNote: note
+                    });
+                    removeFormaReportCapturePanel();
+                    alert('보고서 이미지 2장이 저장되었습니다.');
+                    reopenDetailAfterCapture();
+                });
+            } catch (err) {
+                console.error('[Issue Report Capture] before capture failed:', err);
+                alert('변경 전 이미지 캡처 중 오류가 발생했습니다: ' + (err && err.message ? err.message : err));
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-camera"></i> 변경 전 캡처';
+            }
+        };
+    }
+
+    function showFormaIssueReportCapturePanel(issue, initialNote) {
+        ensureFormaDetailStyles();
+        removeFormaReportCapturePanel();
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="forma-report-capture-panel" class="forma-report-floating">'
+            + '<div class="forma-report-floating-title">보고서 이미지 캡처</div>'
+            + '<textarea id="forma-report-floating-note" class="forma-report-note" placeholder="이미지 하단에 넣을 내용을 입력하세요.">' + esc(initialNote || '') + '</textarea>'
+            + '<label style="display:flex;align-items:center;gap:7px;color:#cbd5e1;font-size:12px;font-weight:800;"><input id="forma-report-reselect-region" type="checkbox"> 캡처 영역 다시 지정</label>'
+            + '<div class="forma-report-floating-actions">'
+            + '<button id="forma-report-capture-cancel" type="button">취소</button>'
+            + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 캡처</button>'
+            + '</div>'
+            + '</div>');
+        var cancel = document.getElementById('forma-report-capture-cancel');
+        var shot = document.getElementById('forma-report-capture-shot');
+        cancel.onclick = removeFormaReportCapturePanel;
+        var reopenDetailAfterCapture = function() {
+            window.setTimeout(function() {
+                if (typeof openDetail === 'function') openDetail(issue);
+            }, 120);
+        };
+        shot.onclick = async function() {
+            var btn = this;
+            var noteEl = document.getElementById('forma-report-floating-note');
+            var note = noteEl ? noteEl.value.trim() : '';
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 캡처 중';
+            try {
+                var viewer = getCurrentReportCaptureViewer();
+                var viewerState = getReportViewerState(viewer);
+                var currentViewerUrn = getReportViewerModelUrn(viewer);
+                var reselect = document.getElementById('forma-report-reselect-region');
+                var screenshot = await captureViewerRegionDataUrlForReport(viewer, !!(reselect && reselect.checked));
+                if (!screenshot) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-camera"></i> 캡처';
+                    return;
+                }
+                if (typeof window.startMarkupSession !== 'function') {
+                    throw new Error('마크업 도구를 불러올 수 없습니다.');
+                }
+                window.startMarkupSession(screenshot, async function(markedImage) {
+                    markedImage = await compressHwpxExportImage(markedImage);
+                    saveFormaIssueReportCapture(issue, {
+                        afterImage: markedImage,
+                        imageNote: note
+                    });
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 변경 전 이동 중';
+                    try {
+                        var sourceIssue = buildReportVersionSourceIssue(issue, viewerState, currentViewerUrn);
+                        var switched = await switchActiveViewerToPreviousReportVersion(sourceIssue);
+                        removeFormaReportCapturePanel();
+                        if (switched) {
+                            showFormaBeforeReportCapturePanel(issue, note, markedImage);
+                        } else {
+                            alert('변경 후 이미지가 저장되었습니다. 직전 버전 모델로 자동 이동할 수 없어 변경 전 이미지는 비워 둡니다.');
+                            reopenDetailAfterCapture();
+                        }
+                    } catch (err) {
+                        removeFormaReportCapturePanel();
+                        console.warn('[Issue Report Capture] previous version switch failed:', err);
+                        alert('변경 후 이미지가 저장되었습니다. 직전 버전 모델 이동 중 오류가 있어 변경 전 이미지는 비워 둡니다.');
+                        reopenDetailAfterCapture();
+                    }
+                });
+            } catch (err) {
+                console.error('[Issue Report Capture] failed:', err);
+                alert('보고서 이미지 캡처 중 오류가 발생했습니다: ' + (err && err.message ? err.message : err));
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-camera"></i> 캡처';
+            }
+        };
+    }
+
+    function showBimReviewReportCapturePanel(issue, target) {
+        ensureFormaDetailStyles();
+        removeFormaReportCapturePanel();
+        var title = target === 'result' ? '반영 결과 이미지 캡처' : 'BIM 검토 이미지 캡처';
+        document.body.insertAdjacentHTML('beforeend',
+            '<div id="forma-report-capture-panel" class="forma-report-floating">'
+            + '<div class="forma-report-floating-title">' + esc(title) + '</div>'
+            + '<div style="color:#94a3b8;font-size:12px;line-height:1.45;">현재 3D 뷰를 캡처해 선택한 보고서 이미지 칸에 저장합니다. 마지막 영역을 기본으로 사용합니다.</div>'
+            + '<label style="display:flex;align-items:center;gap:7px;color:#cbd5e1;font-size:12px;font-weight:800;"><input id="forma-report-reselect-region" type="checkbox"> 캡처 영역 다시 지정</label>'
+            + '<div class="forma-report-floating-actions">'
+            + '<button id="forma-report-capture-cancel" type="button">취소</button>'
+            + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 캡처</button>'
+            + '</div>'
+            + '</div>');
+        var cancel = document.getElementById('forma-report-capture-cancel');
+        var shot = document.getElementById('forma-report-capture-shot');
+        var reopenDetailAfterCapture = function() {
+            window.setTimeout(function() {
+                if (typeof openDetail === 'function') openDetail(issue);
+            }, 120);
+        };
+        cancel.onclick = function() {
+            removeFormaReportCapturePanel();
+            reopenDetailAfterCapture();
+        };
+        shot.onclick = async function() {
+            var btn = this;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 캡처 중';
+            try {
+                var viewer = getCurrentReportCaptureViewer();
+                var reselect = document.getElementById('forma-report-reselect-region');
+                var screenshot = await captureViewerRegionDataUrlForReport(viewer, !!(reselect && reselect.checked));
+                if (!screenshot) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-camera"></i> 캡처';
+                    return;
+                }
+                if (typeof window.startMarkupSession !== 'function') {
+                    throw new Error('마크업 도구를 불러올 수 없습니다.');
+                }
+                window.startMarkupSession(screenshot, async function(markedImage) {
+                    markedImage = await compressHwpxExportImage(markedImage);
+                    var saved = getFormaIssueReportCapture(issue);
+                    var key = target === 'result' ? 'resultImages' : 'bimReviewImages';
+                    var list = getLimitedReportImages(saved[key] || issue[key] || []);
+                    list.push(markedImage);
+                    saveFormaIssueReportCapture(issue, (target === 'result')
+                        ? { resultImages: list.slice(-2) }
+                        : { bimReviewImages: list.slice(-2) });
+                    removeFormaReportCapturePanel();
+                    alert(title + '가 저장되었습니다.');
+                    reopenDetailAfterCapture();
+                });
+            } catch (err) {
+                console.error('[BIM Review Capture] failed:', err);
+                alert('이미지 캡처 중 오류가 발생했습니다: ' + (err && err.message ? err.message : err));
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-camera"></i> 캡처';
+            }
+        };
+    }
+
     function openDetail(issue) {
         var old = document.getElementById('forma-issue-detail-modal');
         if (old) old.remove();
         ensureFormaDetailStyles();
+        window._currentFormaDetailIssue = issue;
 
         var displayId = field(issue, 'displayId');
         var title = field(issue, 'title');
@@ -8398,6 +10264,8 @@ window.bindIssueItemClickEvents = function() {
         var desc = field(issue, 'desc');
         var typeLabel = issueTypeLabel(issue);
         var statusText = status || '-';
+        var isBimReviewIssue = isBimReviewIssueForHwpx(issue, typeLabel);
+        var isClosedForReview = isIssueClosedForHwpx(issue, statusText);
         var resultValue = getFormaIssueResult(issue);
         var resultSectionHtml = shouldShowFormaIssueResult(issue, typeLabel, statusText)
             ? '<section class="forma-detail-section">'
@@ -8423,6 +10291,8 @@ window.bindIssueItemClickEvents = function() {
             + '</div>'
             + '<div class="forma-detail-body">'
             + renderIssueSnapshot(issue)
+            + renderIssueReportCaptureSection(issue)
+            + (isBimReviewIssue ? '' : renderIssueSpecialNoteSection(issue))
             + '<section class="forma-detail-section">'
             + '<div class="forma-detail-section-title">핵심 정보</div>'
             + '<div class="forma-detail-meta-grid">'
@@ -8443,16 +10313,203 @@ window.bindIssueItemClickEvents = function() {
             + resultSectionHtml
             + '</div>'
             + '<div class="forma-detail-actions">'
+            + '<button id="forma-detail-image-capture-btn" type="button" class="forma-detail-action" title="보고서 이미지 추가"><i class="fas fa-camera"></i><span>이미지 추가</span></button>'
             + '<button id="forma-detail-viewer-btn" type="button" class="forma-detail-action primary"><i class="fas fa-cube"></i><span>3D 뷰어에서 위치보기</span></button>'
             + '<button id="forma-detail-pdf-btn" type="button" class="forma-detail-action"><i class="fas fa-file-pdf"></i><span>PDF 내보내기</span></button>'
             + '<button id="forma-issue-detail-close" type="button" class="forma-detail-action ghost"><i class="fas fa-times"></i><span>닫기</span></button>'
             + '</div>'
             + '</div></div>');
 
-        document.getElementById('forma-issue-detail-x').onclick = closeFormaIssueDetail;
-        document.getElementById('forma-issue-detail-close').onclick = closeFormaIssueDetail;
+        document.getElementById('forma-issue-detail-x').onclick = function() {
+            saveCurrentFormaDetailReportFields(issue);
+            closeFormaIssueDetail();
+        };
+        document.getElementById('forma-issue-detail-close').onclick = function() {
+            saveCurrentFormaDetailReportFields(issue);
+            closeFormaIssueDetail();
+        };
+        var noteSaveBtn = document.getElementById('forma-report-note-save-btn');
+        if (noteSaveBtn) {
+            noteSaveBtn.onclick = function(evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var noteEl = document.getElementById('forma-report-image-note');
+                saveFormaIssueReportCapture(issue, { imageNote: noteEl ? noteEl.value.trim() : '' });
+                noteSaveBtn.classList.add('saved');
+                noteSaveBtn.innerHTML = '<i class="fas fa-check"></i>';
+                window.setTimeout(function() {
+                    noteSaveBtn.classList.remove('saved');
+                    noteSaveBtn.innerHTML = '<i class="fas fa-save"></i>';
+                }, 1200);
+            };
+        }
+        var specialSaveBtn = document.getElementById('forma-report-special-save-btn');
+        var specialInput = document.getElementById('forma-report-special-note');
+        if (specialInput) {
+            specialInput.oninput = function() {
+                var value = specialInput.value.trim();
+                issue.specialNote = value;
+                issue.hwpxSpecialNote = value;
+                issue.reportSpecialNote = value;
+            };
+            specialInput.onchange = function() {
+                saveCurrentFormaDetailReportFields(issue);
+            };
+        }
+        if (specialSaveBtn) {
+            specialSaveBtn.onclick = function(evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var specialEl = document.getElementById('forma-report-special-note');
+                saveFormaIssueReportCapture(issue, { specialNote: specialEl ? specialEl.value.trim() : '' });
+                specialSaveBtn.classList.add('saved');
+                specialSaveBtn.innerHTML = '<i class="fas fa-check"></i>';
+                window.setTimeout(function() {
+                    specialSaveBtn.classList.remove('saved');
+                    specialSaveBtn.innerHTML = '<i class="fas fa-save"></i>';
+                }, 1200);
+            };
+        }
+        var reviewPlanSaveBtn = document.getElementById('forma-report-review-plan-save-btn');
+        var reviewPlanInput = document.getElementById('forma-report-review-plan');
+        if (reviewPlanInput) {
+            reviewPlanInput.oninput = function() {
+                var value = reviewPlanInput.value.trim();
+                issue.reviewPlan = value;
+                issue.bimReviewPlan = value;
+                issue.hwpxReviewPlan = value;
+            };
+            reviewPlanInput.onchange = function() {
+                saveCurrentFormaDetailReportFields(issue);
+            };
+        }
+        if (reviewPlanSaveBtn) {
+            reviewPlanSaveBtn.onclick = function(evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var planEl = document.getElementById('forma-report-review-plan');
+                saveFormaIssueReportCapture(issue, { reviewPlan: planEl ? planEl.value.trim() : '' });
+                reviewPlanSaveBtn.classList.add('saved');
+                reviewPlanSaveBtn.innerHTML = '<i class="fas fa-check"></i>';
+                window.setTimeout(function() {
+                    reviewPlanSaveBtn.classList.remove('saved');
+                    reviewPlanSaveBtn.innerHTML = '<i class="fas fa-save"></i>';
+                }, 1200);
+            };
+        }
+        var bimReviewCaptionInput = document.getElementById('forma-report-bim-review-caption');
+        if (bimReviewCaptionInput) {
+            bimReviewCaptionInput.oninput = function() {
+                var value = bimReviewCaptionInput.value.trim();
+                issue.bimReviewImageCaption = value;
+                issue.reviewImageCaption = value;
+                issue.hwpxBimReviewImageCaption = value;
+            };
+            bimReviewCaptionInput.onchange = function() {
+                saveCurrentFormaDetailReportFields(issue);
+            };
+        }
+        var resultCaptionInput = document.getElementById('forma-report-result-caption');
+        if (resultCaptionInput) {
+            resultCaptionInput.oninput = function() {
+                var value = resultCaptionInput.value.trim();
+                issue.resultImageCaption = value;
+                issue.reflectionResultImageCaption = value;
+                issue.hwpxResultImageCaption = value;
+            };
+            resultCaptionInput.onchange = function() {
+                saveCurrentFormaDetailReportFields(issue);
+            };
+        }
+        document.querySelectorAll('#forma-issue-detail-modal [data-report-delete]').forEach(function(deleteBtn) {
+            deleteBtn.onclick = function(evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var target = this.getAttribute('data-report-delete') || 'all';
+                deleteFormaIssueReportCapture(issue, target);
+                closeFormaIssueDetail();
+                openDetail(issue);
+            };
+        });
+        document.querySelectorAll('#forma-issue-detail-modal [data-bim-review-capture]').forEach(function(captureBtn) {
+            captureBtn.onclick = async function(evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var target = this.getAttribute('data-bim-review-capture') || 'bimReview';
+                saveCurrentFormaDetailReportFields(issue);
+                this.disabled = true;
+                this.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>모델 찾는 중...</span>';
+                closeFormaIssueDetail();
+                if (typeof window.showIssueViewerLoading === 'function') {
+                    window.showIssueViewerLoading('3D 모델 준비 중', '보고서 이미지를 캡처할 모델 버전을 열고 있습니다.');
+                }
+                var urn = await resolveFormaIssueViewerUrn(issue);
+                if (!urn) {
+                    if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+                    alert('이 이슈와 연결된 3D 모델을 찾을 수 없습니다. 배치/모델 파일명이 등록되어 있는지 확인해 주세요.');
+                    return;
+                }
+                if (typeof window.focusIssueOnViewer === 'function') {
+                    window.focusIssueOnViewer(issue, urn);
+                } else {
+                    window.__nextProjectPanelMode = 'viewer';
+                    if (typeof window.switchTab === 'function') window.switchTab('project');
+                    if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
+                    if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                        window.explorer.loadIntoViewer(urn, field(issue, 'placement') || field(issue, 'title') || 'BIM Model');
+                    }
+                }
+                window.setTimeout(function() {
+                    if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+                    showBimReviewReportCapturePanel(issue, target);
+                }, 1400);
+            };
+        });
+        document.getElementById('forma-detail-image-capture-btn').onclick = async function() {
+            var btn = this;
+            if (isBimReviewIssue) {
+                saveCurrentFormaDetailReportFields(issue);
+                closeFormaIssueDetail();
+                showBimReviewReportCapturePanel(issue, isClosedForReview ? 'result' : 'bimReview');
+                return;
+            }
+            var noteEl = document.getElementById('forma-report-image-note');
+            var note = noteEl ? noteEl.value.trim() : '';
+            var specialEl = document.getElementById('forma-report-special-note');
+            saveFormaIssueReportCapture(issue, {
+                imageNote: note,
+                specialNote: specialEl ? specialEl.value.trim() : ''
+            });
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>모델 찾는 중...</span>';
+            closeFormaIssueDetail();
+            if (typeof window.showIssueViewerLoading === 'function') {
+                window.showIssueViewerLoading('3D 모델 준비 중', '보고서 이미지를 캡처할 모델 버전을 열고 있습니다.');
+            }
+            var urn = await resolveFormaIssueViewerUrn(issue);
+            if (!urn) {
+                if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+                alert('이 이슈와 연결된 3D 모델을 찾을 수 없습니다. 배치/모델 파일명이 등록되어 있는지 확인해 주세요.');
+                return;
+            }
+            if (typeof window.focusIssueOnViewer === 'function') {
+                window.focusIssueOnViewer(issue, urn);
+            } else {
+                window.__nextProjectPanelMode = 'viewer';
+                if (typeof window.switchTab === 'function') window.switchTab('project');
+                if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
+                if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
+                    window.explorer.loadIntoViewer(urn, field(issue, 'placement') || field(issue, 'title') || 'BIM Model');
+                }
+            }
+            window.setTimeout(function() {
+                if (typeof window.hideIssueViewerLoading === 'function') window.hideIssueViewerLoading();
+                showFormaIssueReportCapturePanel(issue, note);
+            }, 1400);
+        };
         document.getElementById('forma-detail-viewer-btn').onclick = async function() {
             var btn = this;
+            saveCurrentFormaDetailReportFields(issue);
             btn.disabled = true;
             var oldText = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>모델 찾는 중...</span>';
@@ -8471,12 +10528,15 @@ window.bindIssueItemClickEvents = function() {
                 window.focusIssueOnViewer(issue, urn);
                 return;
             }
+            window.__nextProjectPanelMode = 'viewer';
             if (typeof window.switchTab === 'function') window.switchTab('project');
+            if (typeof window.showProjectViewerPanel === 'function') window.showProjectViewerPanel();
             if (window.explorer && typeof window.explorer.loadIntoViewer === 'function') {
                 window.explorer.loadIntoViewer(urn, field(issue, 'placement') || field(issue, 'title') || 'BIM Model');
             }
         };
         document.getElementById('forma-detail-pdf-btn').onclick = function() {
+            saveCurrentFormaDetailReportFields(issue);
             exportFormaIssueToPdf(issue);
         };
     }
@@ -8532,6 +10592,7 @@ window.bindIssueItemClickEvents = function() {
             return !isGunhwaIssueClient(issue) && matchesIssueTypeFilter(issue, window.currentIssueFilter || 'all');
         });
         window.currentFilteredIssues = issues.slice();
+        if (renderIssueMonthlyInlineView(issues)) return;
         if (!issues.length) {
             body.innerHTML = '<tr><td colspan="' + (window.activeIssueColumns.length + 1) + '" style="padding:36px;text-align:center;color:#94a3b8;">표시할 Forma 이슈 데이터가 없습니다.</td></tr>';
             return;
@@ -8579,15 +10640,1000 @@ window.bindIssueItemClickEvents = function() {
         window.renderIssueTable(true);
     };
 
+    function stripVersionInfoForHwpx(text) {
+        function normalizeVersionLine(line) {
+            return String(line || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/[`*_]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+        function isVersionLine(line) {
+            var cleaned = normalizeVersionLine(line);
+            return !cleaned ||
+                /^(?:버전|version|ver\.?|v)\s*[:=\-]?\s*\d+(?:\.\d+)?\.?$/i.test(cleaned) ||
+                /^(?:[A-Za-z]{1,6}\s*[-_:]?\s*(?:v|ver\.?|version)?\s*\d+(?:\.\d+)?\s*,?\s*)+$/i.test(cleaned) ||
+                /^(?:[A-Za-z0-9가-힣_()\/\s]+?\s*[-_:]?\s*(?:v|ver\.?|version)\s*\d+(?:\.\d+)?\s*,?\s*)+$/i.test(cleaned);
+        }
+        return String(text || '')
+            .split(/\r?\n/)
+            .filter(function(line) { return !isVersionLine(line); })
+            .map(function(line) {
+                return line
+                    .replace(/(?:^|\s)(?:이전|현재|작성\s*당시|직전\s*작성|변경\s*전|변경\s*후)?\s*(?:버전|version|ver\.?|v)\s*[:=\-]?\s*\d+(?:\.\d+)?\s*(?:→|->|~|\/|,)?\s*(?:v|ver\.?|version|버전)?\s*\d*(?:\.\d+)?/ig, ' ')
+                    .replace(/\b[A-Za-z]{1,4}\s*[-:]\s*V?\s*\.?\s*\d+\b/g, ' ')
+                    .replace(/\bV\s*\.?\s*\d+\s*\.?\b/ig, ' ')
+                    .replace(/^[\s,;/|~→-]+$/g, '')
+                    .replace(/\s{2,}/g, ' ')
+                    .trim();
+            })
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+    }
+
+    function stripLeadingHwpxBullets(text) {
+        return String(text || '')
+            .split(/\r?\n/)
+            .map(function(line) { return line.replace(/^\s*-\s*/, '').trimEnd(); })
+            .join('\n')
+            .trim();
+    }
+
+    function collectUpdateIssuesForHwpx() {
+        var visibleOrdered = Array.isArray(window._currentHwpxExportIssues) && isIssueMonthlyInlineActive()
+            ? window._currentHwpxExportIssues
+            : null;
+        var sources = visibleOrdered ||
+            (Array.isArray(window.currentFilteredIssues) && window.currentFilteredIssues.length ? window.currentFilteredIssues.slice() : null) ||
+            (Array.isArray(window._gangbukFormaSSOT) && window._gangbukFormaSSOT.length ? window._gangbukFormaSSOT.slice() : null) ||
+            (Array.isArray(window.currentIssueList) && window.currentIssueList.length ? window.currentIssueList.slice() : null) ||
+            (formaCache.issues || []).slice();
+        if (!visibleOrdered && !sources.length) {
+            ['aps_project_issues', 'my_saved_issues', 'my_saved_compare_issues'].forEach(function(key) {
+                try {
+                    var list = JSON.parse(localStorage.getItem(key) || '[]');
+                    if (Array.isArray(list)) sources = sources.concat(list);
+                } catch(e) {}
+            });
+        }
+        var seen = {};
+        return sources.filter(function(issue, index) {
+            if (!issue || isGunhwaIssueClient(issue)) return false;
+            var id = String(issue.id || issue.displayId || issue.dbId || index);
+            if (seen[id]) return false;
+            seen[id] = true;
+            return issueTypeLabel(issue) === '업데이트' || matchesIssueTypeFilter(issue, 'update');
+        }).map(function(issue, index) {
+            var description = field(issue, 'desc') || issue.description || issue.desc || '';
+            var normalizedType = issueTypeLabel(issue);
+            var includeAfterImages = window.HWPX_EXPORT_INCLUDE_AFTER_IMAGES !== false;
+            var includeBeforeImages = window.HWPX_EXPORT_INCLUDE_BEFORE_IMAGES === true;
+            var reportCapture = getFormaIssueReportCapture(issue);
+            var suppressReportImages = !!reportCapture.suppressReportImages;
+            var savedAfterImage = suppressReportImages ? '' : (reportCapture.afterImage || issue.afterImage || issue.imageAfter || issue.imgAfter || '');
+            var savedBeforeImage = suppressReportImages ? '' : (reportCapture.beforeImage || issue.beforeImage || issue.imageBefore || issue.imgBefore || '');
+            var imageNote = reportCapture.imageNote || issue.imageNote || issue.hwpxImageNote || issue.reportImageNote || '';
+            var specialNote = reportCapture.specialNote || issue.specialNote || issue.hwpxSpecialNote || issue.reportSpecialNote || '';
+            var thumbnailUrn = issueSnapshotUrn(issue) || '';
+            return {
+                _sourceIssue: issue,
+                no: index + 1,
+                id: issue.displayId || issue.id || issue.dbId || '',
+                title: field(issue, 'title') || issue.title || '',
+                type: issue.type || '',
+                issueType: issue.issueType || '',
+                category: issue.category || '',
+                typePath: issue.typePath || '',
+                workScheduleCategory: issue.workScheduleCategory || '',
+                exportIssueType: normalizedType,
+                status: field(issue, 'status') || issue.status || '',
+                assignee: field(issue, 'assignee') || issue.assignee || '',
+                reviewer: field(issue, 'reviewer') || issue.reviewer || issue.verifier || '',
+                location: field(issue, 'location') || issue.location || '',
+                placement: field(issue, 'placement') || issue.placement || issue.file || '',
+                startDate: field(issue, 'startDate') || issue.startDate || '',
+                dueDate: field(issue, 'dueDate') || issue.dueDate || issue.endDate || '',
+                thumbnailSnapshotUrn: includeAfterImages ? thumbnailUrn : '',
+                snapshotUrn: includeAfterImages ? thumbnailUrn : '',
+                afterSnapshotUrn: '',
+                afterImage: includeAfterImages ? savedAfterImage : '',
+                beforeImage: savedBeforeImage || (includeBeforeImages ? (issue.beforeImage || issue.imageBefore || issue.imgBefore || '') : ''),
+                imageNote: imageNote,
+                afterImageNote: imageNote,
+                beforeImageNote: reportCapture.beforeImageNote || issue.beforeImageNote || '',
+                specialNote: specialNote,
+                hwpxSpecialNote: specialNote,
+                reportSpecialNote: specialNote,
+                description: description,
+                mainChange: stripVersionInfoForHwpx(description)
+            };
+        });
+    }
+
+    function getHwpxExportIssueSources() {
+        var visibleOrdered = Array.isArray(window._currentHwpxExportIssues) && isIssueMonthlyInlineActive()
+            ? window._currentHwpxExportIssues
+            : null;
+        var sources = visibleOrdered ||
+            (Array.isArray(window.currentFilteredIssues) && window.currentFilteredIssues.length ? window.currentFilteredIssues.slice() : null) ||
+            (Array.isArray(window._gangbukFormaSSOT) && window._gangbukFormaSSOT.length ? window._gangbukFormaSSOT.slice() : null) ||
+            (Array.isArray(window.currentIssueList) && window.currentIssueList.length ? window.currentIssueList.slice() : null) ||
+            (formaCache.issues || []).slice();
+        if (!visibleOrdered && !sources.length) {
+            ['aps_project_issues', 'my_saved_issues', 'my_saved_compare_issues'].forEach(function(key) {
+                try {
+                    var list = JSON.parse(localStorage.getItem(key) || '[]');
+                    if (Array.isArray(list)) sources = sources.concat(list);
+                } catch(e) {}
+            });
+        }
+        return sources;
+    }
+
+    function collectBimReviewIssuesForHwpx() {
+        var sources = getHwpxExportIssueSources();
+        var seen = {};
+        return sources.filter(function(issue, index) {
+            if (!issue || isGunhwaIssueClient(issue)) return false;
+            var id = String(issue.id || issue.displayId || issue.dbId || index);
+            if (seen[id]) return false;
+            seen[id] = true;
+            return isBimReviewIssueForHwpx(issue, issueTypeLabel(issue));
+        }).map(function(issue, index) {
+            var description = field(issue, 'desc') || issue.description || issue.desc || '';
+            var reportCapture = getFormaIssueReportCapture(issue);
+            var resultText = getFormaIssueResult(issue);
+            var cleanMainChange = stripLeadingHwpxBullets(stripVersionInfoForHwpx(description));
+            var cleanResultText = stripLeadingHwpxBullets(stripVersionInfoForHwpx(resultText));
+            var bimReviewImageCaption = reportCapture.bimReviewImageCaption || issue.bimReviewImageCaption || issue.reviewImageCaption || issue.hwpxBimReviewImageCaption || '';
+            var resultImageCaption = reportCapture.resultImageCaption || issue.resultImageCaption || issue.reflectionResultImageCaption || issue.hwpxResultImageCaption || '';
+            var reviewPlan = reportCapture.reviewPlan || issue.reviewPlan || issue.bimReviewPlan || issue.hwpxReviewPlan || '';
+            return {
+                _sourceIssue: issue,
+                no: index + 1,
+                id: issue.displayId || issue.id || issue.dbId || '',
+                title: field(issue, 'title') || issue.title || '',
+                type: issue.type || '',
+                issueType: issue.issueType || '',
+                category: issue.category || '',
+                typePath: issue.typePath || '',
+                exportIssueType: issueTypeLabel(issue),
+                status: field(issue, 'status') || issue.status || '',
+                assignee: field(issue, 'assignee') || issue.assignee || '',
+                reviewer: field(issue, 'reviewer') || issue.reviewer || issue.verifier || '',
+                location: field(issue, 'location') || issue.location || '',
+                placement: field(issue, 'placement') || issue.placement || issue.file || '',
+                description: description,
+                desc: description,
+                mainChange: cleanMainChange,
+                result: cleanResultText,
+                outcome: cleanResultText,
+                resolutionResult: cleanResultText,
+                reviewPlan: reviewPlan,
+                bimReviewPlan: reviewPlan,
+                bimReviewImageCaption: bimReviewImageCaption,
+                reviewImageCaption: bimReviewImageCaption,
+                hwpxBimReviewImageCaption: bimReviewImageCaption,
+                resultImageCaption: resultImageCaption,
+                reflectionResultImageCaption: resultImageCaption,
+                hwpxResultImageCaption: resultImageCaption,
+                bimReviewImages: getLimitedReportImages(reportCapture.bimReviewImages || issue.bimReviewImages || issue.reviewImages || []),
+                resultImages: getLimitedReportImages(reportCapture.resultImages || issue.resultImages || issue.reflectionResultImages || [])
+            };
+        });
+    }
+
+    function encodeRawUrnForHwpxExport(raw) {
+        if (!raw) return '';
+        var value = String(raw);
+        return btoa(value.indexOf('urn:') === 0 ? value : 'urn:' + value)
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=/g, '');
+    }
+
+    function normalizeViewerUrnForHwpxExport(value) {
+        var str = String(value || '').trim();
+        if (!str || str === '-') return '';
+        if (str.indexOf('dm.lineage') > -1) {
+            var lineageMatch = str.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+            var versionMatch = str.match(/[?&]version=(\d+)/i);
+            if (lineageMatch && lineageMatch[1] && versionMatch && versionMatch[1]) {
+                return encodeRawUrnForHwpxExport('urn:adsk.wipprod:fs.file:vf.' + lineageMatch[1] + '?version=' + versionMatch[1]);
+            }
+            return '';
+        }
+        var body = str.replace(/^urn:/i, '');
+        if (body.indexOf('dm.lineage') > -1) return '';
+        if (str.indexOf('urn:adsk.') === 0 || body.indexOf('adsk.') === 0) {
+            return encodeRawUrnForHwpxExport(str);
+        }
+        if (/^[A-Za-z0-9+/=_-]+$/.test(body) && body.length > 20) {
+            return body.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        }
+        return '';
+    }
+
+    function normalizeViewerDocumentUrnForHiddenCapture(value) {
+        var str = String(value || '').trim().replace(/^urn:/i, '');
+        if (!str) return '';
+        if (str.indexOf('-') > -1 || str.indexOf('_') > -1) {
+            try {
+                var padded = str.replace(/-/g, '+').replace(/_/g, '/');
+                while (padded.length % 4) padded += '=';
+                var decoded = atob(padded);
+                if (decoded && decoded.indexOf('urn:') === 0) return btoa(decoded).replace(/=/g, '');
+            } catch(e) {}
+            str = str.replace(/-/g, '+').replace(/_/g, '/');
+        }
+        return str.replace(/=/g, '');
+    }
+
+    function findHwpxExportIssueValueDeep(source, keys) {
+        var wanted = {};
+        keys.forEach(function(key) { wanted[String(key).toLowerCase()] = true; });
+        var seen = [];
+        function walk(value) {
+            if (!value || typeof value !== 'object') return '';
+            if (seen.indexOf(value) > -1) return '';
+            seen.push(value);
+            if (Array.isArray(value)) {
+                for (var i = 0; i < value.length; i++) {
+                    var arrFound = walk(value[i]);
+                    if (arrFound) return arrFound;
+                }
+                return '';
+            }
+            for (var key in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+                var val = value[key];
+                if (wanted[String(key).toLowerCase()] && val != null && String(val).trim() !== '') {
+                    if (typeof val === 'object') {
+                        var lowerKey = String(key).toLowerCase();
+                        if (lowerKey === 'viewerstate' || lowerKey === 'viewstate' || lowerKey === 'viewport' || lowerKey === 'viewpoint' || lowerKey === 'position' || lowerKey === 'location3d' || lowerKey === 'worldposition' || lowerKey === 'pushpinposition') {
+                            return val;
+                        }
+                        return val.urn || val.versionUrn || val.tipVersionUrn || val.versionId || val.viewerUrn || val.viewableUrn || val.seedURN || '';
+                    }
+                    return val;
+                }
+            }
+            for (var key2 in value) {
+                if (!Object.prototype.hasOwnProperty.call(value, key2)) continue;
+                var found = walk(value[key2]);
+                if (found) return found;
+            }
+            return '';
+        }
+        return walk(source);
+    }
+
+    function parseMaybeJsonForHwpxExport(value) {
+        if (typeof value !== 'string') return value;
+        var text = value.trim();
+        if (!text || (text[0] !== '{' && text[0] !== '[')) return value;
+        try { return JSON.parse(text); } catch(e) { return value; }
+    }
+
+    function coerceHwpxExportVector(value) {
+        value = parseMaybeJsonForHwpxExport(value);
+        if (Array.isArray(value) && value.length >= 3) return { x: Number(value[0]), y: Number(value[1]), z: Number(value[2]) };
+        if (value && typeof value === 'object') {
+            if (Array.isArray(value.position) && value.position.length >= 3) return coerceHwpxExportVector(value.position);
+            if (typeof value.x !== 'undefined' && typeof value.y !== 'undefined' && typeof value.z !== 'undefined') {
+                return { x: Number(value.x), y: Number(value.y), z: Number(value.z) };
+            }
+        }
+        return value;
+    }
+
+    function coerceHwpxExportViewport(value) {
+        value = parseMaybeJsonForHwpxExport(value);
+        if (!value || typeof value !== 'object') return value;
+        var viewport = value.viewport || value.viewpoint || value;
+        if (viewport.eye && viewport.target) {
+            viewport.eye = Array.isArray(viewport.eye) ? viewport.eye : [viewport.eye.x, viewport.eye.y, viewport.eye.z];
+            viewport.target = Array.isArray(viewport.target) ? viewport.target : [viewport.target.x, viewport.target.y, viewport.target.z];
+            viewport.up = viewport.up ? (Array.isArray(viewport.up) ? viewport.up : [viewport.up.x, viewport.up.y, viewport.up.z]) : [0, 0, 1];
+        }
+        return viewport;
+    }
+
+    function extractHwpxExportLocationData(issue) {
+        var result = { objectId: null, externalId: null, position: null, viewerState: null, viewport: null, globalOffset: null };
+        if (!issue) return result;
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue;
+        var docs = [].concat(raw.linkedDocuments || issue.linkedDocuments || []).concat(raw.placements || issue.placements || []);
+        docs.forEach(function(doc) {
+            var details = doc && (doc.details || doc.viewable || doc.viewer || doc);
+            if (!details) return;
+            if (details.objectId && !result.objectId) result.objectId = parseInt(details.objectId, 10);
+            if (details.externalId && !result.externalId) result.externalId = details.externalId;
+            if (details.position && !result.position) result.position = coerceHwpxExportVector(details.position);
+            if (details.viewerState && !result.viewerState) result.viewerState = parseMaybeJsonForHwpxExport(details.viewerState);
+            if ((details.viewport || details.viewpoint) && !result.viewport) result.viewport = coerceHwpxExportViewport(details.viewport || details.viewpoint);
+            if (details.globalOffset && !result.globalOffset) result.globalOffset = details.globalOffset;
+        });
+        var cand = issue.objectId || raw.objectId || issue.elementId || raw.elementId;
+        if (!result.objectId && cand && String(cand) !== String(issue.displayId) && String(cand) !== String(issue.id)) {
+            result.objectId = parseInt(cand, 10);
+        }
+        if (!result.externalId) result.externalId = issue.externalId || raw.externalId || (raw.attributes && raw.attributes.externalId);
+        if (!result.position) {
+            result.position = issue.point || issue.position || raw.point || raw.position ||
+                (raw.attributes && raw.attributes.pushpinAttributes && raw.attributes.pushpinAttributes.location) ||
+                findHwpxExportIssueValueDeep(raw, ['position', 'location3D', 'worldPosition', 'pushpinPosition']);
+            result.position = coerceHwpxExportVector(result.position);
+        }
+        if (!result.viewerState) result.viewerState = parseMaybeJsonForHwpxExport(issue.viewerState || raw.viewerState || findHwpxExportIssueValueDeep(raw, ['viewerState', 'viewState']));
+        if (!result.viewport) result.viewport = coerceHwpxExportViewport(issue.viewport || (issue.viewerState && issue.viewerState.viewport) || findHwpxExportIssueValueDeep(raw, ['viewport', 'viewpoint']));
+        return result;
+    }
+
+    function extractHwpxExportVersionUrns(issue) {
+        if (!issue) return { createdUrn: '', prevUrn: '', createdVer: 0, prevVer: 0 };
+        if (typeof extractIssueVersionsUrns === 'function') {
+            try {
+                var broad = extractIssueVersionsUrns(issue);
+                if (broad && broad.prevUrn) return broad;
+            } catch(e) {
+                console.warn('[HWPX Export] broad version resolve skipped:', e);
+            }
+        }
+        var raw = issue.rawFormaIssue || issue.rawDetailIssue || issue.rawListIssue || issue;
+        var docs = [].concat(raw.linkedDocuments || issue.linkedDocuments || []).concat(raw.placements || issue.placements || []);
+        for (var i = 0; i < docs.length; i++) {
+            var doc = docs[i];
+            if (!doc) continue;
+            var details = doc.details || doc.viewable || doc.viewer || doc;
+            var urnStr = doc.versionUrn || doc.tipVersionUrn || doc.viewerUrn || doc.viewableUrn || doc.urn ||
+                (details && (details.versionUrn || details.tipVersionUrn || details.viewerUrn || details.viewableUrn || details.versionId || details.urn)) || '';
+            var verNum = parseInt(doc.createdAtVersion || doc.version || doc.versionNumber ||
+                (details && (details.createdAtVersion || details.version || details.versionNumber)) ||
+                (String(urnStr).match(/[?&]version=(\d+)/i) || [])[1], 10);
+            if (isNaN(verNum) || verNum < 1) continue;
+            var prevVerNum = verNum > 1 ? verNum - 1 : 1;
+            if (urnStr && urnStr.indexOf('dm.lineage:') > -1) {
+                var lineage = urnStr.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+                if (lineage && lineage[1]) {
+                    return {
+                        createdUrn: encodeRawUrnForHwpxExport('urn:adsk.wipprod:fs.file:vf.' + lineage[1] + '?version=' + verNum),
+                        prevUrn: encodeRawUrnForHwpxExport('urn:adsk.wipprod:fs.file:vf.' + lineage[1] + '?version=' + prevVerNum),
+                        createdVer: verNum,
+                        prevVer: prevVerNum
+                    };
+                }
+            }
+            if (urnStr && (urnStr.indexOf('fs.file') > -1 || urnStr.indexOf('urn:adsk.') === 0)) {
+                var rawUrn = urnStr.indexOf('urn:') === 0 ? urnStr : 'urn:' + urnStr;
+                var baseRaw = rawUrn.replace(/[?&]version=\d+/i, '');
+                return {
+                    createdUrn: encodeRawUrnForHwpxExport(baseRaw + '?version=' + verNum),
+                    prevUrn: encodeRawUrnForHwpxExport(baseRaw + '?version=' + prevVerNum),
+                    createdVer: verNum,
+                    prevVer: prevVerNum
+                };
+            }
+        }
+        var direct = issue.placementUrn || issue.linkedDocumentUrn || issue.documentUrn || issue.urn || issue.modelUrn || issue.fileUrn || issue.targetUrn ||
+            findHwpxExportIssueValueDeep(raw, ['tipVersionUrn', 'versionUrn', 'viewerUrn', 'viewableUrn', 'versionId', 'documentUrn']);
+        var normalized = String(direct || '').trim();
+        if (/^[A-Za-z0-9+/=_-]+$/.test(normalized) && normalized.length > 20 && normalized.indexOf('urn:') !== 0) {
+            try {
+                var padded = normalized.replace(/-/g, '+').replace(/_/g, '/');
+                while (padded.length % 4) padded += '=';
+                var decoded = atob(padded);
+                if (decoded && decoded.indexOf('urn:') === 0) normalized = decoded;
+            } catch(e) {}
+        }
+        var normalizedVersionMatch = String(normalized || '').match(/[?&]version=(\d+)/i);
+        var fallbackVer = parseInt(issue.placementVersion || issue.version || (normalizedVersionMatch || [])[1], 10);
+        if (!normalized || isNaN(fallbackVer) || fallbackVer < 1) return { createdUrn: normalizeViewerUrnForHwpxExport(normalized), prevUrn: '', createdVer: fallbackVer || 0, prevVer: 0 };
+        var fallbackPrev = fallbackVer > 1 ? fallbackVer - 1 : 1;
+        if (normalized.indexOf('dm.lineage:') > -1) {
+            var fallbackLineage = normalized.match(/dm\.lineage:([A-Za-z0-9_-]+)/);
+            if (fallbackLineage && fallbackLineage[1]) {
+                return {
+                    createdUrn: encodeRawUrnForHwpxExport('urn:adsk.wipprod:fs.file:vf.' + fallbackLineage[1] + '?version=' + fallbackVer),
+                    prevUrn: encodeRawUrnForHwpxExport('urn:adsk.wipprod:fs.file:vf.' + fallbackLineage[1] + '?version=' + fallbackPrev),
+                    createdVer: fallbackVer,
+                    prevVer: fallbackPrev
+                };
+            }
+        }
+        if (normalized.indexOf('fs.file') > -1 || normalized.indexOf('urn:adsk.') === 0) {
+            var fallbackBase = (normalized.indexOf('urn:') === 0 ? normalized : 'urn:' + normalized).replace(/[?&]version=\d+/i, '');
+            return {
+                createdUrn: encodeRawUrnForHwpxExport(fallbackBase + '?version=' + fallbackVer),
+                prevUrn: encodeRawUrnForHwpxExport(fallbackBase + '?version=' + fallbackPrev),
+                createdVer: fallbackVer,
+                prevVer: fallbackPrev
+            };
+        }
+        return { createdUrn: normalizeViewerUrnForHwpxExport(normalized), prevUrn: '', createdVer: fallbackVer, prevVer: fallbackPrev };
+    }
+
+    function waitForHwpxExportViewerGeometry(viewer, timeoutMs) {
+        timeoutMs = timeoutMs || 9000;
+        return new Promise(function(resolve) {
+            var done = false;
+            var finish = function() {
+                if (done) return;
+                done = true;
+                try { viewer.removeEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeo); } catch(e) {}
+                resolve();
+            };
+            var onGeo = function() { setTimeout(finish, 450); };
+            try { viewer.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, onGeo); } catch(e) {}
+            setTimeout(finish, timeoutMs);
+        });
+    }
+
+    function applyHwpxExportIssueCamera(viewer, issue) {
+        if (!viewer || !viewer.model || !issue) return;
+        var loc = extractHwpxExportLocationData(issue);
+        var applyViewport = function(viewport) {
+            if (!viewport || !viewport.eye || !viewport.target) return false;
+            try {
+                var eye = Array.isArray(viewport.eye) ? viewport.eye : [viewport.eye.x, viewport.eye.y, viewport.eye.z];
+                var target = Array.isArray(viewport.target) ? viewport.target : [viewport.target.x, viewport.target.y, viewport.target.z];
+                var up = viewport.up ? (Array.isArray(viewport.up) ? viewport.up : [viewport.up.x, viewport.up.y, viewport.up.z]) : [0, 0, 1];
+                if (typeof viewer.setViewFromArray === 'function') {
+                    viewer.setViewFromArray([eye[0], eye[1], eye[2], target[0], target[1], target[2], up[0], up[1], up[2]]);
+                } else if (viewer.navigation && typeof viewer.navigation.setView === 'function' && typeof THREE !== 'undefined') {
+                    viewer.navigation.setView(new THREE.Vector3(eye[0], eye[1], eye[2]), new THREE.Vector3(target[0], target[1], target[2]));
+                }
+                if (typeof window.normalizeViewerNavigation === 'function') window.normalizeViewerNavigation(viewer);
+                return true;
+            } catch(e) {
+                console.warn('[HWPX Export] viewport restore skipped:', e);
+                return false;
+            }
+        };
+        var cameraApplied = false;
+        if (loc.viewerState && typeof viewer.restoreState === 'function') {
+            try {
+                viewer.restoreState(loc.viewerState, null, true);
+                cameraApplied = true;
+            } catch(e) {
+                console.warn('[HWPX Export] viewerState restore skipped:', e);
+            }
+        }
+        if (!cameraApplied && loc.viewport) cameraApplied = applyViewport(loc.viewport);
+        if (loc.objectId && !isNaN(loc.objectId) && loc.objectId > 0) {
+            try {
+                viewer.select([parseInt(loc.objectId, 10)]);
+                if (!cameraApplied && typeof viewer.fitToView === 'function') viewer.fitToView([parseInt(loc.objectId, 10)]);
+            } catch(e) {}
+        } else if (!cameraApplied && loc.externalId && viewer.model && typeof viewer.model.getExternalIdMapping === 'function') {
+            try {
+                viewer.model.getExternalIdMapping(function(mapping) {
+                    var dbId = mapping && mapping[loc.externalId];
+                    if (dbId && typeof viewer.fitToView === 'function') {
+                        viewer.select([dbId]);
+                        viewer.fitToView([dbId]);
+                    }
+                });
+            } catch(e) {}
+        } else if (!cameraApplied && loc.position && typeof THREE !== 'undefined' && typeof viewer.setViewFromArray === 'function') {
+            var p = loc.position;
+            if (typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
+                viewer.setViewFromArray([p.x + 11, p.y - 11, p.z + 11, p.x, p.y, p.z, 0, 0, 1]);
+            }
+        }
+        try {
+            if (typeof viewer.setBackgroundColor === 'function') viewer.setBackgroundColor(255, 255, 255, 245, 245, 245);
+            if (typeof viewer.setEnvMapBackground === 'function') viewer.setEnvMapBackground(false);
+            if (viewer.impl && typeof viewer.impl.invalidate === 'function') viewer.impl.invalidate(true, true, true);
+        } catch(e) {}
+    }
+
+    function captureHwpxExportViewerScreen(viewer, width, height) {
+        return new Promise(function(resolve, reject) {
+            if (!viewer || typeof viewer.getScreenShot !== 'function') {
+                reject(new Error('Viewer screenshot API is not available.'));
+                return;
+            }
+            try {
+                viewer.getScreenShot(width || 900, height || 675, function(dataUrl) {
+                    if (dataUrl && String(dataUrl).indexOf('data:image') === 0) resolve(dataUrl);
+                    else reject(new Error('Viewer screenshot returned empty image data.'));
+                });
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
+    function compressHwpxExportImage(dataUrl) {
+        return new Promise(function(resolve) {
+            if (!dataUrl || String(dataUrl).indexOf('data:image') !== 0) return resolve(dataUrl || '');
+            var img = new Image();
+            img.onload = function() {
+                try {
+                    var maxW = 900;
+                    var width = img.width;
+                    var height = img.height;
+                    if (width > maxW) {
+                        height = Math.round(height * (maxW / width));
+                        width = maxW;
+                    }
+                    var canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return resolve(dataUrl);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, width, height);
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.78));
+                } catch(e) {
+                    resolve(dataUrl);
+                }
+            };
+            img.onerror = function() { resolve(dataUrl); };
+            img.src = dataUrl;
+        });
+    }
+
+    async function capturePreviousModelImageForHwpxExport(sourceIssue) {
+        var versionInfo = extractHwpxExportVersionUrns(sourceIssue);
+        var prevViewerUrn = normalizeViewerDocumentUrnForHiddenCapture(versionInfo.prevUrn);
+        if (!prevViewerUrn) {
+            console.warn('[Issue Report Capture] previous model URN not found:', versionInfo);
+            return '';
+        }
+        var host = document.createElement('div');
+        host.style.cssText = 'position:fixed;left:-12000px;top:0;width:900px;height:675px;opacity:0;pointer-events:none;z-index:-1;overflow:hidden;background:#fff;';
+        document.body.appendChild(host);
+        var viewer = null;
+        try {
+            var viewerModule = await import('./viewer.js?v=20260902-unconsolidated-opacity1');
+            if (!viewerModule.initViewer || !viewerModule.loadModel) return '';
+            await new Promise(function(resolve) { requestAnimationFrame(resolve); });
+            viewer = await viewerModule.initViewer(host, true);
+            if (!viewer) throw new Error('숨김 뷰어를 초기화하지 못했습니다.');
+            var geometryReady = waitForHwpxExportViewerGeometry(viewer, 6000);
+            await viewerModule.loadModel(viewer, prevViewerUrn);
+            await geometryReady;
+            applyHwpxExportIssueCamera(viewer, sourceIssue);
+            await new Promise(function(resolve) { setTimeout(resolve, 900); });
+            var shot = await captureHwpxExportViewerScreen(viewer, 900, 675);
+            return await compressHwpxExportImage(shot);
+        } finally {
+            try { if (viewer && typeof viewer.finish === 'function') viewer.finish(); } catch(e) {}
+            if (host && host.parentNode) host.parentNode.removeChild(host);
+        }
+    }
+
+    async function prepareHwpxIssueReportImages(issues, onProgress) {
+        var list = Array.isArray(issues) ? issues : [];
+        for (var ci = 0; ci < list.length; ci++) {
+            var candidate = list[ci];
+            if (!candidate) continue;
+            if (candidate.thumbnailImage && /^data:image\/webp/i.test(candidate.thumbnailImage)) candidate.thumbnailImage = await compressHwpxExportImage(candidate.thumbnailImage);
+            if (candidate.beforeImage && /^data:image\/webp/i.test(candidate.beforeImage)) candidate.beforeImage = await compressHwpxExportImage(candidate.beforeImage);
+            if (candidate.afterImage && /^data:image\/webp/i.test(candidate.afterImage)) candidate.afterImage = await compressHwpxExportImage(candidate.afterImage);
+        }
+        if (window.HWPX_EXPORT_INCLUDE_BEFORE_IMAGES !== true) {
+            return list.map(function(issue) {
+                var clean = {};
+                Object.keys(issue || {}).forEach(function(key) {
+                    if (key !== '_sourceIssue') clean[key] = issue[key];
+                });
+                return clean;
+            });
+        }
+        var consecutiveBeforeCaptureFailures = 0;
+        for (var i = 0; i < list.length; i++) {
+            var issue = list[i];
+            var source = issue && (issue._sourceIssue || issue.rawFormaIssue || issue);
+            if (!issue || (issue.beforeImage && String(issue.beforeImage).indexOf('data:image') === 0)) continue;
+            if (consecutiveBeforeCaptureFailures >= 2) {
+                console.warn('[HWPX Export] previous model screenshots disabled for remaining issues after repeated failures.');
+                continue;
+            }
+            if (typeof onProgress === 'function') onProgress(i + 1, list.length, issue);
+            try {
+                var beforeImage = await capturePreviousModelImageForHwpxExport(source);
+                if (beforeImage) {
+                    issue.beforeImage = beforeImage;
+                    consecutiveBeforeCaptureFailures = 0;
+                } else {
+                    consecutiveBeforeCaptureFailures += 1;
+                }
+            } catch (err) {
+                consecutiveBeforeCaptureFailures += 1;
+                console.warn('[HWPX Export] previous model screenshot skipped:', issue && (issue.id || issue.title), err);
+            }
+        }
+        return list.map(function(issue) {
+            var clean = {};
+            Object.keys(issue || {}).forEach(function(key) {
+                if (key !== '_sourceIssue') clean[key] = issue[key];
+            });
+            return clean;
+        });
+    }
+    window.prepareHwpxIssueReportImages = prepareHwpxIssueReportImages;
+
+    function xmlEscapeForHwpx(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    function makeHwpxCrcTable() {
+        var table = new Uint32Array(256);
+        for (var i = 0; i < 256; i += 1) {
+            var c = i;
+            for (var k = 0; k < 8; k += 1) {
+                c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+            table[i] = c >>> 0;
+        }
+        return table;
+    }
+
+    var HWPX_CRC_TABLE = null;
+
+    function crc32ForHwpx(data) {
+        if (!HWPX_CRC_TABLE) HWPX_CRC_TABLE = makeHwpxCrcTable();
+        var crc = 0xffffffff;
+        for (var i = 0; i < data.length; i += 1) {
+            crc = HWPX_CRC_TABLE[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+        }
+        return (crc ^ 0xffffffff) >>> 0;
+    }
+
+    function utf8ForHwpx(text) {
+        return new TextEncoder().encode(String(text == null ? '' : text));
+    }
+
+    function dosDateTimeForHwpx() {
+        var date = new Date();
+        return {
+            time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+            day: ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()
+        };
+    }
+
+    function concatUint8ForHwpx(parts) {
+        var total = parts.reduce(function(sum, part) { return sum + part.length; }, 0);
+        var out = new Uint8Array(total);
+        var offset = 0;
+        parts.forEach(function(part) {
+            out.set(part, offset);
+            offset += part.length;
+        });
+        return out;
+    }
+
+    function writeZipHeaderForHwpx(size) {
+        return new Uint8Array(size);
+    }
+
+    function setZipU16ForHwpx(bytes, offset, value) {
+        new DataView(bytes.buffer).setUint16(offset, value, true);
+    }
+
+    function setZipU32ForHwpx(bytes, offset, value) {
+        new DataView(bytes.buffer).setUint32(offset, value >>> 0, true);
+    }
+
+    function createZipBlobForHwpx(entries) {
+        var localParts = [];
+        var centralParts = [];
+        var offset = 0;
+        var dt = dosDateTimeForHwpx();
+
+        entries.forEach(function(entry) {
+            var name = utf8ForHwpx(entry.name);
+            var data = entry.data instanceof Uint8Array ? entry.data : utf8ForHwpx(entry.data);
+            var crc = crc32ForHwpx(data);
+
+            var local = writeZipHeaderForHwpx(30);
+            setZipU32ForHwpx(local, 0, 0x04034b50);
+            setZipU16ForHwpx(local, 4, 20);
+            setZipU16ForHwpx(local, 6, 0x0800);
+            setZipU16ForHwpx(local, 8, 0);
+            setZipU16ForHwpx(local, 10, dt.time);
+            setZipU16ForHwpx(local, 12, dt.day);
+            setZipU32ForHwpx(local, 14, crc);
+            setZipU32ForHwpx(local, 18, data.length);
+            setZipU32ForHwpx(local, 22, data.length);
+            setZipU16ForHwpx(local, 26, name.length);
+            setZipU16ForHwpx(local, 28, 0);
+            localParts.push(local, name, data);
+
+            var central = writeZipHeaderForHwpx(46);
+            setZipU32ForHwpx(central, 0, 0x02014b50);
+            setZipU16ForHwpx(central, 4, 20);
+            setZipU16ForHwpx(central, 6, 20);
+            setZipU16ForHwpx(central, 8, 0x0800);
+            setZipU16ForHwpx(central, 10, 0);
+            setZipU16ForHwpx(central, 12, dt.time);
+            setZipU16ForHwpx(central, 14, dt.day);
+            setZipU32ForHwpx(central, 16, crc);
+            setZipU32ForHwpx(central, 20, data.length);
+            setZipU32ForHwpx(central, 24, data.length);
+            setZipU16ForHwpx(central, 28, name.length);
+            setZipU16ForHwpx(central, 30, 0);
+            setZipU16ForHwpx(central, 32, 0);
+            setZipU16ForHwpx(central, 34, 0);
+            setZipU16ForHwpx(central, 36, 0);
+            setZipU32ForHwpx(central, 38, 0);
+            setZipU32ForHwpx(central, 42, offset);
+            centralParts.push(central, name);
+
+            offset += local.length + name.length + data.length;
+        });
+
+        var centralSize = centralParts.reduce(function(sum, part) { return sum + part.length; }, 0);
+        var end = writeZipHeaderForHwpx(22);
+        setZipU32ForHwpx(end, 0, 0x06054b50);
+        setZipU16ForHwpx(end, 4, 0);
+        setZipU16ForHwpx(end, 6, 0);
+        setZipU16ForHwpx(end, 8, entries.length);
+        setZipU16ForHwpx(end, 10, entries.length);
+        setZipU32ForHwpx(end, 12, centralSize);
+        setZipU32ForHwpx(end, 16, offset);
+        setZipU16ForHwpx(end, 20, 0);
+
+        return new Blob([concatUint8ForHwpx(localParts.concat(centralParts, [end]))], {
+            type: 'application/hwp+zip'
+        });
+    }
+
+    function dataUrlToZipBytesForReportImage(dataUrl) {
+        var match = String(dataUrl || '').match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+        if (!match) return null;
+        var mime = match[1].toLowerCase();
+        var ext = mime.indexOf('png') > -1 ? 'png' : (mime.indexOf('webp') > -1 ? 'webp' : 'jpg');
+        try {
+            var binary = atob(match[2]);
+            var bytes = new Uint8Array(binary.length);
+            for (var i = 0; i < binary.length; i += 1) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return { ext: ext, bytes: bytes };
+        } catch(e) {
+            return null;
+        }
+    }
+
+    function sanitizeReportImageFilenamePart(value) {
+        return String(value || '')
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 80) || 'issue';
+    }
+
+    function exportCurrentIssueReportImagesZip() {
+        var btn = document.getElementById('btn-main-report-images-export');
+        var oldHtml = btn ? btn.innerHTML : '';
+        if (window._currentFormaDetailIssue && document.getElementById('forma-issue-detail-modal')) {
+            saveCurrentFormaDetailReportFields(window._currentFormaDetailIssue);
+        }
+        if (isIssueMonthlyInlineActive()) {
+            renderIssueMonthlyInlineView(window.currentFilteredIssues || getIssuesForMonthlyBrowser());
+        }
+        var issues = collectUpdateIssuesForHwpx();
+        var entries = [];
+        issues.forEach(function(issue, index) {
+            var idPart = sanitizeReportImageFilenamePart(issue.id || issue.displayId || issue.title || ('issue_' + (index + 1)));
+            [
+                { key: 'beforeImage', label: '변경전' },
+                { key: 'afterImage', label: '변경후' }
+            ].forEach(function(item) {
+                var image = dataUrlToZipBytesForReportImage(issue[item.key]);
+                if (!image) return;
+                entries.push({
+                    name: 'report-images/' + String(index + 1).padStart(3, '0') + '_' + idPart + '_' + item.label + '.' + image.ext,
+                    data: image.bytes
+                });
+            });
+        });
+        if (!entries.length) {
+            alert('현재 이슈 목록에 저장된 보고서 이미지가 없습니다.');
+            return;
+        }
+        try {
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            }
+            var blob = createZipBlobForHwpx(entries);
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            var stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            a.href = url;
+            a.download = '이슈_보고서_이미지_' + stamp + '.zip';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                URL.revokeObjectURL(url);
+                if (a.parentNode) a.parentNode.removeChild(a);
+            }, 1000);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = oldHtml;
+            }
+        }
+    }
+    window.exportCurrentIssueReportImagesZip = exportCurrentIssueReportImagesZip;
+
+    function hwpxPara(text, style) {
+        return String(text == null ? '' : text).split(/\r?\n/).map(function(line) {
+            return '<hp:p id="0" paraPrIDRef="0" styleIDRef="0">' +
+                '<hp:run charPrIDRef="0"><hp:t>' + xmlEscapeForHwpx(line || ' ') + '</hp:t></hp:run>' +
+                '</hp:p>';
+        }).join('');
+    }
+
+    function createUpdateIssuesHwpxBlob(issues, title) {
+        var today = new Date().toISOString().slice(0, 10);
+        var issueBody = issues.map(function(issue, index) {
+            var mainChange = stripVersionInfoForHwpx(issue.mainChange || issue.description || issue.desc || '');
+            var specialNote = String(issue.specialNote || issue.hwpxSpecialNote || issue.reportSpecialNote || '').trim();
+            return [
+                hwpxPara((index + 1) + '. ' + (issue.title || '업데이트 이슈'), 1),
+                hwpxPara('이슈 ID: ' + (issue.id || '-')),
+                hwpxPara('상태: ' + (issue.status || '-')),
+                hwpxPara('담당자: ' + (issue.assignee || '-')),
+                hwpxPara('확인자: ' + (issue.reviewer || '-')),
+                hwpxPara('위치: ' + (issue.location || '-')),
+                hwpxPara('배치: ' + (issue.placement || '-')),
+                hwpxPara('이미지 제목: '),
+                hwpxPara('이미지: '),
+                hwpxPara('수정사유: '),
+                hwpxPara('주요 수정 사항'),
+                hwpxPara(mainChange || ' ')
+            ].concat(specialNote ? [
+                hwpxPara('특이 사항: '),
+                hwpxPara(specialNote)
+            ] : []).join('');
+        }).join('');
+
+        var headerXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">' +
+            '<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>' +
+            '<hh:refList>' +
+            '<hh:fontfaces><hh:fontface lang="HANGUL"><hh:font name="함초롬바탕" type="TTF"/></hh:fontface></hh:fontfaces>' +
+            '<hh:borderFills><hh:borderFill id="0"/></hh:borderFills>' +
+            '<hh:charProperties><hh:charPr id="0" height="1000" textColor="#000000"/></hh:charProperties>' +
+            '<hh:paraProperties><hh:paraPr id="0" align="LEFT"/></hh:paraProperties>' +
+            '<hh:styles><hh:style id="0" type="PARA" name="바탕글" paraPrIDRef="0" charPrIDRef="0"/></hh:styles>' +
+            '<hh:bullets/>' +
+            '<hh:numberings/>' +
+            '</hh:refList></hh:head>';
+        var sectionXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">' +
+            hwpxPara(title || '업데이트 이슈 보고서', 1) +
+            hwpxPara('작성일: ' + today) +
+            hwpxPara('대상: 업데이트 이슈 ' + issues.length + '건') +
+            hwpxPara(' ') +
+            issueBody +
+            '</hs:sec>';
+
+        return createZipBlobForHwpx([
+            { name: 'mimetype', data: 'application/hwp+zip' },
+            { name: 'version.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HCFVersion xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" targetApplication="WORDPROC" major="5" minor="1" micro="0" buildNumber="0" os="Windows"/>' },
+            { name: 'META-INF/manifest.xml', data: '<?xml version="1.0" encoding="UTF-8"?><manifest xmlns="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><file-entry full-path="/" media-type="application/hwp+zip"/><file-entry full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/><file-entry full-path="Contents/header.xml" media-type="application/xml"/><file-entry full-path="Contents/section0.xml" media-type="application/xml"/><file-entry full-path="Contents/settings.xml" media-type="application/xml"/></manifest>' },
+            { name: 'META-INF/container.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>' },
+            { name: 'Contents/content.hpf', data: '<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="1.0"><opf:metadata><dc:title>업데이트 이슈 보고서</dc:title><dc:creator>APS AI Platform</dc:creator><dc:language>ko-KR</dc:language></opf:metadata><opf:manifest><opf:item id="header" href="header.xml" media-type="application/xml"/><opf:item id="section0" href="section0.xml" media-type="application/xml"/><opf:item id="settings" href="settings.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="section0"/></opf:spine></opf:package>' },
+            { name: 'Contents/header.xml', data: headerXml },
+            { name: 'Contents/section0.xml', data: sectionXml },
+            { name: 'Contents/settings.xml', data: '<?xml version="1.0" encoding="UTF-8"?><ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app"/>' },
+            { name: 'Preview/PrvText.txt', data: issues.map(function(issue) { return [issue.title, issue.mainChange].filter(Boolean).join('\n'); }).join('\n\n') }
+        ]);
+    }
+
+    async function exportUpdateIssuesToHwpx() {
+        var btn = document.getElementById('btn-main-hwpx-export');
+        var oldHtml = btn ? btn.innerHTML : '';
+        if (window._currentFormaDetailIssue && document.getElementById('forma-issue-detail-modal')) {
+            saveCurrentFormaDetailReportFields(window._currentFormaDetailIssue);
+        }
+        if (isIssueMonthlyInlineActive()) {
+            renderIssueMonthlyInlineView(window.currentFilteredIssues || getIssuesForMonthlyBrowser());
+        }
+        var issues = collectUpdateIssuesForHwpx();
+        var reviewIssues = collectBimReviewIssuesForHwpx();
+        if (!issues.length && !reviewIssues.length) {
+            alert('내보낼 업데이트/설계/간섭 이슈가 없습니다.');
+            return;
+        }
+        async function requestAndDownloadHwpx(payload, filenameBase) {
+            var resp = await fetch('/api/issues/export-hwpx', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) {
+                var errText = await resp.text().catch(function() { return ''; });
+                throw new Error(errText || ('HTTP ' + resp.status));
+            }
+            var blob = await resp.blob();
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            var stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            a.href = url;
+            a.download = filenameBase + '_' + stamp + '.hwpx';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                URL.revokeObjectURL(url);
+                if (a.parentNode) a.parentNode.removeChild(a);
+            }, 1000);
+            await new Promise(function(resolve) { setTimeout(resolve, 350); });
+        }
+        try {
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            }
+            if (issues.length) {
+                var preparedIssues = await prepareHwpxIssueReportImages(issues, function(current, total) {
+                    if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span style="margin-left:6px;">작성 ' + current + '/' + total + '</span>';
+                });
+                await requestAndDownloadHwpx({
+                    title: 'BIM 모델 작성 보고서',
+                    reportKind: 'update',
+                    filter: 'update',
+                    issues: preparedIssues
+                }, 'BIM_모델_작성_보고서');
+            }
+            if (reviewIssues.length) {
+                if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span style="margin-left:6px;">검토 보고서</span>';
+                await requestAndDownloadHwpx({
+                    title: 'BIM기반 검토 보고서',
+                    reportKind: 'bim-review',
+                    filter: 'bim-review',
+                    issues: reviewIssues
+                }, 'BIM기반_검토_보고서');
+            }
+        } catch (err) {
+            console.error('[HWPX Export] failed:', err);
+            alert('한글 파일 생성 중 오류가 발생했습니다: ' + err.message);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = oldHtml;
+            }
+        }
+    }
+    window.exportUpdateIssuesToHwpx = exportUpdateIssuesToHwpx;
+
     installColumns();
     ensureIssueTypeTabs();
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             ensureIssueTypeTabs();
             renderColumnMenu();
+            var monthlyIssueBtn = document.getElementById('btn-monthly-issue-browser');
+            if (monthlyIssueBtn) monthlyIssueBtn.onclick = toggleIssueMonthlyInlineBrowser;
+            var hwpxBtn = document.getElementById('btn-main-hwpx-export');
+            if (hwpxBtn) hwpxBtn.onclick = exportUpdateIssuesToHwpx;
+            var reportImagesBtn = document.getElementById('btn-main-report-images-export');
+            if (reportImagesBtn) reportImagesBtn.onclick = exportCurrentIssueReportImagesZip;
         });
     } else {
         renderColumnMenu();
+        var monthlyIssueBtn = document.getElementById('btn-monthly-issue-browser');
+        if (monthlyIssueBtn) monthlyIssueBtn.onclick = toggleIssueMonthlyInlineBrowser;
+        var hwpxBtn = document.getElementById('btn-main-hwpx-export');
+        if (hwpxBtn) hwpxBtn.onclick = exportUpdateIssuesToHwpx;
+        var reportImagesBtn = document.getElementById('btn-main-report-images-export');
+        if (reportImagesBtn) reportImagesBtn.onclick = exportCurrentIssueReportImagesZip;
     }
 
     setTimeout(function() {

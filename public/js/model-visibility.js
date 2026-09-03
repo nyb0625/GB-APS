@@ -5,6 +5,24 @@
 // 현재 뷰어에 로드된 모델 객체들을 추적 관리하는 전역 딕셔너리
 export const loadedModels = {};
 export const rotationState = {};
+export const opacityState = {};
+const materialOpacityBackup = {};
+const modelOpacityUnconsolidated = new Set();
+const pendingOpacityReapply = new Map();
+const OPACITY_STATE_KEY = 'aps_model_visibility_opacity_v1';
+
+try {
+    Object.assign(opacityState, JSON.parse(localStorage.getItem(OPACITY_STATE_KEY) || '{}'));
+} catch (e) {
+    console.warn('[ModelVisibility] opacity state restore skipped:', e.message);
+}
+function persistOpacityState() {
+    try {
+        localStorage.setItem(OPACITY_STATE_KEY, JSON.stringify(opacityState));
+    } catch (e) {
+        console.warn('[ModelVisibility] opacity state save skipped:', e.message);
+    }
+}
 
 function normalizeUrnValue(value) {
     return value ? String(value).replace(/^urn:/, '').replace(/=/g, '').trim() : '';
@@ -14,11 +32,85 @@ function getThreeNamespace() {
     return window.THREE || (window.Autodesk && Autodesk.Viewing && Autodesk.Viewing.Private && Autodesk.Viewing.Private.THREE) || null;
 }
 
-function getLoadedModelByUrn(urn) {
+function getViewerModels(viewer) {
+    if (!viewer) return [];
+    const models = [];
+    const addModel = (model) => {
+        if (!model) return;
+        if (!models.some(candidate => candidate === model || candidate.id === model.id)) {
+            models.push(model);
+        }
+    };
+    try {
+        if (typeof viewer.getAllModels === 'function') {
+            (viewer.getAllModels() || []).forEach(addModel);
+        }
+    } catch (e) {}
+    try {
+        const queue = viewer.impl && typeof viewer.impl.modelQueue === 'function'
+            ? viewer.impl.modelQueue()
+            : null;
+        if (queue && typeof queue.getModels === 'function') {
+            (queue.getModels() || []).forEach(addModel);
+        }
+    } catch (e) {}
+    addModel(viewer.model);
+    return models;
+}
+
+function isModelInViewer(viewer, model) {
+    if (!viewer || !model) return true;
+    return getViewerModels(viewer).some(candidate => candidate === model || candidate.id === model.id);
+}
+
+function modelUrnMatches(model, urn) {
+    if (!model || !urn) return false;
     const normTarget = normalizeUrnValue(urn);
-    if (loadedModels[urn]) return loadedModels[urn];
-    const key = Object.keys(loadedModels).find(k => normalizeUrnValue(k) === normTarget);
-    return key ? loadedModels[key] : null;
+    const data = model.getData ? model.getData() : null;
+    const candidates = [
+        data && data.urn,
+        data && data.loadOptions && data.loadOptions.bubbleNode && data.loadOptions.bubbleNode.urn,
+        data && data.loadOptions && data.loadOptions.bubbleNode && typeof data.loadOptions.bubbleNode.urn === 'function' && data.loadOptions.bubbleNode.urn(),
+        model.loader && model.loader.svfUrn,
+        model.myData && model.myData.urn
+    ].filter(Boolean);
+
+    return candidates.some(candidate => {
+        const normCandidate = normalizeUrnValue(candidate);
+        return normCandidate && (
+            normCandidate === normTarget ||
+            normCandidate.includes(normTarget) ||
+            normTarget.includes(normCandidate)
+        );
+    });
+}
+
+function registerLoadedModel(urn, model) {
+    if (!urn || !model) return model;
+    loadedModels[urn] = model;
+    try {
+        if (!model.__apsVisibilityUrns) model.__apsVisibilityUrns = new Set();
+        model.__apsVisibilityUrns.add(urn);
+        model.__apsVisibilityUrns.add(normalizeUrnValue(urn));
+    } catch (e) {}
+    return model;
+}
+
+function getLoadedModelByUrn(urn, viewer) {
+    const normTarget = normalizeUrnValue(urn);
+    const exactModel = loadedModels[urn];
+    if (exactModel && isModelInViewer(viewer, exactModel)) return exactModel;
+    const key = Object.keys(loadedModels).find(k => {
+        const candidate = loadedModels[k];
+        return normalizeUrnValue(k) === normTarget && isModelInViewer(viewer, candidate);
+    });
+    if (key) return loadedModels[key];
+
+    const viewerMatch = getViewerModels(viewer).find(model => {
+        if (model.__apsVisibilityUrns && (model.__apsVisibilityUrns.has(urn) || model.__apsVisibilityUrns.has(normTarget))) return true;
+        return modelUrnMatches(model, urn);
+    });
+    return viewerMatch || null;
 }
 
 function getMainViewerModelByUrn(viewer, urn) {
@@ -62,9 +154,265 @@ function isRotationEnabled(urn) {
     return !!Object.keys(rotationState).find(k => normalizeUrnValue(k) === normTarget && rotationState[k]);
 }
 
+function getStoredModelOpacity(urn) {
+    const normTarget = normalizeUrnValue(urn);
+    const key = Object.keys(opacityState).find(k => normalizeUrnValue(k) === normTarget);
+    const raw = key ? opacityState[key] : opacityState[urn];
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.max(0.1, Math.min(1, value)) : 1;
+}
+
+function getModelRootId(model) {
+    if (!model) return 1;
+    try {
+        if (typeof model.getRootId === 'function') return model.getRootId();
+    } catch (e) {}
+    try {
+        const tree = model.getInstanceTree && model.getInstanceTree();
+        if (tree && typeof tree.getRootId === 'function') return tree.getRootId();
+    } catch (e2) {}
+    try {
+        const data = model.getData && model.getData();
+        const tree = data && data.instanceTree;
+        if (tree && typeof tree.getRootId === 'function') return tree.getRootId();
+    } catch (e3) {}
+    return 1;
+}
+
+function getMaterialBackupKey(model, urn) {
+    return `${model && model.id != null ? model.id : 'model'}:${normalizeUrnValue(urn)}`;
+}
+
+function ensureModelCanUseCustomMaterials(viewer, model) {
+    if (!viewer || !model || model.id == null || modelOpacityUnconsolidated.has(model.id)) return;
+    try {
+        if (typeof model.isConsolidated === 'function' && !model.isConsolidated()) {
+            modelOpacityUnconsolidated.add(model.id);
+            return;
+        }
+        if (typeof model.unconsolidate === 'function') {
+            model.unconsolidate();
+        } else if (viewer.impl && typeof viewer.impl.unconsolidateModel === 'function') {
+            viewer.impl.unconsolidateModel(model);
+        }
+        modelOpacityUnconsolidated.add(model.id);
+    } catch (e) {
+        console.warn('[ModelVisibility] model unconsolidate skipped:', e.message);
+    }
+}
+
+function forEachModelFragment(model, callback) {
+    if (!model || typeof callback !== 'function') return;
+    const fragList = model.getFragmentList && model.getFragmentList();
+    if (!fragList) return;
+
+    const visited = new Set();
+    const visit = (fragId) => {
+        if (visited.has(fragId)) return;
+        visited.add(fragId);
+        callback(fragId, fragList);
+    };
+
+    try {
+        const tree = model.getInstanceTree && model.getInstanceTree();
+        if (tree && typeof tree.enumNodeFragments === 'function') {
+            tree.enumNodeFragments(getModelRootId(model), visit, true);
+            if (visited.size > 0) return;
+        }
+    } catch (e) {
+        console.warn('[ModelVisibility] fragment tree traversal failed:', e.message);
+    }
+
+    const fragments = fragList.fragments || {};
+    const fragCount = fragments.fragId2dbId ? fragments.fragId2dbId.length : (typeof fragList.getCount === 'function' ? fragList.getCount() : 0);
+    for (let fragId = 0; fragId < fragCount; fragId++) {
+        visit(fragId);
+    }
+}
+
+function registerViewerMaterial(viewer, material, name) {
+    if (!viewer || !viewer.impl || !material) return material;
+    material.name = name;
+    try {
+        const matman = typeof viewer.impl.matman === 'function' ? viewer.impl.matman() : null;
+        if (matman && typeof matman.addMaterial === 'function') {
+            matman.addMaterial(name, material, true);
+        }
+    } catch (e) {
+        console.warn('[ModelVisibility] material manager registration skipped:', e.message);
+    }
+    return material;
+}
+
+function configureOpacityMaterial(material, opacity) {
+    if (!material) return material;
+    const value = Math.max(0.1, Math.min(1, Number(opacity) || 1));
+    const THREE_NS = getThreeNamespace();
+
+    material.transparent = value < 0.99;
+    material.opacity = value;
+    material.depthWrite = value >= 0.99;
+    material.depthTest = true;
+    material.alphaTest = 0;
+    material.visible = true;
+    if (THREE_NS && typeof THREE_NS.NormalBlending !== 'undefined') {
+        material.blending = THREE_NS.NormalBlending;
+    }
+    if (material.uniforms && material.uniforms.opacity) {
+        material.uniforms.opacity.value = value;
+    }
+    if (material.defines && value < 0.99) {
+        material.defines.USE_TRANSPARENCY = 1;
+    }
+    material.needsUpdate = true;
+    return material;
+}
+
+function getViewerModelKey(viewer, model, urn) {
+    const viewerId = viewer && (viewer.id || viewer.container?.id || 'viewer');
+    const modelId = model && model.id != null ? model.id : normalizeUrnValue(urn);
+    return `${viewerId}:${modelId}:${normalizeUrnValue(urn)}`;
+}
+
+function setModelMaterialOpacity(viewer, model, urn, opacity) {
+    const value = Math.max(0.1, Math.min(1, Number(opacity) || 1));
+    const backupKey = getMaterialBackupKey(model, urn);
+    if (!materialOpacityBackup[backupKey]) materialOpacityBackup[backupKey] = {};
+    const backup = materialOpacityBackup[backupKey];
+    ensureModelCanUseCustomMaterials(viewer, model);
+    let appliedCount = 0;
+
+    forEachModelFragment(model, (fragId, fragList) => {
+        const renderProxy = viewer && viewer.impl && typeof viewer.impl.getRenderProxy === 'function'
+            ? viewer.impl.getRenderProxy(model, fragId)
+            : null;
+        const currentMaterial = (renderProxy && renderProxy.material) || (fragList.getMaterial && fragList.getMaterial(fragId));
+        if (!currentMaterial) return;
+        if (!backup[fragId]) backup[fragId] = currentMaterial;
+        appliedCount++;
+
+        const assignMaterial = (target, materialToAssign) => {
+            if (!target || !materialToAssign) return;
+            target.material = materialToAssign;
+            target.material.needsUpdate = true;
+        };
+
+        if (value >= 0.99) {
+            const originalMaterial = configureOpacityMaterial(backup[fragId], 1);
+            assignMaterial(renderProxy, originalMaterial);
+            assignMaterial(renderProxy && renderProxy.meshProxy, originalMaterial);
+            assignMaterial(renderProxy && renderProxy.mesh, originalMaterial);
+            if (typeof fragList.setMaterial === 'function') {
+                fragList.setMaterial(fragId, originalMaterial);
+            }
+            if (fragList.fragments && Array.isArray(fragList.fragments.materials)) {
+                fragList.fragments.materials[fragId] = originalMaterial;
+            }
+            return;
+        }
+
+        const sourceMaterial = backup[fragId] || currentMaterial;
+        const material = configureOpacityMaterial(
+            typeof sourceMaterial.clone === 'function' ? sourceMaterial.clone() : sourceMaterial,
+            value
+        );
+        registerViewerMaterial(viewer, material, `aps-opacity-${model.id != null ? model.id : 'model'}-${fragId}-${Math.round(value * 100)}`);
+        assignMaterial(renderProxy, material);
+        assignMaterial(renderProxy && renderProxy.meshProxy, material);
+        assignMaterial(renderProxy && renderProxy.mesh, material);
+        if (typeof fragList.setMaterial === 'function') {
+            fragList.setMaterial(fragId, material);
+        }
+        if (fragList.fragments && Array.isArray(fragList.fragments.materials)) {
+            fragList.fragments.materials[fragId] = material;
+        }
+    });
+
+    return appliedCount;
+}
+
+function scheduleOpacityReapply(viewer, urn) {
+    const model = getLoadedModelByUrn(urn, viewer) || getMainViewerModelByUrn(viewer, urn);
+    if (!viewer || !model || !window.Autodesk || !Autodesk.Viewing) return;
+    const key = getViewerModelKey(viewer, model, urn);
+    const current = pendingOpacityReapply.get(key) || { count: 0 };
+    if (current.count >= 2) return;
+
+    const run = () => {
+        pendingOpacityReapply.set(key, { count: current.count + 1 });
+        setTimeout(() => {
+            setModelOpacity(viewer, urn, getStoredModelOpacity(urn), { skipSchedule: true });
+        }, 120);
+    };
+
+    const events = [
+        Autodesk.Viewing.OBJECT_TREE_CREATED_EVENT,
+        Autodesk.Viewing.GEOMETRY_LOADED_EVENT
+    ].filter(Boolean);
+
+    events.forEach(eventName => {
+        const handler = (event) => {
+            if (event && event.model && model.id != null && event.model.id !== model.id) return;
+            try { viewer.removeEventListener(eventName, handler); } catch (e) {}
+            run();
+        };
+        try { viewer.addEventListener(eventName, handler); } catch (e) {}
+    });
+
+    setTimeout(run, 500);
+}
+
+export function setModelOpacity(viewer, urn, opacity, options = {}) {
+    if (!viewer) viewer = getActiveViewer();
+    const model = getLoadedModelByUrn(urn, viewer) || getMainViewerModelByUrn(viewer, urn);
+    const value = Math.max(0.1, Math.min(1, Number(opacity) || 1));
+    opacityState[urn] = value;
+    persistOpacityState();
+    if (!viewer || !model) {
+        console.warn('[ModelVisibility] opacity skipped: target model not found in active viewer.', {
+            urn,
+            viewerModels: getViewerModels(viewer).map(m => ({
+                id: m && m.id,
+                dataUrn: m && m.getData && m.getData() && m.getData().urn,
+                loaderUrn: m && m.loader && m.loader.svfUrn
+            }))
+        });
+        return false;
+    }
+
+    try {
+        const appliedCount = setModelMaterialOpacity(viewer, model, urn, value);
+        if (!appliedCount) {
+            console.warn('[ModelVisibility] opacity skipped: no editable fragments found.', { urn, modelId: model && model.id });
+            return false;
+        }
+        if (viewer.impl && typeof viewer.impl.invalidate === 'function') {
+            viewer.impl.invalidate(true, true, true);
+        }
+        if (viewer.impl && typeof viewer.impl.sceneUpdated === 'function') {
+            viewer.impl.sceneUpdated(true);
+        }
+        if (!options.skipSchedule) {
+            scheduleOpacityReapply(viewer, urn);
+        }
+        console.log('[ModelVisibility] opacity applied:', {
+            urn,
+            opacity: value,
+            modelId: model && model.id,
+            fragments: appliedCount,
+            viewerModels: getViewerModels(viewer).length,
+            mode: 'material'
+        });
+        return true;
+    } catch (err) {
+        console.warn('[ModelVisibility] opacity apply failed:', err.message);
+        return false;
+    }
+}
+
 export function applyModelRotation(viewer, urn, rotateMinus90) {
     if (!viewer) viewer = getActiveViewer();
-    const model = getLoadedModelByUrn(urn) || getMainViewerModelByUrn(viewer, urn);
+    const model = getLoadedModelByUrn(urn, viewer) || getMainViewerModelByUrn(viewer, urn);
     if (!viewer || !model) return false;
 
     const transform = createPlacementTransform(rotateMinus90);
@@ -102,7 +450,11 @@ export function getActiveViewer() {
     if (cctvTab && cctvTab.style.display !== 'none' && window.cctvViewer) {
         return window.cctvViewer;
     }
-    return window.viewer || window.cctvViewer;
+    return window.projectViewer ||
+        window.myGlobalViewer ||
+        window.viewer ||
+        window.NOP_VIEWER ||
+        window.cctvViewer;
 }
 
 // Z축 -90도 자동 회전 대상 구조물 폴더 지정 (02 신설구조물 하위 5개 시설)
@@ -146,8 +498,31 @@ function autoRegisterRotationStates(node, parentPaths = []) {
 /**
  * 🌐 [Backend API] '01 Revit (<강북정수장 증설공사 BIM 용역>)' 계층형 폴더 및 파일 트리 정보 가져오기
  */
+function getCurrentProjectContext() {
+    const explorer = window.explorer || null;
+    const hubId = window.currentHubId ||
+        explorer?.currentHubId ||
+        localStorage.getItem('aps_last_hub_id') ||
+        '';
+    const projectId = window.currentProjectId ||
+        explorer?.currentProjectId ||
+        localStorage.getItem('aps_last_project_id') ||
+        '';
+    return { hubId, projectId };
+}
+
+function buildModelTreeUrl(force = false) {
+    const params = new URLSearchParams();
+    const { hubId, projectId } = getCurrentProjectContext();
+    if (hubId) params.set('hubId', hubId);
+    if (projectId) params.set('projectId', projectId);
+    if (force) params.set('force', '1');
+    const query = params.toString();
+    return query ? `/api/models/tree?${query}` : '/api/models/tree';
+}
+
 export async function fetchGlobalRvtModels(force = false) {
-    const url = force ? '/api/models/tree?force=1' : '/api/models/tree';
+    const url = buildModelTreeUrl(force);
     const resp = await fetch(url, { credentials: 'same-origin' });
     const data = await resp.json().catch(() => ({}));
 
@@ -160,6 +535,7 @@ export async function fetchGlobalRvtModels(force = false) {
     }
 
     window._globalRvtModelsCache = data;
+    window._globalRvtModelsCacheKey = `${data.hubId || ''}:${data.projectId || ''}`;
     window._globalRvtModelsCacheAt = Date.now();
     autoRegisterRotationStates(data);
     return data;
@@ -191,7 +567,10 @@ export async function refreshGlobalVisibilityPopup(mainUrn, fallbackItems = [], 
 
     let rvtTree = null;
     try {
-        rvtTree = window._globalRvtModelsCache || await fetchGlobalRvtModels();
+        const { hubId, projectId } = getCurrentProjectContext();
+        const cacheKey = `${hubId || ''}:${projectId || ''}`;
+        rvtTree = (window._globalRvtModelsCacheKey === cacheKey ? window._globalRvtModelsCache : null) ||
+            await fetchGlobalRvtModels();
         autoRegisterRotationStates(rvtTree);
     } catch (err) {
         listEl.innerHTML = `<div style="padding:12px; color:#fca5a5; background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.25); border-radius:6px; font-size:12px; line-height:1.45;"><b>Autodesk Docs 목록을 불러오지 못했습니다.</b><br>${err.message}</div>`;
@@ -345,7 +724,7 @@ function renderTreeFolderNode(folderNode, mainUrn, parentFolders = []) {
             if (isMainModel) {
                 const activeViewer = getActiveViewer();
                 if (activeViewer && activeViewer.model) {
-                    loadedModels[file.urn] = activeViewer.model;
+                    registerLoadedModel(file.urn, activeViewer.model);
                     if (isRotationEnabled(file.urn)) {
                         applyModelRotation(activeViewer, file.urn, true);
                     }
@@ -353,20 +732,27 @@ function renderTreeFolderNode(folderNode, mainUrn, parentFolders = []) {
             }
             
             // 병합되어 뷰어에 이미 켜져 있는 보조 모델 판별
-            const isAlreadyLoaded = !!loadedModels[file.urn] || Object.keys(loadedModels).some(u => normalizeUrnValue(u) === normFileUrn);
+            const isAlreadyLoaded = !!getLoadedModelByUrn(file.urn, getActiveViewer()) ||
+                Object.keys(loadedModels).some(u => normalizeUrnValue(u) === normFileUrn);
             const isCheckedOn = isMainModel || isAlreadyLoaded;
+            const modelOpacity = getStoredModelOpacity(file.urn);
+            const modelOpacityPct = Math.round(modelOpacity * 100);
 
             const row = document.createElement('div');
-            row.style.cssText = `display:flex; align-items:center; gap:6px; padding:4px 8px; background:${isMainModel ? 'rgba(56, 189, 248, 0.12)' : isAlreadyLoaded ? 'rgba(56, 189, 248, 0.05)' : 'rgba(255,255,255,0.03)'}; border:1px solid ${isMainModel ? 'rgba(56, 189, 248, 0.45)' : isAlreadyLoaded ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.06)'}; border-radius:5px;`;
+            row.style.cssText = `display:grid; grid-template-columns:auto minmax(120px,1fr) auto auto auto; align-items:center; gap:6px; padding:6px 8px; background:${isMainModel ? 'rgba(56, 189, 248, 0.12)' : isAlreadyLoaded ? 'rgba(56, 189, 248, 0.05)' : 'rgba(255,255,255,0.03)'}; border:1px solid ${isMainModel ? 'rgba(56, 189, 248, 0.45)' : isAlreadyLoaded ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.06)'}; border-radius:5px;`;
             row.innerHTML = `
                 <!-- 공종 색상 칩 뱃지 -->
                 <span style="font-size:0.65rem; font-weight:800; color:${trade.color}; background:${trade.bg}; border:1px solid ${trade.border}; padding:1px 5px; border-radius:3px; flex-shrink:0; min-width:18px; text-align:center;" title="공종: ${trade.name}">
                     ${trade.code}
                 </span>
-                <span title="${file.name}" style="flex:1; font-size:0.76rem; color:${isMainModel ? '#38bdf8' : '#cbd5e1'}; font-weight:${isMainModel ? 'bold' : 'normal'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                <span title="${file.name}" style="min-width:0; font-size:0.76rem; color:${isMainModel ? '#38bdf8' : '#cbd5e1'}; font-weight:${isMainModel ? 'bold' : 'normal'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                     ${file.name}
                 </span>
-                ${isMainModel ? '<span style="font-size:0.62rem; color:#38bdf8; background:rgba(56,189,248,0.22); border:1px solid rgba(56,189,248,0.6); padding:1px 5px; border-radius:4px; font-weight:bold; flex-shrink:0;">활성</span>' : ''}
+                <span style="font-size:0.62rem; color:#38bdf8; background:${isMainModel ? 'rgba(56,189,248,0.22)' : 'transparent'}; border:1px solid ${isMainModel ? 'rgba(56,189,248,0.6)' : 'transparent'}; padding:1px 5px; border-radius:4px; font-weight:bold; min-width:26px; text-align:center;">${isMainModel ? '활성' : ''}</span>
+                <button type="button" class="model-opacity-toggle" title="모델 투명도 조절" aria-expanded="false" style="height:24px; min-width:50px; display:inline-flex; align-items:center; justify-content:center; gap:4px; border:1px solid rgba(148,163,184,0.28); border-radius:5px; background:rgba(15,23,42,0.76); color:#cbd5e1; cursor:pointer; font-size:0.66rem; font-weight:800;">
+                    <i class="fas fa-adjust" style="font-size:10px;"></i>
+                    <span class="model-opacity-chip">${modelOpacityPct}%</span>
+                </button>
                 <!-- ON / OFF 토글 스위치 -->
                 <label style="position:relative;display:inline-flex;align-items:center;cursor:pointer;flex-shrink:0;">
                     <input type="checkbox" class="vis-toggle-cb" data-urn="${file.urn}" data-name="${file.name}" ${isCheckedOn ? 'checked' : ''} style="opacity:0;width:0;height:0;position:absolute;">
@@ -374,10 +760,48 @@ function renderTreeFolderNode(folderNode, mainUrn, parentFolders = []) {
                         <span class="vt-thumb" style="width:11px;height:11px;background:#fff;border-radius:50%;position:absolute;top:2px;left:${isCheckedOn ? '17px' : '2px'};transition:left 0.2s;"></span>
                     </span>
                 </label>
+                <div class="model-opacity-control" style="grid-column:1 / -1; display:none; align-items:center; gap:8px; min-width:0; padding:5px 2px 1px 30px;">
+                    <span style="color:#94a3b8; font-size:0.68rem; font-weight:800; white-space:nowrap;">투명도</span>
+                    <input type="range" class="model-opacity-range" data-urn="${file.urn}" min="10" max="100" step="5" value="${modelOpacityPct}" title="모델 투명도" style="flex:1; min-width:80px; accent-color:#38bdf8;">
+                    <span class="model-opacity-value" style="width:34px; text-align:right; color:#cbd5e1; font-size:0.68rem; font-weight:800;">${modelOpacityPct}%</span>
+                    <button type="button" class="model-opacity-reset" title="투명도 초기화" style="width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(148,163,184,0.28);border-radius:5px;background:rgba(15,23,42,0.76);color:#cbd5e1;cursor:pointer;"><i class="fas fa-rotate-left" style="font-size:10px;"></i></button>
+                </div>
             `;
             const cb = row.querySelector('.vis-toggle-cb');
             const track = row.querySelector('.vt-track');
             const thumb = row.querySelector('.vt-thumb');
+            const opacityToggle = row.querySelector('.model-opacity-toggle');
+            const opacityChip = row.querySelector('.model-opacity-chip');
+            const opacityPanel = row.querySelector('.model-opacity-control');
+            const opacityRange = row.querySelector('.model-opacity-range');
+            const opacityValue = row.querySelector('.model-opacity-value');
+            const opacityReset = row.querySelector('.model-opacity-reset');
+
+            const applyOpacityFromRange = () => {
+                const value = Math.max(10, Math.min(100, Number(opacityRange.value) || 100));
+                opacityValue.textContent = value + '%';
+                opacityChip.textContent = value + '%';
+                const targetViewer = getActiveViewer();
+                setModelOpacity(targetViewer, file.urn, value / 100);
+            };
+
+            opacityToggle.onclick = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const willOpen = opacityPanel.style.display === 'none';
+                opacityPanel.style.display = willOpen ? 'flex' : 'none';
+                opacityToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+            };
+            opacityToggle.onmousedown = event => event.stopPropagation();
+            opacityRange.oninput = applyOpacityFromRange;
+            opacityRange.onclick = event => event.stopPropagation();
+            opacityRange.onmousedown = event => event.stopPropagation();
+            opacityReset.onclick = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                opacityRange.value = '100';
+                applyOpacityFromRange();
+            };
 
             // ⚡ 토글 스위치 변경 시 실제 ON/OFF 제어 연결부
             cb.onchange = async () => {
@@ -397,7 +821,10 @@ function renderTreeFolderNode(folderNode, mainUrn, parentFolders = []) {
                 }
 
                 if (isOn) {
-                    await appendModelToViewer(targetViewer, file.urn, file.name);
+                    const model = await appendModelToViewer(targetViewer, file.urn, file.name);
+                    if (model) {
+                        setModelOpacity(targetViewer, file.urn, getStoredModelOpacity(file.urn));
+                    }
                 } else {
                     setModelVisibility(targetViewer, file.urn, false);
                 }
@@ -425,11 +852,12 @@ export async function appendModelToViewer(viewer, urn, name) {
     const normalizedUrn = urn.startsWith('urn:') ? urn : 'urn:' + urn;
 
     // ?? ??? ??? ?? ???? ?? ??? ? ?? ???? ????.
-    const cachedModel = getLoadedModelByUrn(urn) || getMainViewerModelByUrn(viewer, urn);
+    const cachedModel = getLoadedModelByUrn(urn, viewer) || getMainViewerModelByUrn(viewer, urn);
     if (cachedModel) {
         try {
             viewer.showModel(cachedModel.id);
             applyModelRotation(viewer, urn, isRotationEnabled(urn));
+            setModelOpacity(viewer, urn, getStoredModelOpacity(urn));
             console.log(`[Viewer ON] ?? ?? (?? ??): ${name}`);
         } catch (e) {
             console.warn('[Viewer ON Error]', e);
@@ -441,8 +869,9 @@ export async function appendModelToViewer(viewer, urn, name) {
     if (viewer.model && (urn.includes(viewer.model.loader?.svfUrn) || urn === window._currentMainModelUrn)) {
         try {
             viewer.showModel(viewer.model.id);
-            loadedModels[urn] = viewer.model;
+            registerLoadedModel(urn, viewer.model);
             applyModelRotation(viewer, urn, isRotationEnabled(urn));
+            setModelOpacity(viewer, urn, getStoredModelOpacity(urn));
             return viewer.model;
         } catch (e) {}
     }
@@ -455,7 +884,10 @@ export async function appendModelToViewer(viewer, urn, name) {
 
         const loadOptions = {
             keepCurrentModels: true,
-            globalOffset: globalOffset
+            preserveView: true,
+            globalOffset: globalOffset,
+            skipHiddenFragments: false,
+            useConsolidation: false
         };
 
         const placementTransform = createPlacementTransform(isRotationEnabled(urn));
@@ -466,8 +898,9 @@ export async function appendModelToViewer(viewer, urn, name) {
         Autodesk.Viewing.Document.load(normalizedUrn, (doc) => {
             const geometry = doc.getRoot().getDefaultGeometry();
             viewer.loadDocumentNode(doc, geometry, loadOptions).then(model => {
-                loadedModels[urn] = model;
+                registerLoadedModel(urn, model);
                 applyModelRotation(viewer, urn, isRotationEnabled(urn));
+                setModelOpacity(viewer, urn, getStoredModelOpacity(urn));
                 console.log(`[Viewer ON] ??? ?? ?? ?? ??: ${name}`);
                 resolve(model);
             }).catch(reject);
@@ -482,19 +915,14 @@ export function setModelVisibility(viewer, urn, visible) {
     if (!viewer) viewer = getActiveViewer();
     if (!viewer) return;
 
-    const normTargetUrn = normalizeUrnValue(urn);
-
     // 1. loadedModels (병합 로드된 보조 모델) 딕셔너리에서 찾아 제어
-    let foundModel = loadedModels[urn];
-    if (!foundModel) {
-        const matchingKey = Object.keys(loadedModels).find(k => normalizeUrnValue(k) === normTargetUrn);
-        if (matchingKey) foundModel = loadedModels[matchingKey];
-    }
+    let foundModel = getLoadedModelByUrn(urn, viewer);
 
     if (foundModel) {
         try {
             if (visible) {
                 viewer.showModel(foundModel.id);
+                setModelOpacity(viewer, urn, getStoredModelOpacity(urn));
                 console.log(`[Viewer ON] showModel (Secondary): ${urn}`);
             } else {
                 viewer.hideModel(foundModel.id);
@@ -508,12 +936,14 @@ export function setModelVisibility(viewer, urn, visible) {
 
     // 2. 메인 모델(viewer.model) 제어
     try {
-        if (viewer.model) {
+        const mainModel = getMainViewerModelByUrn(viewer, urn);
+        if (mainModel) {
             if (visible) {
-                viewer.showModel(viewer.model.id);
+                viewer.showModel(mainModel.id);
+                setModelOpacity(viewer, urn, getStoredModelOpacity(urn));
                 console.log(`[Viewer ON] showModel (Main): ${urn}`);
             } else {
-                viewer.hideModel(viewer.model.id);
+                viewer.hideModel(mainModel.id);
                 console.log(`[Viewer OFF] hideModel (Main): ${urn}`);
             }
         }
@@ -664,9 +1094,11 @@ if (typeof window !== 'undefined') {
     window.getActiveViewer = getActiveViewer;
     window.loadedModels = loadedModels;
     window.rotationState = rotationState;
+    window.opacityState = opacityState;
     window.resetVisibilityState = resetVisibilityState;
     window.closeModelVisibilityPopup = closeModelVisibilityPopup;
     window.applyModelRotation = applyModelRotation;
+    window.setModelOpacity = setModelOpacity;
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
