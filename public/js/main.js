@@ -9690,6 +9690,9 @@ window.bindIssueItemClickEvents = function() {
                 return;
             }
             window.setViewerControls(false);
+            var floatingPanel = document.getElementById('forma-report-capture-panel');
+            var previousPanelDisplay = floatingPanel ? floatingPanel.style.display : '';
+            if (floatingPanel) floatingPanel.style.display = 'none';
             var oldOverlay = document.getElementById('report-region-overlay');
             if (oldOverlay) oldOverlay.remove();
 
@@ -9733,6 +9736,7 @@ window.bindIssueItemClickEvents = function() {
 
             function cleanup() {
                 overlay.remove();
+                if (floatingPanel) floatingPanel.style.display = previousPanelDisplay || '';
                 window.setViewerControls(true);
             }
             function resizeCanvas() {
@@ -10051,6 +10055,44 @@ window.bindIssueItemClickEvents = function() {
         if (old) old.remove();
     }
 
+    function makeFormaReportCapturePanelDraggable() {
+        var panel = document.getElementById('forma-report-capture-panel');
+        if (!panel || panel.dataset.draggable === '1') return;
+        var handle = panel.querySelector('.forma-report-floating-title') || panel;
+        panel.dataset.draggable = '1';
+        handle.style.cursor = 'move';
+        var dragging = false;
+        var offsetX = 0;
+        var offsetY = 0;
+        handle.onmousedown = function(evt) {
+            if (evt.button !== 0) return;
+            dragging = true;
+            var rect = panel.getBoundingClientRect();
+            offsetX = evt.clientX - rect.left;
+            offsetY = evt.clientY - rect.top;
+            panel.style.left = rect.left + 'px';
+            panel.style.top = rect.top + 'px';
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            document.body.style.userSelect = 'none';
+            evt.preventDefault();
+        };
+        document.addEventListener('mousemove', function(evt) {
+            if (!dragging) return;
+            var width = panel.offsetWidth || 360;
+            var height = panel.offsetHeight || 120;
+            var left = Math.max(8, Math.min(window.innerWidth - width - 8, evt.clientX - offsetX));
+            var top = Math.max(8, Math.min(window.innerHeight - height - 8, evt.clientY - offsetY));
+            panel.style.left = left + 'px';
+            panel.style.top = top + 'px';
+        });
+        document.addEventListener('mouseup', function() {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.userSelect = '';
+        });
+    }
+
     function showFormaBeforeReportCapturePanel(issue, note, afterImage) {
         ensureFormaDetailStyles();
         removeFormaReportCapturePanel();
@@ -10064,6 +10106,7 @@ window.bindIssueItemClickEvents = function() {
             + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 변경 전 캡처</button>'
             + '</div>'
             + '</div>');
+        makeFormaReportCapturePanelDraggable();
         var reopenDetailAfterCapture = function() {
             window.setTimeout(function() {
                 if (typeof openDetail === 'function') openDetail(issue);
@@ -10121,6 +10164,7 @@ window.bindIssueItemClickEvents = function() {
             + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 캡처</button>'
             + '</div>'
             + '</div>');
+        makeFormaReportCapturePanelDraggable();
         var cancel = document.getElementById('forma-report-capture-cancel');
         var shot = document.getElementById('forma-report-capture-shot');
         cancel.onclick = removeFormaReportCapturePanel;
@@ -10196,6 +10240,7 @@ window.bindIssueItemClickEvents = function() {
             + '<button id="forma-report-capture-shot" type="button" class="primary"><i class="fas fa-camera"></i> 캡처</button>'
             + '</div>'
             + '</div>');
+        makeFormaReportCapturePanelDraggable();
         var cancel = document.getElementById('forma-report-capture-cancel');
         var shot = document.getElementById('forma-report-capture-shot');
         var reopenDetailAfterCapture = function() {
